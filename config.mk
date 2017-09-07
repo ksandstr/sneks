@@ -5,6 +5,7 @@ MUIDL_DIR=$(CFGDIR)/../muidl
 
 LD=ld.gold
 
+# TODO: become independent of the mung includes
 CFLAGS=-O2 -Wall -march=native -std=gnu99 \
 	-m32 -mno-avx -mno-sse2 \
 	-I $(MUNG_DIR)/include -I $(MUNG_DIR)/include/fake_clib \

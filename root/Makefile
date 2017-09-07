@@ -21,7 +21,7 @@ distclean:
 	@rm -rf .deps $(OUTPUTS)
 
 
-root: root.ld crt0.o main.o
+root: root.ld crt0.o main.o runtime.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T root.ld \
 		$(filter %.o,$^) $(LIBS) \

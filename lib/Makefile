@@ -3,6 +3,9 @@ export CFGDIR:=$(abspath ..)
 include ../config.mk
 
 
+LIB_SRC:=$(wildcard *.c)
+LIB_OBJS:=$(subst .c,.o,$(LIB_SRC))
+
 
 # it's our utility library, we get to call it whatever we damn well please. in
 # this case it'll be just libsneks, and woe betide the fool who depends on it
@@ -18,7 +21,7 @@ distclean:
 	@rm -rf .deps
 
 
-libsneks.a: string.o
+libsneks.a: $(LIB_OBJS)
 	@echo "  AR $@"
 	@ar cr $@ $^
 	@echo "  RANLIB $@"
