@@ -27,6 +27,11 @@ void NORETURN panic(const char *msg)
 }
 
 
+void malloc_panic(void) {
+	panic("malloc_panic() called!");
+}
+
+
 void abort(void) {
 	panic("aborted");
 }
@@ -35,15 +40,4 @@ void abort(void) {
 /* special non-portable prototype in the fake <stdio.h> */
 void con_putstr(const char *string) {
 	L4_KDB_PrintString((char *)string);
-}
-
-
-/* useless malloc and free. */
-void *malloc(size_t size) {
-	return NULL;
-}
-
-
-void free(void *ptr) {
-	/* jack shit! */
 }
