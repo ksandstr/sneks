@@ -8,7 +8,8 @@ LD=ld.gold
 # TODO: become independent of the mung includes
 CFLAGS=-O2 -Wall -march=native -std=gnu99 \
 	-m32 -mno-avx -mno-sse2 \
-	-I $(MUNG_DIR)/include -I $(MUNG_DIR)/include/fake_clib \
+	-I $(CFGDIR)/include -I $(MUNG_DIR)/include \
+	-I $(MUNG_DIR)/include/fake_clib \
 	-I . -I $(MUIDL_DIR)/include -I $(CCAN_DIR) \
 	-D_GNU_SOURCE \
 	-fno-pic -fuse-ld=gold -fno-builtin -nostdlib \
@@ -16,7 +17,7 @@ CFLAGS=-O2 -Wall -march=native -std=gnu99 \
 	#-DDEBUG_ME_HARDER #-D_L4_DEBUG_ME_HARDER #-DCCAN_LIST_DEBUG
 
 MUIDL:=$(abspath $(MUIDL_DIR)/muidl)
-MUIDLFLAGS=-I $(MUIDL_DIR)/share/idl -I $(MUNG_DIR)/idl
+MUIDLFLAGS=-I $(MUIDL_DIR)/share/idl -I $(MUNG_DIR)/idl -I $(CFGDIR)/idl
 
 CLEAN_PATS=*-service.s *-client.s *-common.s *-defs.h
 

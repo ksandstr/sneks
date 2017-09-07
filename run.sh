@@ -4,4 +4,4 @@
 # scripts. passes $SNEKS_OPTS down as command-line arguments to the root task
 # module, and further command line arguments to `kvm'.
 MUNG="../mung"
-exec kvm -serial stdio -display none -no-reboot -net none -kernel $MUNG/mbiloader/mbiloader -initrd "$MUNG/ia32-kernel,$MUNG/user/sigma0,root/root $SNEKS_OPTS" $@
+exec kvm -serial stdio -display none -no-reboot -net none -kernel $MUNG/mbiloader/mbiloader -initrd "$MUNG/ia32-kernel,$MUNG/user/sigma0,root/root,sys/sysmem/sysmem $SNEKS_OPTS" $@

@@ -1,0 +1,80 @@
+
+#ifndef __SYS_SYSMEM_IDL__
+#define __SYS_SYSMEM_IDL__
+
+#include <muidl.idl>
+#include <l4x2.idl>
+
+
+[StubPrefix(__sysmem), IfaceLabel(0xe001)]
+interface Sysmem: L4X2::FaultHandler
+{
+	/* system task creation. */
+	void new_task(
+		in L4X2::Fpage kip_area, in L4X2::Fpage utcb_area,
+		in L4X2::ThreadId first_thread);
+
+	/* add and remove threads from spaces. spaces are identified by any of
+	 * their member threads in the L4.X2 style. the first thread is added in
+	 * new_task(). removal of the last thread in a given space destroys that
+	 * space.
+	 *
+	 * add_thread() will error out if @new_thread is already member in a
+	 * different space. rm_thread() will fail if @gone_thread isn't in @space
+	 * (notably, @space = @gone_thread is valid iff @gone_thread is valid.)
+	 * both fail if @space doesn't reference an existing task.
+	 */
+	void add_thread(in L4X2::ThreadId space, in L4X2::ThreadId new_thread);
+	void rm_thread(in L4X2::ThreadId space, in L4X2::ThreadId gone_thread);
+
+	/* physical memory transfer from root. the caller should continue by
+	 * sending one GrantItem of a page at most 1 << @size_log2 bytes long
+	 * within the next 5 milliseconds; after that, the transfer times out. the
+	 * correct tag for this message is { .t = 2 }; an incorrect tag will
+	 * cancel the transfer. all delivered second messages will be processed;
+	 * on failure Sysmem panics the system. (this works because no other IPC
+	 * pattern in Sysmem accepts map/grant items.)
+	 *
+	 * caller must give the lowest physical page number in @frame_num. this is
+	 * so that Sysmem may attempt to coalesce its received pages, which is
+	 * useful when the amount of physical memory assigned to system tasks
+	 * increases. for initialization, Sysmem also recognizes physical memory
+	 * that belongs to it and takes them out of normal circulation.
+	 *
+	 * if @dest is not nilthread, adds the page to the corresponding address
+	 * space. no-op if the space doesn't exist.
+	 */
+	oneway void send_phys(
+		in L4X2::ThreadId dest, in L4X2::word frame_num, in long size_log2);
+
+	/* virtual memory transfer from root. used to create system tasks from
+	 * e.g. files on initrd once filesystems etc. have become available. the
+	 * memory at @src_addr in root space will be assigned to @dest's space at
+	 * @dest_addr. the page contents in root will be replaced with all zeroes
+	 * (but only after a fault).
+	 *
+	 * returns 0 on success or POSIX errno on failure, such as when @dest
+	 * doesn't exist, or there's nothing at @src_addr.
+	 */
+	unsigned short send_virt(
+		in L4X2::word src_addr,
+		in L4X2::ThreadId dest, in L4X2::word dest_addr);
+
+	/* alter the caller's program break. Sysmem's address space model is very
+	 * simple: accesses to the zero page, and to addresses above the program
+	 * break, are segfaults. other accesses allocate memory. lowering the
+	 * program break deallocates memory. unlike POSIX brk(2) this'll never
+	 * fail outright.
+	 */
+	void brk(in L4X2::word addr);
+
+	/* send L4.X2 breath-of-life IPC to given thread. returns L4_ErrorCode()
+	 * of the inner transaction if it failed, or 0 on success.
+	 */
+	unsigned short breath_of_life(
+		in L4X2::ThreadId tid,
+		in L4X2::word ip, in L4X2::word sp);
+};
+
+
+#endif

@@ -1,13 +1,14 @@
 
-export CFGDIR:=$(abspath ..)
+export CFGDIR:=$(abspath ../..)
 include $(CFGDIR)/config.mk
 
 LDFLAGS=-e_start -N -nostdlib -L $(MUNG_DIR)/user/lib/l4 -L $(CFGDIR)/lib
 # under -O3, GCC may produce SSE instructions in a runtime that doesn't align
 # the stack properly. FIXME: repair that, then remove -mstackrealign.
-CFLAGS:=$(subst -D__KERNEL__,,$(CFLAGS)) -mstackrealign
+CFLAGS:=$(CFLAGS) -D__KERNEL__ -mstackrealign
 
-OUTPUTS=root
+OUTPUTS=sysmem
+IDL_OBJS=sysmem-common.o sysmem-service.o
 
 
 all: $(OUTPUTS)
@@ -21,16 +22,15 @@ distclean:
 	@rm -rf .deps $(OUTPUTS)
 
 
-root: root.ld crt0.o main.o runtime.o mm.o \
-		sysmem-common.o sysmem-client.o \
-		ccan-htable.o
+sysmem: sysmem.ld crt0.o sysmem.o $(IDL_OBJS) ccan-list.o
 	@echo "  LD $@"
-	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T root.ld \
+	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T sysmem.ld \
 		$(filter %.o,$^) $(LIBS) \
 		-lsneks -ll4 -L /usr/lib32 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
-main.o: main.c sysmem-defs.h
+
+sysmem.o: sysmem.c sysmem-defs.h
 
 
 # muidl outputs.
