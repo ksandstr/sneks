@@ -10,3 +10,4 @@ tags
 *-common.s
 *-client.s
 *-defs.h
+*.d

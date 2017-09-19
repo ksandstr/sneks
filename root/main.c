@@ -167,8 +167,8 @@ static int sysmem_pager_fn(void *param_ptr)
 				struct sysmem_page *p = htable_get(pages, word_hash(faddr),
 					&sysmem_page_cmp, &faddr);
 				if(p != NULL) {
-					L4_Word_t access = tag.X.label & L4_FullyAccessible;
 #if 0
+					L4_Word_t access = tag.X.label & L4_FullyAccessible;
 					printf("%s: pf addr=%#lx, ip=%#lx, %c%c%c\n",
 						__func__, raw_addr, fip,
 						(access & L4_Readable) ? 'r' : '-',
@@ -247,14 +247,58 @@ void send_phys_to_sysmem(L4_ThreadId_t sysmem_tid, bool self, L4_Word_t addr)
 }
 
 
-static L4_ThreadId_t start_sysmem(L4_ThreadId_t *pager_p)
+/* create a new system task in a waiting condition: the returned thread exists
+ * in a space configured to @kip_area, @utcb_area, its utcb location is set to
+ * the very start of @utcb_area, it'll be paged by the calling thread's pager
+ * (which should be sysmem), and it can be started by the pager (or a
+ * propagator for it) with a L4.X2 breath-of-life message.
+ */
+static L4_ThreadId_t new_task(L4_Fpage_t kip_area, L4_Fpage_t utcb_area)
 {
-	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	static int task_offset = 1;
+	/* FIXME: this is a fucked up silly way to allocate thread IDs for system
+	 * tasks. manage these better.
+	 */
+	L4_ThreadId_t new_tid = L4_GlobalId(
+			L4_ThreadNo(L4_Myself()) + task_offset * 100, 1),
+		pager = L4_Pager();
+	task_offset++;
+	L4_Word_t res = L4_ThreadControl(new_tid, new_tid,
+		pager, pager, (void *)-1);
+	if(res != 1) {
+		fprintf(stderr, "%s: first ThreadControl failed, ec=%lu\n",
+			__func__, L4_ErrorCode());
+		abort();
+	}
+	L4_Word_t old_ctl;
+	res = L4_SpaceControl(new_tid, 0, kip_area, utcb_area,
+		L4_anythread, &old_ctl);
+	if(res != 1) {
+		fprintf(stderr, "%s: SpaceControl failed, ec=%lu\n",
+			__func__, L4_ErrorCode());
+		abort();
+	}
+	res = L4_ThreadControl(new_tid, new_tid, pager,
+		pager, (void *)L4_Address(utcb_area));
+	if(res != 1) {
+		fprintf(stderr, "%s: second ThreadControl failed, ec=%lu\n",
+			__func__, L4_ErrorCode());
+		abort();
+	}
+
+	return new_tid;
+}
+
+
+static L4_BootRec_t *find_boot_module(
+	L4_KernelInterfacePage_t *kip, const char *name, char **cmd_rest_p)
+{
 	L4_BootInfo_t *bootinfo = (L4_BootInfo_t *)L4_BootInfo(kip);
 
 	L4_BootRec_t *rec = L4_BootInfo_FirstEntry(bootinfo);
 	bool found = false;
 	const char *cmdline_rest = NULL;
+	int name_len = strlen(name);
 	for(L4_Word_t i = 0;
 		i < L4_BootInfo_Entries(bootinfo);
 		i++, rec = L4_BootRec_Next(rec))
@@ -266,17 +310,27 @@ static L4_ThreadId_t start_sysmem(L4_ThreadId_t *pager_p)
 
 		char *cmdline = L4_Module_Cmdline(rec);
 		const char *slash = strrchr(cmdline, '/');
-		if(slash != NULL && memcmp(slash + 1, "sysmem", 6) == 0) {
+		if(slash != NULL && memcmp(slash + 1, name, name_len) == 0) {
 			found = true;
 			cmdline_rest = strchr(slash, ' ');
 			break;
 		}
 	}
-	if(!found) {
+	if(found && cmdline_rest != NULL && cmd_rest_p != NULL) {
+		*cmd_rest_p = strdup(cmdline_rest);
+	}
+	return found ? rec : NULL;
+}
+
+
+static L4_ThreadId_t start_sysmem(L4_ThreadId_t *pager_p)
+{
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	L4_BootRec_t *rec = find_boot_module(kip, "sysmem", NULL);
+	if(rec == NULL) {
 		printf("can't find sysmem's module! was it loaded?\n");
 		abort();
 	}
-	printf("rest of sysmem cmdline: `%s'\n", cmdline_rest);
 
 	/* `pages' is accessed from within sysmem_pager_fn() and this function.
 	 * however, since the former only does so in response to pagefault, and
@@ -382,6 +436,7 @@ static L4_ThreadId_t start_sysmem(L4_ThreadId_t *pager_p)
 		}
 	}
 	assert(pages->elems == 0);
+	htable_clear(pages);
 	/* from now, sysmem_pager_fn will only report segfaults for sysmem. */
 
 	return sysmem_tid;
@@ -445,10 +500,127 @@ static void move_to_sysmem(L4_ThreadId_t sysmem_tid, L4_ThreadId_t sm_pager)
 }
 
 
+static L4_ThreadId_t start_boot_module(L4_ThreadId_t s0, const char *name)
+{
+	L4_ThreadId_t sysmem_tid = L4_Pager();
+	assert(!L4_SameThreads(sysmem_tid, s0));
+
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	char *rest = NULL;
+	L4_BootRec_t *mod = find_boot_module(kip, name, &rest);
+	printf("name=`%s', mod=%p, rest=`%s'\n", name, mod, rest);
+	free(rest);
+
+	/* get the boot module's pages from sigma0. */
+	L4_Word_t start_addr = L4_Module_Start(mod);
+	int num_mod_pages = (L4_Module_Size(mod) + PAGE_MASK) >> PAGE_BITS;
+	L4_Fpage_t mod_pages[num_mod_pages];
+	for(int i=0; i < num_mod_pages; i++) {
+		mod_pages[i] = L4_Sigma0_GetPage(s0,
+			L4_FpageLog2(start_addr + i * PAGE_SIZE, PAGE_BITS));
+	}
+
+	const Elf32_Ehdr *ee = (void *)start_addr;
+	if(memcmp(ee->e_ident, ELFMAG, SELFMAG) != 0) {
+		printf("incorrect ELF magic in boot module `%s'\n", name);
+		abort();
+	}
+
+	/* place UTCB and KIP areas below the process image. (this helps with the
+	 * "smallspace" ASID emulation technique, which will matter one day.)
+	 */
+	uintptr_t phoff = ee->e_phoff, lowest = ~0ul;
+	for(int i=0; i < ee->e_phnum; i++, phoff += ee->e_phentsize) {
+		const Elf32_Phdr *ep = (void *)(start_addr + phoff);
+		if(ep->p_type != PT_LOAD) continue;	/* skip the GNU stack thing */
+		lowest = min_t(uintptr_t, ep->p_vaddr, lowest);
+	}
+	lowest &= ~PAGE_MASK;
+	L4_Fpage_t kip_area, utcb_area;
+	int utcb_scale = min_t(int, MSB(lowest) - 1, 21);
+	L4_Word_t utcb_size = 1u << utcb_scale;
+	if(ffsl(lowest) < 20) {
+		/* KIP area up front. */
+		kip_area = L4_FpageLog2(lowest - PAGE_SIZE, PAGE_BITS);
+		utcb_area = L4_FpageLog2(
+			(lowest - utcb_size) & ~(utcb_size - 1), utcb_scale);
+	} else {
+		/* UTCB area up front. */
+		utcb_area = L4_FpageLog2(lowest - utcb_size, utcb_scale);
+		kip_area = L4_FpageLog2(L4_Address(utcb_area) - PAGE_SIZE,
+			PAGE_BITS);
+	}
+	printf("utcb_area=%#lx:%#lx, kip_area=%#lx:%#lx, lowest=%#x\n",
+		L4_Address(utcb_area), L4_Size(utcb_area),
+		L4_Address(kip_area), L4_Size(kip_area), lowest);
+
+	/* create the task w/ all of that shit & what-not. */
+	L4_ThreadId_t new_tid = new_task(kip_area, utcb_area);
+	int n = __sysmem_new_task(sysmem_tid, kip_area, utcb_area, new_tid.raw);
+	if(n != 0) {
+		printf("sysmem::new_task failed, n=%d\n", n);
+		abort();
+	}
+
+	/* copy each page to a vmem buffer, then send_virt it over to the new
+	 * process at the correct address.
+	 */
+	void *copybuf = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
+	phoff = ee->e_phoff;
+	for(int i=0; i < ee->e_phnum; i++, phoff += ee->e_phentsize) {
+		const Elf32_Phdr *ep = (void *)(start_addr + phoff);
+		/* (`ep' is s0'd in the previous loop.) */
+		if(ep->p_type != PT_LOAD) continue;	/* skip the GNU stack thing */
+
+		void *src = (void *)start_addr + ep->p_offset;
+		for(size_t off = 0; off < ep->p_memsz; off += PAGE_SIZE) {
+			if(off < ep->p_filesz) {
+				memcpy(copybuf, src + off,
+					min_t(int, PAGE_SIZE, ep->p_filesz - off));
+				if(ep->p_filesz - off < PAGE_SIZE) {
+					memset(copybuf + ep->p_filesz - off, '\0',
+						PAGE_SIZE - (ep->p_filesz - off));
+				}
+			} else {
+				memset(copybuf, '\0', PAGE_SIZE);
+			}
+			uint16_t ret = 0;
+			n = __sysmem_send_virt(sysmem_tid, &ret, (L4_Word_t)copybuf,
+				new_tid.raw, ep->p_vaddr + off);
+			if(n != 0 || ret != 0) {
+				printf("sysmem::send_virt failed, n=%d, ret=%u\n", n, ret);
+				abort();
+			}
+		}
+	}
+	free(copybuf);
+
+	/* start 'er up. */
+	uint16_t ret = 0;
+	n = __sysmem_breath_of_life(sysmem_tid, &ret, new_tid.raw,
+		ee->e_entry, 0xdeadbeef);
+	if(n != 0 || ret != 0) {
+		printf("sysmem::breath_of_life failed, n=%d, ret=%u\n", n, ret);
+		abort();
+	}
+
+	/* toss the module pages into sysmem as spare RAM. no need for 'em
+	 * anymore.
+	 */
+	for(int i=0; i < num_mod_pages; i++) {
+		if(L4_IsNilFpage(mod_pages[i])) continue;
+		send_phys_to_sysmem(sysmem_tid, false, L4_Address(mod_pages[i]));
+	}
+
+	return new_tid;
+}
+
+
 int main(void)
 {
 	printf("hello, world!\n");
 
+	L4_ThreadId_t s0 = L4_Pager();
 	L4_ThreadId_t sm_pager = L4_nilthread, sysmem = start_sysmem(&sm_pager);
 	printf("sysmem started at %lu:%lu\n",
 		L4_ThreadNo(sysmem), L4_Version(sysmem));
@@ -459,6 +631,26 @@ int main(void)
 	printf("ptr=%p\n", ptr);
 	memset(ptr, 0xba, 300 * 1024);
 	free(ptr);
+
+	/* TODO: launch mem, fs.cramfs here */
+
+	/* run systest if present. */
+	L4_ThreadId_t systest_tid = start_boot_module(s0, "systest");
+	if(!L4_IsNilThread(systest_tid)) {
+		/* wait until it's been removed. */
+		L4_MsgTag_t tag;
+		do {
+			L4_Accept(L4_UntypedWordsAcceptor);
+			tag = L4_Receive(systest_tid);
+		} while(L4_IpcSucceeded(tag));
+		if(L4_ErrorCode() != 5) {
+			printf("systest exit ipc failed, ec=%lu\n", L4_ErrorCode());
+			abort();
+		}
+	}
+
+	printf("*** root would enter service mode\n");
+	for(;;) L4_Sleep(L4_Never);		/* but fuck it. */
 
 	return 0;
 }
