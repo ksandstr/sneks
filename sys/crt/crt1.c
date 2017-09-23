@@ -171,6 +171,21 @@ int atexit(void (*fn)(void)) {
 }
 
 
+void exit(int status)
+{
+	/* TODO: do something */
+	printf("%s: called! aborting.\n", __func__);
+	for(;;) abort();
+}
+
+
+char *getenv(const char *name)
+{
+	/* simplest conforming implementation there is. */
+	return NULL;
+}
+
+
 /* for dlmalloc (maybe?) */
 long sysconf(int name)
 {

@@ -35,6 +35,13 @@ ccan-%.o ::
 	@$(CC) -c -o $@ $(CCAN_DIR)/ccan/$*/$*.c $(CFLAGS) -nostartfiles -nodefaultlibs
 
 
+# also complex CCAN modules. build-ccan-module.pl emits CC lines as
+# appropriate.
+ccan-%.a ::
+	@$(CFGDIR)/stuff/build-ccan-module.pl $(CCAN_DIR)/ccan/$* \
+		$(CFLAGS) -nostartfiles -nodefaultlibs
+
+
 %.o: %-32.S
 	@echo "  AS $@"
 	@gcc -c -o $@ $< $(CFLAGS) -DIN_ASM_SOURCE -MMD

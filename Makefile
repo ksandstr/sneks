@@ -29,5 +29,14 @@ distclean: clean
 	@find . -name ".deps" -type d -print|xargs rm -rf
 
 
+qcheck: check
+
+
+check: all
+	@echo "-- system tests..."
+	@$(CFGDIR)/../mung/user/testbench/report.pl
+	@echo "-- all tests completed!"
+
+
 tags: $(shell find . -iname "*.[ch]" -or -iname "*.p[lm]")
 	@ctags -R *

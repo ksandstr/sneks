@@ -11,3 +11,4 @@ tags
 *-client.s
 *-defs.h
 *.d
+ccan-*.[oa]

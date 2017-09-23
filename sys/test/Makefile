@@ -10,22 +10,29 @@ CFLAGS:=$(CFLAGS) -D__KERNEL__ -mstackrealign
 
 OUTPUTS=systest
 
+# FIXME: this will generate full paths where they're not needed. hack the build
+# scripts present a nicer "  CC sys/foo/t/c11sumthing.c" report to conceal teh
+# ugly.
+TEST_SOURCE:=$(wildcard $(CFGDIR)/sys/*/t/*.c)
+TEST_OBJS:=$(TEST_SOURCE:%.c=%.o)
+
 
 all: $(OUTPUTS)
 
 
 clean:
-	@rm -f *.o $(CLEAN_PATS)
+	@rm -f *.o *.a $(CLEAN_PATS) $(TEST_OBJS)
 
 
 distclean:
 	@rm -rf .deps $(OUTPUTS)
 
 
-systest: systest.ld systest.o
+systest: systest.ld systest.o harness.o optcompat.o $(TEST_OBJS) \
+		ccan-opt.a ccan-htable.o ccan-talloc.o ccan-autodata.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T systest.ld \
-		$(filter %.o,$^) $(LIBS) \
+		$(filter %.o,$^) $(filter %.a,$^) $(LIBS) \
 		-lsneks-systask -lsneks -ll4 -L /usr/lib32 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
