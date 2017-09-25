@@ -4,6 +4,7 @@
 
 #include <muidl.idl>
 #include <l4x2.idl>
+#include <posixlike.idl>
 
 
 [StubPrefix(__sysmem), IfaceLabel(0xe001)]
@@ -19,13 +20,23 @@ interface Sysmem: L4X2::FaultHandler
 	 * new_task(). removal of the last thread in a given space destroys that
 	 * space.
 	 *
-	 * add_thread() will error out if @new_thread is already member in a
-	 * different space. rm_thread() will fail if @gone_thread isn't in @space
-	 * (notably, @space = @gone_thread is valid iff @gone_thread is valid.)
-	 * both fail if @space doesn't reference an existing task.
+	 * when {add,rm}_thread are called from a non-root system task, sysmem
+	 * will call proxy ThreadControl to create the affected threads and set up
+	 * their scheduling and memory management as indicated by @space, or
+	 * delete them where relevant. when called from the root task, it only
+	 * informs systask that the affected TID is (no longer) associated with
+	 * @space.
+	 *
+	 * add_thread() fails with -EEXIST if @new_thread duplicates the same
+	 * thread number in any space. rm_thread() fails with -ENOENT if
+	 * @gone_thread isn't in @space (notably, @space = @gone_thread is valid
+	 * iff @gone_thread is valid.) both fail with -EINVAL if @space doesn't
+	 * reference an existing task.
 	 */
-	void add_thread(in L4X2::ThreadId space, in L4X2::ThreadId new_thread);
-	void rm_thread(in L4X2::ThreadId space, in L4X2::ThreadId gone_thread);
+	void add_thread(in L4X2::ThreadId space, in L4X2::ThreadId new_thread)
+		raises(Posix::Errno);
+	void rm_thread(in L4X2::ThreadId space, in L4X2::ThreadId gone_thread)
+		raises(Posix::Errno);
 
 	/* physical memory transfer from root. the caller should continue by
 	 * sending one GrantItem of a page at most 1 << @size_log2 bytes long

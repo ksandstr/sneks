@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <threads.h>
+#include <errno.h>
+#include <unistd.h>
 
 #include <l4/types.h>
 #include <l4/thread.h>
@@ -11,6 +14,9 @@
 #include <sneks/mm.h>
 
 #include "sysmem-defs.h"
+
+
+static tss_t errno_key;
 
 
 void __return_from_main(int main_rc)
@@ -27,6 +33,37 @@ void __assert_failure(
 {
 	printf("!!! assert(%s) failed in `%s' [%s:%u]\n", cond, fn, file, line);
 	abort();
+}
+
+
+static void init_errno_tss(void)
+{
+	int n = tss_create(&errno_key, &free);
+	if(n != thrd_success) {
+		printf("!!! %s can't initialize\n", __func__);
+		abort();
+	}
+}
+
+
+int *__errno_location(void)
+{
+	/* FIXME: slow and shitty. replace with _Thread int errno because the
+	 * systask runtime is always multithreaded.
+	 */
+	static once_flag errno_init_flag = ONCE_FLAG_INIT;
+	call_once(&errno_init_flag, &init_errno_tss);
+	int *val = tss_get(errno_key);
+	if(val == NULL) {
+		val = malloc(sizeof *val);
+		if(val == NULL) {
+			printf("!!! %s can't initialize\n", __func__);
+			abort();
+		}
+		*val = 0;
+		tss_set(errno_key, val);
+	}
+	return val;
 }
 
 
@@ -82,4 +119,28 @@ void *sbrk(intptr_t increment)
 	}
 
 	return ret;
+}
+
+
+/* ultra stubbery. getpid() is only used by dlmalloc, and even in there for no
+ * good reason. but the stub must remain.
+ */
+int getpid(void) {
+	return 666;
+}
+
+
+int atexit(void (*fn)(void)) {
+	/* does nothing since systasks don't exit in a conventional sense. */
+	return 0;
+}
+
+
+/* for dlmalloc (maybe?) */
+long sysconf(int name)
+{
+	switch(name) {
+		case _SC_PAGESIZE: return PAGE_SIZE;
+		default: errno = EINVAL; return -1;
+	}
 }

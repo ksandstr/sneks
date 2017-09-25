@@ -1,0 +1,17 @@
+
+#ifndef __POSIXLIKE_IDL__
+#define __POSIXLIKE_IDL__
+
+module Posix {
+
+/* TODO: use NegativeReturn, ReplyLabel(1) here once libIDL starts allowing
+ * properties on exceptions. until then, muidl recognizes either Posix::Errno
+ * or the exception content to the same end.
+ */
+exception Errno {
+	unsigned short errno;
+};
+
+};
+
+#endif

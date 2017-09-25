@@ -5,7 +5,8 @@ include $(CFGDIR)/config.mk
 IDL_OBJS=sysmem-common.o sysmem-client.o
 
 LIB_SRC:=$(wildcard *.c)
-LIB_OBJS:=crt0.o $(IDL_OBJS) $(subst .c,.o,$(LIB_SRC))
+LIB_OBJS:=crt0.o $(IDL_OBJS) $(subst .c,.o,$(LIB_SRC)) \
+	ccan-htable.o
 
 
 # the system task runtime library is, much like the utility library (which it
@@ -29,6 +30,7 @@ libsneks-systask.a: $(LIB_OBJS)
 
 
 crt1.o: crt1.c sysmem-defs.h
+threads.o: threads.c sysmem-defs.h
 
 
 # muidl outputs.

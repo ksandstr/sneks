@@ -62,6 +62,9 @@ struct systask {
 	struct rb_root mem;			/* of <struct l_page> via rb */
 	struct list_head threads;	/* of <struct st_thr> */
 	uintptr_t brk;	/* program break (inclusive) */
+	bool is_root;	/* is this task zero? */
+	int next_utcb;	/* FIXME: replace w/ better UTCB alloc bits */
+	L4_Fpage_t utcb_area;
 };
 
 
@@ -324,33 +327,36 @@ static void recycle(struct alloc_head *head, void *ptr)
 }
 
 
-/* implementation of sneks::Sysmem */
-
-static void impl_handle_fault(
-	L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *page_ptr)
+/* pagefault handling. this supports two interfaces; see threadctl() and
+ * impl_handle_fault().
+ */
+static bool handle_pf(
+	L4_MapItem_t *page_ptr,
+	L4_ThreadId_t tid, L4_Word_t faddr, L4_Word_t fip)
 {
-	L4_ThreadId_t tid = muidl_get_sender();
 #if 0
 	printf("pf in %lu:%lu, faddr=%#lx, fip=%#lx\n",
 		L4_ThreadNo(tid), L4_Version(tid), faddr, fip);
 #endif
 
 	if((faddr & ~PAGE_MASK) == 0) {
-		printf("sysmem: null page access\n");
-		goto failed;
+		printf("sysmem: null page access in %lu:%lu, fip=%#lx\n",
+			L4_ThreadNo(tid), L4_Version(tid), fip);
+		return false;
 	}
 
 	struct systask *task = get_task(tid);
 	if(task == NULL) {
-		printf("sysmem: unknown task\n");
-		goto failed;
+		printf("sysmem: unknown task %lu:%lu\n",
+			L4_ThreadNo(tid), L4_Version(tid));
+		return false;
 	}
 
 	struct l_page *lp = get_lpage(task, faddr & ~PAGE_MASK);
 	if(lp == NULL && (faddr & ~PAGE_MASK) > task->brk) {
 		printf("system task %lu:%lu segfaulted at faddr=%#lx, fip=%#lx\n",
 			L4_ThreadNo(tid), L4_Version(tid), faddr, fip);
-		goto failed;
+		return false;
 	} else if(lp == NULL) {
 		lp = alloc_struct(l_page);
 		struct p_page *phys = list_pop(&free_page_list, struct p_page, link);
@@ -365,10 +371,18 @@ static void impl_handle_fault(
 	L4_Fpage_t fp = L4_FpageLog2(lp->p_addr & ~PAGE_MASK, PAGE_BITS);
 	L4_Set_Rights(&fp, L4_FullyAccessible);
 	*page_ptr = L4_MapItem(fp, faddr & ~PAGE_MASK);
-	return;
+	return true;
+}
 
-failed:
-	muidl_raise_no_reply();
+
+/* implementation of sneks::Sysmem */
+
+static void impl_handle_fault(
+	L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *page_ptr)
+{
+	if(!handle_pf(page_ptr, muidl_get_sender(), faddr, fip)) {
+		muidl_raise_no_reply();
+	}
 }
 
 
@@ -389,6 +403,9 @@ static void impl_new_task(
 	struct st_thr *t = alloc_struct(st_thr);
 	task->mem = RB_ROOT;
 	task->brk = 0x10000;	/* 64k should be enough for everyone */
+	task->is_root = RB_EMPTY_ROOT(&all_threads);
+	task->utcb_area = utcb_area;
+	task->next_utcb = 1;
 	list_head_init(&task->threads);
 	t->tid = first_thread;
 	t->task = task;
@@ -402,31 +419,127 @@ fail:
 }
 
 
-static void impl_add_thread(L4_Word_t space, L4_Word_t new_thread)
+static int threadctl(
+	L4_ThreadId_t dest,
+	L4_ThreadId_t spacespec, L4_ThreadId_t sched, L4_ThreadId_t pager,
+	void *utcb)
+{
+	L4_Accept(L4_UntypedWordsAcceptor);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xb1c4, .X.u = 5 }.raw);
+	L4_LoadMR(1, dest.raw);
+	L4_LoadMR(2, spacespec.raw);
+	L4_LoadMR(3, sched.raw);
+	L4_LoadMR(4, pager.raw);
+	L4_LoadMR(5, (L4_Word_t)utcb);
+	L4_MsgTag_t tag = L4_Call(L4_Pager());
+	/* we just called a process that's paged by this same thread, so we must
+	 * handle pagefaults that occur during the proxy threadctl op.
+	 */
+	while(L4_IpcSucceeded(tag) && tag.X.label >> 4 == 0xffe
+		&& tag.X.u == 2 && tag.X.t == 0)
+	{
+		L4_MapItem_t map;
+		L4_Word_t faddr, fip;
+		L4_StoreMR(1, &faddr); L4_StoreMR(2, &fip);
+		printf("%s: interim fault addr=%#lx, ip=%#lx\n",
+			__func__, faddr, fip);
+		if(!handle_pf(&map, L4_Pager(), faddr, fip)) {
+			printf("%s: pager segfault!\n", __func__);
+			abort();
+		}
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+		L4_LoadMRs(1, 2, map.raw);
+		tag = L4_Call(L4_Pager());
+	}
+	int n;
+	if(L4_IpcFailed(tag)) {
+		printf("%s: IPC failed, ec=%#lx\n", __func__, L4_ErrorCode());
+		n = -(int)L4_ErrorCode();
+	} else {
+		L4_Word_t res = 0;
+		L4_StoreMR(1, &res);
+		n = res;
+	}
+	return n;
+}
+
+
+static int impl_add_thread(L4_Word_t raw_space, L4_Word_t new_thread)
 {
 	L4_ThreadId_t tid = { .raw = new_thread };
 	if(get_thr(tid) != NULL) {
 		printf("sysmem: new_thread=%lu:%lu exists\n",
 			L4_ThreadNo(tid), L4_Version(tid));
-		panic("add_thread EEXIST");
+		return -EEXIST;
 	}
 
-	struct systask *task = get_task((L4_ThreadId_t){ .raw = space });
-	if(task == NULL) {
-		printf("sysmem: space=%#lx doesn't exist\n", space);
-		panic("add_thread ENOENT");
+	struct systask *caller = get_task(muidl_get_sender());
+	if(caller == NULL) {
+		printf("sysmem: unknown caller\n");
+		return -EINVAL;
 	}
+	L4_ThreadId_t space = { .raw = raw_space };
+	struct systask *task = get_task(space);
+	if(task == NULL) {
+		printf("sysmem: space=%#lx doesn't exist\n", space.raw);
+		return -EINVAL;
+	}
+
+	if(!caller->is_root) {
+		int n = threadctl(tid, space, L4_Myself(), L4_Myself(),
+			(void *)(L4_Address(task->utcb_area) + 512 * task->next_utcb++));
+		if(n != 0) {
+			printf("%s: threadctl failed, n=%d\n", __func__, n);
+			return -EINVAL;
+		}
+	}
+
 	struct st_thr *t = alloc_struct(st_thr);
 	t->tid = tid;
 	t->task = task;
 	list_add_tail(&task->threads, &t->link);
 	put_thr(t);
+
+	return 0;
 }
 
 
-static void impl_rm_thread(L4_Word_t space, L4_Word_t gone_thread)
+static int impl_rm_thread(L4_Word_t raw_space, L4_Word_t gone_thread)
 {
-	panic("rm_thread not implemented");
+	L4_ThreadId_t tid = { .raw = gone_thread };
+	struct st_thr *t = get_thr(tid);
+	if(t == NULL) return -ENOENT;
+
+	L4_ThreadId_t space = { .raw = raw_space };
+	struct systask *task = get_task(space);
+	if(task == NULL || t->task != task) return -EINVAL;
+
+	struct systask *caller = get_task(muidl_get_sender());
+	if(caller == NULL) {
+		printf("sysmem: unknown caller\n");
+		return -EINVAL;
+	}
+
+	if(!caller->is_root) {
+		int n = threadctl(tid, L4_nilthread, L4_nilthread,
+			L4_nilthread, (void *)-1);
+		if(n != 0) {
+			printf("%s: threadctl failed, n=%d\n", __func__, n);
+			return -EINVAL;
+		}
+	}
+
+	list_del_from(&task->threads, &t->link);
+	rb_erase(&t->rb, &all_threads);
+	recycle(&st_thr_alloc_head, t);
+
+	if(list_empty(&task->threads)) {
+		/* FIXME */
+		printf("%s: would dispose of task=%p (last thread=%lu:%lu gone)\n",
+			__func__, task, L4_ThreadNo(tid), L4_Version(tid));
+	}
+
+	return 0;
 }
 
 
