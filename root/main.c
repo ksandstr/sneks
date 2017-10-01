@@ -19,6 +19,7 @@
 #include <l4/sigma0.h>
 
 #include <sneks/mm.h>
+#include <sneks/hash.h>
 
 #include "elf.h"
 #include "sysmem-defs.h"
@@ -32,22 +33,6 @@
 struct sysmem_page {
 	_Atomic L4_Word_t address;
 };
-
-
-/* TODO: push this into lib/hash.c or some such */
-/* hash32shiftmult(); presumed to have been in the public domain. */
-static uint32_t int_hash(uint32_t key)
-{
-	uint32_t c2=0x27d4eb2du; // a prime or an odd constant
-	key = (key ^ 61) ^ (key >> 16);
-	key = key + (key << 3);
-	key = key ^ (key >> 4);
-	key = key * c2;
-	key = key ^ (key >> 15);
-	return key;
-}
-
-#define word_hash(x) int_hash((uint32_t)(x))
 
 
 static size_t hash_sysmem_page(const void *key, void *priv) {
