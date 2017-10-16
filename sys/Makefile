@@ -1,8 +1,9 @@
 
+# NOTE: no line for systest here. it should be linked last, so that's done from
+# the toplevel Makefile instead.
 all:
 	+@make -C crt all
 	+@make -C sysmem all
-	+@make -C test all
 
 
 clean:

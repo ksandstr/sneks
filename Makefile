@@ -5,10 +5,13 @@ include config.mk
 .PHONY: all clean distclean check qcheck
 
 
+# NOTE: the sys/test line should be last!
 all: tags
 	+@make -C lib all
 	+@make -C root all
 	+@make -C sys all
+	+@make -C sys/test all
+
 
 clean:
 	@rm -f *.o $(CLEAN_PATS)

@@ -1,0 +1,42 @@
+
+#ifndef __SYS_INFO_IDL__
+#define __SYS_INFO_IDL__
+
+#include <l4x2.idl>
+#include <posixlike.idl>
+
+
+module Sneks {
+
+/* the system information service. this comes in two parts: the first is for
+ * discovery of the information service via a thread's initial pager, and the
+ * second for e.g. ABI information, and up-to-date contact information for
+ * system services.
+ */
+[StubPrefix(__info)]
+interface InfoMeta
+{
+	[Label(0xe004)]
+	void lookup(out L4X2::ThreadId info_tid)
+		raises(Posix::Errno);
+};
+
+
+/* data per service. the point is to carry more information than just a thread
+ * ID, and to grab the whole of it using just a single IPC.
+ */
+
+struct kmsg_info {
+	L4X2::ThreadId service;		/* TODO: change to Sneks::Kmsg ref instead */
+};
+
+
+[StubPrefix(__info), IfaceLabel(0xe003)]
+interface Info: InfoMeta
+{
+	void kmsg_block(out kmsg_info block) raises(Posix::Errno);
+};
+
+};
+
+#endif

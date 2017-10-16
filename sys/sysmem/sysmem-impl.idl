@@ -1,0 +1,11 @@
+
+/* implementation spec for sysmem. not for client use. */
+
+#include <sys/sysmem.idl>
+#include <sys/info.idl>
+
+
+interface SysmemImpl: Sneks::Info, Sysmem
+{
+	/* nothing extra. */
+};

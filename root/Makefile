@@ -22,7 +22,7 @@ distclean:
 
 
 root: root.ld crt0.o main.o runtime.o mm.o \
-		sysmem-common.o sysmem-client.o \
+		sysmem-common.o sysmem-client.o kmsg-common.o kmsg-service.o \
 		ccan-htable.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T root.ld \
@@ -30,7 +30,7 @@ root: root.ld crt0.o main.o runtime.o mm.o \
 		-lsneks -ll4 -L /usr/lib32 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
-main.o: main.c sysmem-defs.h
+main.o: main.c sysmem-defs.h kmsg-defs.h
 
 
 # muidl outputs.

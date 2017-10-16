@@ -1,0 +1,24 @@
+
+#ifndef __SYS_KMSG_IDL__
+#define __SYS_KMSG_IDL__
+
+#include <l4x2.idl>
+#include <posixlike.idl>
+
+
+module Sneks {
+
+/* kernel message buffer operations. */
+[StubPrefix(__kmsg), IfaceLabel(0xe002)]
+interface Kmsg
+{
+	const long MAX_LINE = 160;
+	typedef string<MAX_LINE> line;
+
+	void putstr(in line str)
+		raises(Posix::Errno);
+};
+
+};
+
+#endif

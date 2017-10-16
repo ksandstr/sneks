@@ -8,7 +8,7 @@ LDFLAGS=-e_start -N -nostdlib -L $(MUNG_DIR)/user/lib/l4 -L $(CFGDIR)/lib
 CFLAGS:=$(CFLAGS) -D__KERNEL__ -mstackrealign
 
 OUTPUTS=sysmem
-IDL_OBJS=sysmem-common.o sysmem-service.o
+IDL_OBJS=sysmem-impl-common.o sysmem-impl-service.o
 
 
 all: $(OUTPUTS)
@@ -30,24 +30,28 @@ sysmem: sysmem.ld crt0.o sysmem.o $(IDL_OBJS) ccan-list.o
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
-sysmem.o: sysmem.c sysmem-defs.h
+sysmem.o: sysmem.c sysmem-impl-defs.h info-defs.h
 
 
 # muidl outputs.
 # TODO: we don't really need to hear first about the services being generated,
 # and then the common bit, the client, and then the defs. there's AS chatter
 # about the first three too.
-%-service.s: $(CFGDIR)/idl/sys/%.idl
+%-service.s: %.idl
 	@echo "  IDL $< <service>"
 	@$(MUIDL) $(MUIDLFLAGS) --service $<
 
-%-client.s: $(CFGDIR)/idl/sys/%.idl
+%-client.s: %.idl
 	@echo "  IDL $< <client>"
 	@$(MUIDL) $(MUIDLFLAGS) --client $<
 
-%-common.s: $(CFGDIR)/idl/sys/%.idl
+%-common.s: %.idl
 	@echo "  IDL $< <common>"
 	@$(MUIDL) $(MUIDLFLAGS) --common $<
+
+%-defs.h: %.idl
+	@echo "  IDL $< <defs>"
+	@$(MUIDL) $(MUIDLFLAGS) --defs $<
 
 %-defs.h: $(CFGDIR)/idl/sys/%.idl
 	@echo "  IDL $< <defs>"

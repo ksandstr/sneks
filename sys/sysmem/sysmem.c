@@ -1,5 +1,5 @@
 
-#define SYSMEM_IMPL_SOURCE
+#define SYSMEMIMPL_IMPL_SOURCE
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,7 +22,8 @@
 #include <l4/kdebug.h>
 
 #include "muidl.h"
-#include "sysmem-defs.h"
+#include "info-defs.h"
+#include "sysmem-impl-defs.h"
 
 
 #define NUM_INIT_PAGES 12	/* traditionally enough. */
@@ -689,6 +690,20 @@ static unsigned short impl_breath_of_life(
 }
 
 
+static int impl_lookup(L4_Word_t *info_tid)
+{
+	*info_tid = L4_nilthread.raw;
+	return 0;
+}
+
+
+static int impl_kmsg_block(struct sneks_kmsg_info *kmsg)
+{
+	kmsg->service = L4_nilthread.raw;
+	return 0;
+}
+
+
 static void add_first_mem(void)
 {
 	for(int i=0; i < NUM_INIT_PAGES; i++) {
@@ -705,8 +720,15 @@ int main(void)
 	the_kip = L4_GetKernelInterface();
 	add_first_mem();
 
-	static const struct sysmem_vtable vtab = {
+	static const struct sysmem_impl_vtable vtab = {
+		/* L4.X2 stuff */
 		.handle_fault = &impl_handle_fault,
+
+		/* SysInfo stuff */
+		.lookup = &impl_lookup,
+		.kmsg_block = &impl_kmsg_block,
+
+		/* Sysmem proper */
 		.new_task = &impl_new_task,
 		.add_thread = &impl_add_thread,
 		.rm_thread = &impl_rm_thread,
@@ -717,7 +739,7 @@ int main(void)
 	};
 
 	for(;;) {
-		L4_Word_t status = _muidl_sysmem_dispatch(&vtab);
+		L4_Word_t status = _muidl_sysmem_impl_dispatch(&vtab);
 		if(status == MUIDL_UNKNOWN_LABEL) {
 			/* do nothing. */
 		} else if(status != 0 && !MUIDL_IS_L4_ERROR(status)) {
