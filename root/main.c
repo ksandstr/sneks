@@ -13,6 +13,7 @@
 
 #include <l4/types.h>
 #include <l4/thread.h>
+#include <l4/space.h>
 #include <l4/ipc.h>
 #include <l4/kip.h>
 #include <l4/bootinfo.h>
@@ -325,8 +326,7 @@ static L4_ThreadId_t start_sysmem(L4_ThreadId_t *pager_p)
 	 */
 	struct htable *pages = malloc(sizeof *pages);
 	htable_init(pages, &hash_sysmem_page, NULL);
-	L4_Word_t start_addr = L4_Module_Start(rec),
-		end_addr = start_addr + L4_Module_Size(rec) - 1;
+	L4_Word_t start_addr = L4_Module_Start(rec);
 	thrd_t pg;
 	int n = thrd_create(&pg, &sysmem_pager_fn, pages);
 	if(n != thrd_success) {
@@ -576,6 +576,16 @@ static L4_ThreadId_t start_boot_module(L4_ThreadId_t s0, const char *name)
 				printf("sysmem::send_virt failed, n=%d, ret=%u\n", n, ret);
 				abort();
 			}
+
+			/* FIXME: this is an ugly bodge for mung's failure to recognize a
+			 * smaller subpage at a non-zero offset during recursive Unmap,
+			 * i.e. the one that sysmem does. flushing explicitly works fine.
+			 *
+			 * remove it once mung becomes slightly less fuckered.
+			 */
+			L4_Fpage_t foo = L4_FpageLog2((L4_Word_t)copybuf, PAGE_BITS);
+			L4_Set_Rights(&foo, L4_FullyAccessible);
+			L4_FlushFpage(foo);
 		}
 	}
 	free(copybuf);
