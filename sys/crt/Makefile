@@ -2,10 +2,12 @@
 export CFGDIR:=$(abspath ../..)
 include $(CFGDIR)/config.mk
 
-IDL_OBJS=sysmem-common.o sysmem-client.o
+IDL_FILES=sysmem.idl kmsg.idl info.idl
+IDL_OBJS:=$(patsubst %.idl,%-common.o,$(IDL_FILES)) \
+	$(patsubst %.idl,%-client.o,$(IDL_FILES))
 
 LIB_SRC:=$(wildcard *.c)
-LIB_OBJS:=crt0.o $(IDL_OBJS) $(subst .c,.o,$(LIB_SRC)) \
+LIB_OBJS:=crt0.o $(IDL_OBJS) $(LIB_SRC:.c=.o) \
 	ccan-htable.o
 
 
@@ -29,7 +31,7 @@ libsneks-systask.a: $(LIB_OBJS)
 	@ranlib $@
 
 
-crt1.o: crt1.c sysmem-defs.h
+crt1.o: crt1.c sysmem-defs.h kmsg-defs.h info-defs.h
 threads.o: threads.c sysmem-defs.h
 
 
@@ -37,19 +39,19 @@ threads.o: threads.c sysmem-defs.h
 # TODO: we don't really need to hear first about the services being generated,
 # and then the common bit, the client, and then the defs. there's AS chatter
 # about the first three too.
-%-service.s: idl/%.idl
+%-service.s: $(CFGDIR)/idl/sys/%.idl
 	@echo "  IDL $< <service>"
 	@$(MUIDL) $(MUIDLFLAGS) --service $<
 
-%-client.s: idl/%.idl
+%-client.s: $(CFGDIR)/idl/sys/%.idl
 	@echo "  IDL $< <client>"
 	@$(MUIDL) $(MUIDLFLAGS) --client $<
 
-%-common.s: idl/%.idl
+%-common.s: $(CFGDIR)/idl/sys/%.idl
 	@echo "  IDL $< <common>"
 	@$(MUIDL) $(MUIDLFLAGS) --common $<
 
-%-defs.h: idl/%.idl
+%-defs.h: $(CFGDIR)/idl/sys/%.idl
 	@echo "  IDL $< <defs>"
 	@$(MUIDL) $(MUIDLFLAGS) --defs $<
 

@@ -123,6 +123,11 @@ static struct rb_root all_threads = RB_ROOT;
 static uint8_t first_mem[PAGE_SIZE * NUM_INIT_PAGES]
 	__attribute__((aligned(PAGE_SIZE)));
 
+/* sysinfo data. should be moved into a different module so as to not make
+ * this one even biggar.
+ */
+static struct sneks_kmsg_info kmsg_info;
+
 
 /* runtime basics. */
 
@@ -341,7 +346,7 @@ static bool handle_pf(
 #endif
 
 	if((faddr & ~PAGE_MASK) == 0) {
-		printf("sysmem: null page access in %lu:%lu, fip=%#lx\n",
+		printf("sysmem: zero page access in %lu:%lu, fip=%#lx\n",
 			L4_ThreadNo(tid), L4_Version(tid), fip);
 		return false;
 	}
@@ -690,16 +695,14 @@ static unsigned short impl_breath_of_life(
 }
 
 
-static int impl_lookup(L4_Word_t *info_tid)
-{
-	*info_tid = L4_nilthread.raw;
+static int impl_lookup(L4_Word_t *info_tid) {
+	*info_tid = L4_MyGlobalId().raw;
 	return 0;
 }
 
 
-static int impl_kmsg_block(struct sneks_kmsg_info *kmsg)
-{
-	kmsg->service = L4_nilthread.raw;
+static int impl_kmsg_block(struct sneks_kmsg_info *kmsg) {
+	*kmsg = kmsg_info;
 	return 0;
 }
 
@@ -711,6 +714,36 @@ static void add_first_mem(void)
 		phys->address = (L4_Word_t)&first_mem[i * PAGE_SIZE];
 		phys->owner = NULL;
 		list_add_tail(&free_page_list, &phys->link);
+	}
+}
+
+
+/* see lib/string.c comment for same fn */
+static inline unsigned long haszero(unsigned long x) {
+	return (x - 0x01010101ul) & ~x & 0x80808080ul;
+}
+
+
+static void sysinfo_init_msg(L4_MsgTag_t tag, const L4_Word_t mrs[static 64])
+{
+	/* decode the string part. */
+	const int u = L4_UntypedWords(tag);
+	char buffer[u * 4 + 1];
+	int pos = 0;
+	do {
+		/* keep strict aliasing intact */
+		memcpy(&buffer[pos * sizeof(L4_Word_t)],
+			&mrs[pos], sizeof(L4_Word_t));
+	} while(!haszero(mrs[pos++]) && pos < u);
+	buffer[pos * sizeof(L4_Word_t)] = '\0';
+
+	/* TODO: come up with a fancy method for setting this stuff. */
+	const char *name = buffer;
+	if(streq(name, "kmsg:tid")) {
+		kmsg_info.service = mrs[pos++];
+		assert(L4_IsGlobalId((L4_ThreadId_t){ .raw = kmsg_info.service }));
+	} else {
+		printf("%s: name=`%s' unrecognized\n", __func__, name);
 	}
 }
 
@@ -741,7 +774,19 @@ int main(void)
 	for(;;) {
 		L4_Word_t status = _muidl_sysmem_impl_dispatch(&vtab);
 		if(status == MUIDL_UNKNOWN_LABEL) {
-			/* do nothing. */
+			/* special sysinfo initialization stuff. */
+			L4_MsgTag_t tag = muidl_get_tag();
+			L4_Word_t mrs[64]; L4_StoreMRs(1, tag.X.u + tag.X.t, mrs);
+			L4_ThreadId_t sender = muidl_get_sender();
+			if(L4_ThreadNo(sender) < L4_ThreadNo(L4_Myself())
+				&& L4_Label(tag) == 0xbaaf)
+			{
+				sysinfo_init_msg(tag, mrs);
+			} else {
+				/* do nothing. */
+				printf("sysmem: unknown message label=%#lx, u=%lu, t=%lu\n",
+					L4_Label(tag), L4_UntypedWords(tag), L4_TypedWords(tag));
+			}
 		} else if(status != 0 && !MUIDL_IS_L4_ERROR(status)) {
 			printf("sysmem: dispatch status %#lx (last tag %#lx)\n",
 				status, muidl_get_tag().raw);

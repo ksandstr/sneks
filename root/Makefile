@@ -21,7 +21,7 @@ distclean:
 	@rm -rf .deps $(OUTPUTS)
 
 
-root: root.ld crt0.o main.o runtime.o mm.o \
+root: root.ld crt0.o main.o runtime.o mm.o ser_io.o \
 		sysmem-common.o sysmem-client.o kmsg-common.o kmsg-service.o \
 		ccan-htable.o
 	@echo "  LD $@"

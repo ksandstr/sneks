@@ -14,6 +14,8 @@
 #include <sneks/mm.h>
 
 #include "sysmem-defs.h"
+#include "info-defs.h"
+#include "kmsg-defs.h"
 
 
 static tss_t errno_key;
@@ -84,11 +86,42 @@ void abort(void) {
 }
 
 
-/* for fake_stdio.c. this should change over to writing into a system dmesg,
- * or some such buffer, over IPC.
- */
-void con_putstr(const char *string) {
-	L4_KDB_PrintString((char *)string);
+/* for fake_stdio.c */
+static L4_ThreadId_t kmsg_tid = L4_nilthread;
+
+static void init_kmsg_tid(void)
+{
+	L4_ThreadId_t sysinfo_tid;
+	int n = __info_lookup(L4_Pager(), &sysinfo_tid.raw);
+	if(n != 0) {
+		L4_KDB_PrintString("crt1: __info_lookup() failed");
+		return;		/* FIXME: ugly. */
+	}
+
+	struct sneks_kmsg_info info;
+	n = __info_kmsg_block(sysinfo_tid, &info);
+	if(n != 0) {
+		L4_KDB_PrintString("crt1: __info_kmsg_block() failed");
+		return;		/* FIXME: ugly. */
+	}
+
+	kmsg_tid.raw = info.service;
+}
+
+
+void con_putstr(const char *string)
+{
+	if(L4_IsNilThread(kmsg_tid)) {
+		static once_flag kmsg_once = ONCE_FLAG_INIT;
+		call_once(&kmsg_once, &init_kmsg_tid);
+	}
+
+	int n = __kmsg_putstr(kmsg_tid, string);
+	if(n != 0) {
+		char buf[100];
+		snprintf(buf, sizeof buf, "con_putstr: Kmsg::putstr failed, n=%d", n);
+		L4_KDB_PrintString(buf);
+	}
 }
 
 

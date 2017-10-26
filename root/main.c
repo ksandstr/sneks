@@ -1,9 +1,12 @@
 
+#define SNEKS_KMSG_IMPL_SOURCE
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdatomic.h>
+#include <stdarg.h>
 #include <string.h>
 #include <threads.h>
 #include <unistd.h>
@@ -19,12 +22,15 @@
 #include <l4/kip.h>
 #include <l4/bootinfo.h>
 #include <l4/sigma0.h>
+#include <l4/kdebug.h>
 
 #include <sneks/mm.h>
 #include <sneks/hash.h>
 
 #include "elf.h"
+#include "muidl.h"
 #include "sysmem-defs.h"
+#include "kmsg-defs.h"
 #include "defs.h"
 
 
@@ -654,6 +660,61 @@ static L4_ThreadId_t start_boot_module(L4_ThreadId_t s0, const char *name)
 }
 
 
+static int impl_kmsg_putstr(const char *str)
+{
+	extern void ser_putstr(const char *str);
+	ser_putstr(str);
+	return 0;
+}
+
+
+static int kmsg_impl_fn(void *param UNUSED)
+{
+	static struct sneks_kmsg_vtable vtab = {
+		.putstr = &impl_kmsg_putstr,
+	};
+	for(;;) {
+		L4_Word_t status = _muidl_sneks_kmsg_dispatch(&vtab);
+		if(status == MUIDL_UNKNOWN_LABEL) {
+			/* do nothing. */
+		} else if(status != 0 && !MUIDL_IS_L4_ERROR(status)) {
+			printf("%s: dispatch status %#lx (last tag %#lx)\n",
+				__func__, status, muidl_get_tag().raw);
+		}
+	}
+
+	return 0;
+}
+
+
+static void put_sysinfo(const char *name, int nvals, ...)
+{
+	int namelen = strlen(name), pos = 0;
+	/* NOTE: this may read bytes past end of string, which may land on end of
+	 * page. thankfully it's all init-time, so in practice problems should
+	 * make themselves apparent in test builds.
+	 */
+	for(int i=0; i < namelen; i += sizeof(L4_Word_t)) {
+		L4_Word_t w = *(const L4_Word_t *)&name[i];
+		L4_LoadMR(++pos, w);
+	}
+	if(namelen % sizeof(L4_Word_t) == 0) L4_LoadMR(++pos, 0); /* terminator */
+	va_list al;
+	va_start(al, nvals);
+	for(int i=0; i < nvals; i++) {
+		L4_Word_t w = va_arg(al, L4_Word_t);
+		L4_LoadMR(++pos, w);
+	}
+	va_end(al);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xbaaf, .X.u = pos }.raw);
+	L4_MsgTag_t tag = L4_Send(L4_Pager());
+	if(L4_IpcFailed(tag)) {
+		printf("%s: send failed, ec=%#lx\n", __func__, L4_ErrorCode());
+		abort();
+	}
+}
+
+
 int main(void)
 {
 	printf("hello, world!\n");
@@ -671,6 +732,15 @@ int main(void)
 	free(ptr);
 
 	/* TODO: launch mem, fs.cramfs here */
+
+	/* configure sysinfo. */
+	thrd_t kmsg;
+	int n = thrd_create(&kmsg, &kmsg_impl_fn, NULL);
+	if(n != thrd_success) {
+		printf("can't start kmsg!\n");
+		abort();
+	}
+	put_sysinfo("kmsg:tid", 1, thrd_tidof_NP(kmsg).raw);
 
 	/* run systest if present. */
 	L4_ThreadId_t systest_tid = start_boot_module(s0, "systest");
