@@ -534,7 +534,89 @@ static void move_to_sysmem(L4_ThreadId_t sysmem_tid, L4_ThreadId_t sm_pager)
 }
 
 
-static L4_ThreadId_t start_boot_module(L4_ThreadId_t s0, const char *name)
+static void *make_argpage(const char *name, char **argv, va_list more_args)
+{
+	void *mem = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
+	memset(mem, 0, PAGE_SIZE);
+	int32_t *argc_p = mem;
+	char *argbase = (char *)&argc_p[1], *argmem = argbase;
+	argmem += strscpy(argmem, name, PAGE_SIZE - sizeof *argc_p) + 1;
+
+	int argc;
+	for(argc = 0; argv[argc] != NULL; argc++) {
+		argmem += strscpy(argmem, argv[argc],
+			PAGE_SIZE - (argmem - argbase)) + 1;
+	}
+	for(;;) {
+		char *str = va_arg(more_args, char *);
+		if(str == NULL) break;
+		assert(argmem < argbase + PAGE_SIZE);
+		int n = strscpy(argmem, str, PAGE_SIZE - (argmem - argbase));
+		assert(n >= 0);
+		argmem += n + 1;
+		argc++;
+	}
+	*argc_p = ++argc;
+	assert(argmem < argbase + PAGE_SIZE);
+	*argmem = '\0';
+
+	return mem;
+}
+
+
+/* return value is a malloc'd NULL-terminated array of pointers into @str,
+ * which will have nul bytes dropped into the correct places.
+ */
+static char **break_argument_list(char *str)
+{
+	if(str == NULL) {
+		char **end = malloc(sizeof(char *));
+		*end = NULL;
+		return end;
+	}
+
+	int len = strlen(str), nargs = 0;
+	char *args[len / 2 + 1], *cur = str;
+	while(cur < str + len) {
+		const char *delims = " \t\n\r";
+		char *brk = strpbrk(cur, delims);
+		if(brk == cur) {
+			/* skip doubles, triples, etc. */
+			*(cur++) = '\0';
+		} else {
+			assert(nargs < len / 2 + 1);
+			args[nargs++] = cur;
+			if(brk == NULL) break;
+			*brk = '\0';
+			cur = brk + 1;
+		}
+	}
+
+	char **copy = malloc(sizeof(char *) * (nargs + 1));
+	for(int i=0; i < nargs; i++) copy[i] = args[i];
+	copy[nargs] = NULL;
+	return copy;
+}
+
+
+/* FIXME: this is an ugly bodge for mung's failure to recognize a smaller
+ * subpage at a non-zero offset during recursive Unmap, i.e. the one that
+ * sysmem does. flushing explicitly works fine.
+ *
+ * remove it once mung becomes slightly less fuckered.
+ */
+static void toss_page(uintptr_t addr)
+{
+	L4_Fpage_t foo = L4_FpageLog2(addr, PAGE_BITS);
+	L4_Set_Rights(&foo, L4_FullyAccessible);
+	L4_FlushFpage(foo);
+}
+
+
+/* launches a systask from a boot module recognized with @name, appending the
+ * given NULL-terminated parameter list to that specified for the module.
+ */
+static L4_ThreadId_t spawn_systask(L4_ThreadId_t s0, const char *name, ...)
 {
 	L4_ThreadId_t sysmem_tid = L4_Pager();
 	assert(!L4_SameThreads(sysmem_tid, s0));
@@ -543,7 +625,7 @@ static L4_ThreadId_t start_boot_module(L4_ThreadId_t s0, const char *name)
 	char *rest = NULL;
 	L4_BootRec_t *mod = find_boot_module(kip, name, &rest);
 	printf("name=`%s', mod=%p, rest=`%s'\n", name, mod, rest);
-	free(rest);
+	char **args = break_argument_list(rest);
 
 	/* get the boot module's pages from sigma0. */
 	L4_Word_t start_addr = L4_Module_Start(mod);
@@ -625,22 +707,27 @@ static L4_ThreadId_t start_boot_module(L4_ThreadId_t s0, const char *name)
 				printf("sysmem::send_virt failed, n=%d, ret=%u\n", n, ret);
 				abort();
 			}
-
-			/* FIXME: this is an ugly bodge for mung's failure to recognize a
-			 * smaller subpage at a non-zero offset during recursive Unmap,
-			 * i.e. the one that sysmem does. flushing explicitly works fine.
-			 *
-			 * remove it once mung becomes slightly less fuckered.
-			 */
-			L4_Fpage_t foo = L4_FpageLog2((L4_Word_t)copybuf, PAGE_BITS);
-			L4_Set_Rights(&foo, L4_FullyAccessible);
-			L4_FlushFpage(foo);
+			toss_page((L4_Word_t)copybuf);
 		}
 	}
 	free(copybuf);
 
+	/* make us an argument page as well & map it in. */
+	va_list al;
+	va_start(al, name);
+	void *argpage = make_argpage(name, args, al);
+	va_end(al);
+	uint16_t ret;
+	n = __sysmem_send_virt(sysmem_tid, &ret, (L4_Word_t)argpage,
+		new_tid.raw, L4_Address(kip_area) - PAGE_SIZE);
+	if(n != 0 || ret != 0) {
+		printf("sysmem::send_virt failed on argpage, n=%d, ret=%u\n", n, ret);
+		abort();
+	}
+	toss_page((L4_Word_t)argpage);
+	free(argpage);
+
 	/* start 'er up. */
-	uint16_t ret = 0;
 	n = __sysmem_breath_of_life(sysmem_tid, &ret, new_tid.raw,
 		ee->e_entry, 0xdeadbeef);
 	if(n != 0 || ret != 0) {
@@ -656,6 +743,8 @@ static L4_ThreadId_t start_boot_module(L4_ThreadId_t s0, const char *name)
 		send_phys_to_sysmem(sysmem_tid, false, L4_Address(mod_pages[i]));
 	}
 
+	free(args);
+	free(rest);
 	return new_tid;
 }
 
@@ -743,7 +832,7 @@ int main(void)
 	put_sysinfo("kmsg:tid", 1, thrd_tidof_NP(kmsg).raw);
 
 	/* run systest if present. */
-	L4_ThreadId_t systest_tid = start_boot_module(s0, "systest");
+	L4_ThreadId_t systest_tid = spawn_systask(s0, "systest", NULL);
 	if(!L4_IsNilThread(systest_tid)) {
 		/* wait until it's been removed. */
 		L4_MsgTag_t tag;

@@ -166,7 +166,8 @@ static inline int thr_cmp(const struct st_thr *a, const struct st_thr *b) {
 
 static struct st_thr *get_thr(L4_ThreadId_t tid)
 {
-	assert(L4_IsGlobalId(tid));
+	if(!L4_IsGlobalId(tid)) return NULL;
+
 	struct rb_node *n = all_threads.rb_node;
 	int a = L4_ThreadNo(tid);
 	while(n != NULL) {
@@ -641,26 +642,35 @@ static uint16_t impl_send_virt(
 		dest_tid = { .raw = dest_tid_raw };
 	struct systask *src = get_task(src_tid),
 		*dest = get_task(dest_tid);
-	if(src == NULL || dest == NULL) return ENOENT;
+	if(src == NULL) return ENOENT;
 
 	struct l_page *lp = get_lpage(src, src_addr);
 	if(lp == NULL) return EFAULT;
 
-	struct l_page *dstp = get_lpage(dest, dest_addr);
-	if(dstp != NULL) {
-		/* toss the previous page. */
-		unmap_page(dstp->p_addr & ~PAGE_MASK);
-		rb_erase(&dstp->rb, &dest->mem);
-		/* FIXME: free the physical page! recycle `dstp'! */
+	if(dest != NULL) {
+		struct l_page *dstp = get_lpage(dest, dest_addr);
+		if(dstp != NULL) {
+			/* toss the previous page. */
+			unmap_page(dstp->p_addr & ~PAGE_MASK);
+			rb_erase(&dstp->rb, &dest->mem);
+			/* FIXME: free the physical page! recycle `dstp'! */
+		}
+
+		/* move it over and unmap the physical memory. */
+		unmap_page(lp->p_addr & ~PAGE_MASK);
+		rb_erase(&lp->rb, &src->mem);
+		lp->l_addr = dest_addr;
+		put_lpage(dest, lp);
+		return 0;
+	} else if(L4_IsNilThread(dest_tid)) {
+		/* just toss the page. */
+		unmap_page(lp->p_addr & ~PAGE_MASK);
+		rb_erase(&lp->rb, &src->mem);
+		/* FIXME: release the physical memory! recycle `lp'! */
+		return 0;
+	} else {
+		return ENOENT;
 	}
-
-	/* move it over and unmap the physical memory. */
-	unmap_page(lp->p_addr & ~PAGE_MASK);
-	rb_erase(&lp->rb, &src->mem);
-	lp->l_addr = dest_addr;
-	put_lpage(dest, lp);
-
-	return 0;
 }
 
 

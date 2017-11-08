@@ -9,6 +9,8 @@
 #include <l4/types.h>
 #include <l4/thread.h>
 #include <l4/ipc.h>
+#include <l4/space.h>
+#include <l4/kip.h>
 #include <l4/kdebug.h>
 
 #include <sneks/mm.h>
@@ -176,4 +178,41 @@ long sysconf(int name)
 		case _SC_PAGESIZE: return PAGE_SIZE;
 		default: errno = EINVAL; return -1;
 	}
+}
+
+
+int __crt1_entry(void)
+{
+	void *kip = L4_GetKernelInterface();
+	int32_t *argc_p = (int32_t *)(kip - PAGE_SIZE), argc = *argc_p;
+	char *argbase = (char *)&argc_p[1], *argmem = argbase;
+	char *argv[argc + 1];
+	for(int i=0; i <= argc; i++) {
+		argv[i] = argmem;
+		argmem += strlen(argmem) + 1;
+	}
+	int arglen = argmem - argbase;
+	char copy[arglen + 1];
+	memcpy(copy, argbase, arglen + 1);
+	for(int i=0; i <= argc; i++) argv[i] += &copy[0] - argbase;
+
+	/* call sysmem to throw away argmem */
+	for(uintptr_t addr = (uintptr_t)argc_p;
+		addr <= (uintptr_t)argmem;
+		addr += PAGE_SIZE)
+	{
+		uint16_t rv;
+		__sysmem_send_virt(L4_Pager(), &rv, addr, L4_nilthread.raw, 0);
+		/* disregard errors due to no possible way to handle. it's an
+		 * optimization anyway.
+		 */
+
+		/* FIXME: remove this once mung's mapdb issue goes away. */
+		L4_Fpage_t p = L4_FpageLog2(addr & ~PAGE_MASK, PAGE_BITS);
+		L4_Set_Rights(&p, L4_FullyAccessible);
+		L4_FlushFpage(p);
+	}
+
+	extern int main(int argc, char *const argv[], char *const envp[]);
+	return main(argc, argv, NULL);
 }

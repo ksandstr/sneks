@@ -64,6 +64,9 @@ interface Sysmem: L4X2::FaultHandler
 	 * @dest_addr. the page contents in root will be replaced with all zeroes
 	 * (but only after a fault).
 	 *
+	 * also works for discarding memory from any systask when @dest=nilthread.
+	 * such memory is replaced by logical zeroes.
+	 *
 	 * returns 0 on success or POSIX errno on failure, such as when @dest
 	 * doesn't exist, or there's nothing at @src_addr.
 	 */

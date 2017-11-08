@@ -5,12 +5,8 @@
 	.align 16
 _start:
 	leal __stack, %esp
-	pushl $0	# argc
-	pushl $0	# argv
-	pushl $0	# envp
-	call main
-	addl $8, %esp
-	movl %eax, (%esp)
+	call __crt1_entry
+	pushl %eax
 	jmp __return_from_main
 
 # two pages' worth should be well enough.

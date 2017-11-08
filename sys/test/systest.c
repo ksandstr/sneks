@@ -1,4 +1,3 @@
-
 /* system task testbench program.
  *
  * executes tests concerning system tasks (e.g. the general system task
@@ -16,11 +15,9 @@ static int thread_fn(void *param_ptr)
 }
 
 
-int main(void)
+int main(int argc, char *argv[])
 {
-	printf("# hello, world!\n");
-	printf("1..1\n");
-	printf("ok 1\n");
+	for(int i=0; i < argc; i++) printf("argv[%d]=`%s'\n", i, argv[i]);
 
 	thrd_t t;
 	int n = thrd_create(&t, &thread_fn, "piip buub");
