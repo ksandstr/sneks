@@ -273,13 +273,29 @@ int strncmp(const char *a, const char *b, size_t max)
 		}
 	}
 
-	assert(a[pos] != '\0' && b[pos] != '\0');
 	return 0;
 }
 
 
 int strcmp(const char *a, const char *b) {
 	return strncmp(a, b, INT_MAX);
+}
+
+
+static inline char ascii_tolower(char c) {
+	if(c >= 'A' && c <= 'Z') return c - 32; else return c;
+}
+
+
+int strcasecmp(const char *pa, const char *pb)
+{
+	char *a = strdup(pa), *b = strdup(pb);
+	for(int i=0; a[i] != '\0'; i++) a[i] = ascii_tolower(a[i]);
+	for(int i=0; b[i] != '\0'; i++) b[i] = ascii_tolower(b[i]);
+	int n = strncmp(a, b, INT_MAX);
+	free(a);
+	free(b);
+	return n;
 }
 
 
@@ -473,7 +489,7 @@ end:
 /* fancy! and O(1) space! */
 char *strpbrk(const char *s, const char *needles)
 {
-	const unsigned int long_bits = sizeof(unsigned long) * 8,
+	const int long_bits = sizeof(unsigned long) * 8,
 		present_len = (256 + long_bits - 1) / long_bits;
 	unsigned long present[present_len];
 
@@ -492,6 +508,37 @@ char *strpbrk(const char *s, const char *needles)
 	}
 
 	return NULL;
+}
+
+
+size_t strcspn(const char *s, const char *reject) {
+	char *p = strpbrk(s, reject);
+	return p != NULL ? p - s : strlen(s);
+}
+
+
+/* fairly near copypasta'd from strpbrk() above. */
+size_t strspn(const char *s, const char *accept)
+{
+	const int long_bits = sizeof(unsigned long) * 8,
+		present_len = (256 + long_bits - 1) / long_bits;
+	unsigned long present[present_len];
+
+	for(int i=0; i < present_len; i++) present[i] = 0;
+	for(int i=0; accept[i] != '\0'; i++) {
+		int c = (unsigned char)accept[i], o = c / long_bits,
+			b = c & (long_bits - 1);
+		present[o] |= 1ul << b;
+	}
+
+	const char *start = s;
+	while(*s != '\0') {
+		int c = (unsigned char)(*s), o = c / long_bits,
+			b = c & (long_bits - 1);
+		if(present[o] & (1ul << b)) s++; else break;
+	}
+
+	return s - start;
 }
 
 
