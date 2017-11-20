@@ -1,0 +1,55 @@
+
+#ifndef __SYS_FS_IDL__
+#define __SYS_FS_IDL__
+
+#include <l4x2.idl>
+#include <posixlike.idl>
+
+
+module Sneks {
+
+/* userspace-facing interface for access to filesystem objects other than file
+ * content.
+ */
+[StubPrefix(__fs), IfaceLabel(0xe006)]
+interface Fs
+{
+	const long PATH_MAX = 4000;
+	const long READ_MAX = 4 * 1024 * 1024;	/* L4.X2 strxfer max */
+
+	typedef L4X2::word handle;
+	typedef string<PATH_MAX> path;
+	typedef sequence<octet, READ_MAX> buffer;
+
+	/* TODO: move these into a POSIX IDL file. */
+	typedef unsigned long mode_t;
+	typedef unsigned long off_t;
+	typedef unsigned long size_t;
+
+	/* opens files, sockets, fifoes, etc.; but directories only when
+	 * O_DIRECTORY ∈ @flags.
+	 */
+	void openat(
+		out handle file,
+		in handle directory, in path pathref, in long flags, in mode_t mode)
+			raises(Posix::Errno);
+
+	void close(in handle fd)
+		raises(Posix::Errno);
+
+	/* simple synchronous I/O.
+	 *
+	 * (this causes an extra copy compared to e.g. a vm op that'd copy stuff
+	 * into the client's memory. this is soluble, so we don't care about it
+	 * for now.)
+	 */
+	void read(
+		out buffer data,
+		in handle fd, in off_t position, in size_t length)
+			raises(Posix::Errno);
+};
+
+
+};
+
+#endif
