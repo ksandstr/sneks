@@ -22,8 +22,8 @@
  *       // carry on
  * }
  *
- * "start" and "end" define an exclusive range, i.e. [start .. end). The null
- * range (i.e. start == end) skips the loop body entirely.
+ * iterate through aligned power-of-two pages between [start, end). skip the
+ * loop body when start >= end.
  */
 #define for_page_range(_start, _end, _addr, _sizelog2) \
 	for(L4_Word_t _E = (_end) & ~PAGE_MASK, _A = (_addr) = (_start) & ~PAGE_MASK, \

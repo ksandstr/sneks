@@ -15,6 +15,7 @@
 #include <errno.h>
 #include <ccan/likely/likely.h>
 #include <ccan/htable/htable.h>
+#include <ccan/array_size/array_size.h>
 
 #include <l4/types.h>
 #include <l4/thread.h>
@@ -40,6 +41,7 @@
 
 
 #define SYSMEM_SEED_MEGS 24
+#define THREAD_STACK_SIZE 4096
 
 
 struct sysmem_page {
@@ -48,6 +50,9 @@ struct sysmem_page {
 
 
 L4_KernelInterfacePage_t *the_kip;
+
+static L4_ThreadId_t sigma0_tid, sysmem_tid;
+static int sysmem_pages = 0, sysmem_self_pages = 0;
 
 
 static size_t hash_sysmem_page(const void *key, void *priv) {
@@ -161,6 +166,8 @@ void send_phys_to_sysmem(L4_ThreadId_t sysmem_tid, bool self, L4_Fpage_t pg)
 			L4_ErrorCode());
 		abort();
 	}
+
+	if(self) sysmem_self_pages++; else sysmem_pages++;
 }
 
 
@@ -210,10 +217,63 @@ static L4_ThreadId_t new_task(L4_Fpage_t kip_area, L4_Fpage_t utcb_area)
 }
 
 
+static L4_BootInfo_t *get_boot_info(L4_KernelInterfacePage_t *kip)
+{
+	static bool copied = false;
+	static char bootinfo_copy[1024]
+		__attribute__((aligned(sizeof(L4_BootInfo_t))));
+
+	if(copied) goto end;
+
+	L4_BootInfo_t *bootinfo = (L4_BootInfo_t *)L4_BootInfo(kip);
+	L4_Word_t sz = L4_BootInfo_Size(bootinfo);
+	if(sz > sizeof bootinfo_copy) {
+		printf("%s: bootinfo size=%lu too large!\n", __func__, sz);
+		abort();
+	}
+	memcpy(bootinfo_copy, bootinfo, sz);
+	copied = true;
+
+	if(L4_ThreadNo(L4_Pager()) > L4_ThreadNo(L4_Myself())) {
+		/* not under sigma0 anymore. */
+		goto end;
+	}
+
+	/* grab boot modules from sigma0 so they don't get passed to vm. */
+	bootinfo = (L4_BootInfo_t *)&bootinfo_copy[0];
+	L4_BootRec_t *rec = L4_BootInfo_FirstEntry(bootinfo);
+	for(L4_Word_t i = 0;
+		i < L4_BootInfo_Entries(bootinfo);
+		i++, rec = L4_BootRec_Next(rec))
+	{
+		if(rec->type != L4_BootInfo_Module) {
+			printf("%s: rec=%p is not a module\n", __func__, rec);
+			continue;
+		}
+
+		L4_Word_t base = L4_Module_Start(rec), len = L4_Module_Size(rec);
+		printf("%s: retain boot module [%#lx, %#lx)\n", __func__,
+			base, base + len);
+		L4_Word_t addr, sz;
+		for_page_range(base, (base + len + PAGE_MASK) & ~PAGE_MASK, addr, sz) {
+			L4_Fpage_t p = L4_Sigma0_GetPage(sigma0_tid, L4_FpageLog2(addr, sz));
+			if(L4_IsNilFpage(p)) {
+				printf("%s: couldn't get page %#lx:%#lx from s0!\n",
+					__func__, addr, 1ul << sz);
+				abort();
+			}
+		}
+	}
+
+end:
+	return (L4_BootInfo_t *)&bootinfo_copy[0];
+}
+
+
 static L4_BootRec_t *find_boot_module(
 	L4_KernelInterfacePage_t *kip, const char *name, char **cmd_rest_p)
 {
-	L4_BootInfo_t *bootinfo = (L4_BootInfo_t *)L4_BootInfo(kip);
+	L4_BootInfo_t *bootinfo = get_boot_info(kip);
 
 	L4_BootRec_t *rec = L4_BootInfo_FirstEntry(bootinfo);
 	bool found = false;
@@ -353,12 +413,12 @@ static L4_ThreadId_t start_sysmem(
 
 
 /* fault in memory between _start and _end, switch pagers, and grant it page
- * by page to sysmem. then trigger mm.c heap transition and pump a few megs
- * from sigma0 for sysmem.
+ * by page to sysmem. then trigger mm.c heap transition and toss a few pages
+ * at sysmem to tide us over until start_vm().
  */
-static void move_to_sysmem(L4_ThreadId_t sysmem_tid, L4_ThreadId_t sm_pager)
+static void move_to_sysmem(L4_ThreadId_t sm_pager)
 {
-	L4_ThreadId_t s0 = L4_Pager();
+	assert(L4_SameThreads(sigma0_tid, L4_Pager()));
 
 	extern char _start, _end;
 	for(L4_Word_t addr = (L4_Word_t)&_start & ~PAGE_MASK;
@@ -370,7 +430,6 @@ static void move_to_sysmem(L4_ThreadId_t sysmem_tid, L4_ThreadId_t sm_pager)
 	}
 	L4_Set_Pager(sysmem_tid);
 	L4_Set_PagerOf(sm_pager, sysmem_tid);
-	printf("moving early memory to sysmem\n");
 	for(L4_Word_t addr = (L4_Word_t)&_start & ~PAGE_MASK;
 		addr < (L4_Word_t)&_end;
 		addr += PAGE_SIZE)
@@ -379,10 +438,10 @@ static void move_to_sysmem(L4_ThreadId_t sysmem_tid, L4_ThreadId_t sm_pager)
 	}
 	mm_enable_sysmem(sysmem_tid);
 
-	L4_Word_t remain = SYSMEM_SEED_MEGS * 1024 * 1024;
+	L4_Word_t remain = 128 * 1024;
 	int scale = MSB(remain);
 	while(remain > 0) {
-		L4_Fpage_t fp = L4_Sigma0_GetAny(s0, scale, L4_CompleteAddressSpace);
+		L4_Fpage_t fp = L4_Sigma0_GetAny(sigma0_tid, scale, L4_CompleteAddressSpace);
 		if(L4_IsNilFpage(fp)) {
 			if(L4_ErrorCode() == 0 && scale > PAGE_BITS) {
 				scale--;
@@ -566,38 +625,18 @@ static char **break_argument_list(char *str)
 /* launches a systask from a boot module recognized with @name, appending the
  * given NULL-terminated parameter list to that specified for the module.
  */
-static L4_ThreadId_t spawn_systask(L4_ThreadId_t s0, const char *name, ...)
+static L4_ThreadId_t spawn_systask(const char *name, ...)
 {
-	L4_ThreadId_t sysmem_tid = L4_Pager();
-	assert(!L4_SameThreads(sysmem_tid, s0));
+	assert(!L4_SameThreads(sigma0_tid, L4_Pager()));
 
 	L4_KernelInterfacePage_t *kip = the_kip;
 	char *rest = NULL;
 	L4_BootRec_t *mod = find_boot_module(kip, name, &rest);
-	// printf("name=`%s', mod=%p, rest=`%s'\n", name, mod, rest);
+	printf("name=`%s', mod=%p, rest=`%s'\n", name, mod, rest);
 	char **args = break_argument_list(rest);
 
-	/* get the boot module's pages from sigma0. */
-	L4_Word_t start_addr = L4_Module_Start(mod), mod_size = L4_Module_Size(mod);
-	int sz, np = 0,
-		max_pages = page_range_bound(start_addr, start_addr + mod_size);
-	L4_Word_t addr;
-	L4_Fpage_t mod_pages[max_pages];
-	for_page_range(start_addr, start_addr + mod_size, addr, sz) {
-		// printf("  %#lx:%#lx\n", addr, 1ul << sz);
-		assert(np < max_pages);
-		mod_pages[np] = L4_FpageLog2(addr, sz);
-		L4_Set_Rights(&mod_pages[np], L4_FullyAccessible);
-		L4_Fpage_t res = L4_Sigma0_GetPage(s0, mod_pages[np]);
-		if(L4_IsNilFpage(res)) {
-			printf("%s: sigma0 didn't return page for %#lx:%#lx\n",
-				__func__, L4_Address(mod_pages[np]), L4_Size(mod_pages[np]));
-			abort();
-		}
-		np++;
-	}
-	assert(np <= max_pages);
-
+	L4_Word_t start_addr = L4_Module_Start(mod),
+		mod_size = L4_Module_Size(mod);
 	const Elf32_Ehdr *ee = (void *)start_addr;
 	if(memcmp(ee->e_ident, ELFMAG, SELFMAG) != 0) {
 		printf("incorrect ELF magic in boot module `%s'\n", name);
@@ -702,14 +741,196 @@ static L4_ThreadId_t spawn_systask(L4_ThreadId_t s0, const char *name, ...)
 	/* toss the module pages into sysmem as spare RAM. no need for 'em
 	 * anymore.
 	 */
-	for(int i=0; i < np; i++) {
-		if(L4_IsNilFpage(mod_pages[i])) continue;
-		send_phys_to_sysmem(sysmem_tid, false, mod_pages[i]);
+	L4_Word_t addr, sz;
+	for_page_range(start_addr, (start_addr + mod_size + PAGE_MASK) & ~PAGE_MASK,
+		addr, sz)
+	{
+		printf("  %#lx:%#lx\n", addr, 1ul << sz);
+		L4_Fpage_t p = L4_FpageLog2(addr, sz);
+		L4_Set_Rights(&p, L4_FullyAccessible);
+		send_phys_to_sysmem(sysmem_tid, false, p);
 	}
 
 	free(args);
 	free(rest);
 	return new_tid;
+}
+
+
+static int pump_sigma0(size_t *total_p, L4_Fpage_t *phys, int phys_len)
+{
+	L4_Word_t total = 0, n_phys = 0;
+	for(int siz = sizeof(L4_Word_t) * 8 - 1;
+		siz >= 12 && n_phys < phys_len;
+		siz--)
+	{
+		int n = 0;
+		for(;;) {
+			L4_Fpage_t page = L4_Sigma0_GetAny(sigma0_tid,
+				siz, L4_CompleteAddressSpace);
+			if(L4_IsNilFpage(page)) break;
+
+			n++;
+			phys[n_phys++] = page;
+		}
+		total += n * (1ul << siz);
+	}
+	printf("root: got %lu KiB (%lu MiB) of memory from sigma0\n",
+		total / 1024, total / (1024 * 1024));
+
+	*total_p = total;
+	return n_phys;
+}
+
+
+static int cmp_fpage(const void *a, const void *b) {
+	return L4_Address(*(L4_Fpage_t *)a) - L4_Address(*(L4_Fpage_t *)b);
+}
+
+
+static void send_phys_to_vm(L4_ThreadId_t vm_tid, L4_Fpage_t page)
+{
+	L4_Accept(L4_UntypedWordsAcceptor);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xb0a7, .X.u = 2 }.raw);
+	L4_LoadMR(1, page.raw);
+	L4_LoadMR(2, 0);		/* upper 32 bits of physical address */
+	L4_MsgTag_t tag = L4_Call(vm_tid);
+	if(L4_IpcSucceeded(tag) && !L4_IsNilFpage(page)) {
+		L4_Set_Rights(&page, L4_FullyAccessible);
+		L4_GrantItem_t gi = L4_GrantItem(page, 0);
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xb0a8, .X.t = 2 }.raw);
+		L4_LoadMRs(1, 2, gi.raw);
+		tag = L4_Reply(vm_tid);
+	}
+	if(L4_IpcFailed(tag)) {
+		printf("%s: ipc failed, ec=%#lx\n", __func__, L4_ErrorCode());
+		abort();
+	}
+}
+
+
+/* give sysmem its due; pass rest to vm under @vm_tid.
+ *
+ * NOTE: this doesn't enforce an upper limit on how much memory sysmem can end
+ * up with, however, it's generally the case that vm's virtual memory isn't so
+ * much to push sysmem over its basic allocation.
+ */
+static void portion_phys(size_t total, L4_ThreadId_t vm_tid, L4_Fpage_t page)
+{
+	/* FIXME: reduce the static 24M minimum allocation to something much
+	 * tinier, like max(total/80, 1M), once sysmem and vm start passing
+	 * physical RAM in response to pressure.
+	 */
+	size_t assn = max_t(size_t, total / 40, 24 * 1024 * 1024);
+	int rem = assn - sysmem_pages * PAGE_SIZE;
+	if(rem <= 0) send_phys_to_vm(vm_tid, page);
+	else if(rem >= L4_Size(page)) send_phys_to_sysmem(sysmem_tid, false, page);
+	else {
+		size_t mid = L4_Address(page) + rem, sz;
+		uintptr_t addr;
+		for_page_range(L4_Address(page), mid, addr, sz) {
+			send_phys_to_sysmem(sysmem_tid, false, L4_FpageLog2(addr, sz));
+		}
+		for_page_range(mid, L4_Address(page) + L4_Size(page), addr, sz) {
+			send_phys_to_vm(vm_tid, L4_FpageLog2(addr, sz));
+		}
+	}
+#if 0
+	if(rem >= PAGE_SIZE) {
+		printf("%s: sysmem_pages'=%d (%u KiB out of %u assigned)\n", __func__,
+			sysmem_pages, sysmem_pages * PAGE_SIZE / 1024,
+			(unsigned)assn / 1024);
+	}
+#endif
+}
+
+
+#define FP_HIGH(p) (L4_Address((p)) + L4_Size((p)) - 1)
+
+/* start memory server, hand the physical memory that'd overlap its virtual
+ * addresses to sysmem, and do initialization protocol.
+ */
+static void start_vm(void)
+{
+	L4_ThreadId_t mem_tid = spawn_systask("vm", NULL);
+
+	/* portion memory out to sysmem, vm, and consumers of various special
+	 * ranges.
+	 */
+	L4_Fpage_t phys[1000];
+	size_t total = 0;
+	int n_phys = pump_sigma0(&total, phys, ARRAY_SIZE(phys));
+	qsort(phys, n_phys, sizeof phys[0], &cmp_fpage);
+
+	/* introduction to vm. this lets vm determine its memory model and
+	 * initialize its heap etc. so that it can receive physical memory.
+	 */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xefff, .X.u = 2 }.raw);
+	L4_LoadMR(1, total / PAGE_SIZE);
+	L4_LoadMR(2, FP_HIGH(phys[n_phys - 1]));
+	L4_MsgTag_t tag = L4_Call(mem_tid);
+	if(L4_IpcFailed(tag)) {
+		printf("%s: initialization failed, ec=%#lx\n", __func__,
+			L4_ErrorCode());
+		abort();
+	}
+
+	/* capture special ranges (i.e. below 1M) and pass every other page to
+	 * either sysmem or vm, depending whether it falls in vm's sysmem-paged
+	 * range and whether sysmem has already received its proper due.
+	 */
+	int last_lowmem = -1;
+	L4_Word_t vm_low, vm_high;
+	bool stale = true;
+	for(int i=0; i < n_phys; i++) {
+		L4_Fpage_t page = phys[i];
+		// printf("page=%#lx:%#lx\n", L4_Address(page), L4_Size(page));
+		L4_Word_t high = L4_Address(page) + L4_Size(page) - 1;
+		if(L4_Address(page) < 1024 * 1024 || high < 1024 * 1024) {
+			// printf("  kept as low memory\n");
+			last_lowmem = i;
+			continue;
+		}
+
+		if(stale) {
+			int n = __sysmem_get_shape(sysmem_tid, &vm_low, &vm_high, mem_tid.raw);
+			if(n != 0) {
+				printf("Sysmem::get_shape failed, n=%d\n", n);
+				abort();
+			}
+			stale = false;
+		}
+
+		if(vm_high < L4_Address(page) || vm_low > high) {
+			// printf("  disjoint from vm [%#lx..%#lx]\n", vm_low, vm_high);
+			portion_phys(total, mem_tid, page);
+			continue;
+		}
+
+		/* overlaps vm; divvy it up. */
+		L4_Word_t points[] = {
+			vm_low > L4_Address(page) ? L4_Address(page) : ~0ul,
+			max(L4_Address(page), vm_low),
+			min(high, vm_high) + 1,
+			vm_high < high ? high + 1 : ~0ul,
+		};
+		bool to_vm = true;
+		for(int j=1; j < ARRAY_SIZE(points); j++, to_vm = !to_vm) {
+			if(points[j] == ~0ul) continue;
+			L4_Word_t base;
+			int size;
+			for_page_range(points[j - 1], points[j], base, size) {
+				L4_Fpage_t p = L4_FpageLog2(base, size);
+				if(!to_vm) send_phys_to_sysmem(sysmem_tid, false, p);
+				else {
+					portion_phys(total, mem_tid, p);
+					stale = true;	/* mild overkill. */
+				}
+			}
+		}
+	}
+	send_phys_to_vm(mem_tid, L4_Nilpage);
+	printf("last_lowmem=%d\n", last_lowmem);
 }
 
 
@@ -760,7 +981,7 @@ static void put_sysinfo(const char *name, int nvals, ...)
 	}
 	va_end(al);
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xbaaf, .X.u = pos }.raw);
-	L4_MsgTag_t tag = L4_Send(L4_Pager());
+	L4_MsgTag_t tag = L4_Send(sysmem_tid);
 	if(L4_IpcFailed(tag)) {
 		printf("%s: send failed, ec=%#lx\n", __func__, L4_ErrorCode());
 		abort();
@@ -901,13 +1122,14 @@ int main(void)
 {
 	printf("hello, world!\n");
 	the_kip = L4_GetKernelInterface();
+	sigma0_tid = L4_Pager();
 	rt_thrd_init();
 	rename_first_threads();
 
 	L4_Fpage_t sm_utcb = L4_Nilpage, sm_kip = L4_Nilpage;
-	L4_ThreadId_t s0 = L4_Pager(), sm_pager = L4_nilthread,
-		sysmem = start_sysmem(&sm_pager, &sm_utcb, &sm_kip);
-	move_to_sysmem(sysmem, sm_pager);
+	L4_ThreadId_t sm_pager = L4_nilthread;
+	sysmem_tid = start_sysmem(&sm_pager, &sm_utcb, &sm_kip);
+	move_to_sysmem(sm_pager);
 
 	uapi_init();
 	L4_Fpage_t root_kip = L4_FpageLog2((L4_Word_t)the_kip,
@@ -918,14 +1140,12 @@ int main(void)
 		printf("can't create root task, n=%d\n", n);
 		abort();
 	}
-	n = add_task(pidof_NP(sysmem), sm_kip, sm_utcb);
+	n = add_task(pidof_NP(sysmem_tid), sm_kip, sm_utcb);
 	if(n < 0) {
 		printf("can't create sysmem task, n=%d\n", n);
 		abort();
 	}
 	rt_thrd_tests();
-
-	/* TODO: launch mem, fs.cramfs here */
 
 	/* configure sysinfo. */
 	thrd_t kmsg;
@@ -936,6 +1156,8 @@ int main(void)
 	}
 	put_sysinfo("kmsg:tid", 1, thrd_tidof_NP(kmsg).raw);
 	put_sysinfo("rootserv:tid", 1, L4_Myself().raw);
+	printf("sysmem was initialized w/ %d pages and %d own pages\n",
+		sysmem_pages, sysmem_self_pages);
 
 	/* launch the userspace API server. */
 	thrd_t uapi;
@@ -951,8 +1173,20 @@ int main(void)
 	 */
 	rt_thrd_tests();
 
+	start_vm();
+	/* FIXME: ensure that sysmem got at least a couple of megs' worth of
+	 * memory to start with. generally vm and its UTCB segment take care of
+	 * that, but still. (this'll be a stopgap until sigma1, sysmem, and vm
+	 * trade pages as memory pressure changes between microkernel, system
+	 * space, and user space.)
+	 */
+	/* FIXME: launch fs.cramfs for /initrd, spawn init(8). */
+
+	printf("sysmem has been given %d pages and %d own pages\n",
+		sysmem_pages, sysmem_self_pages);
+
 	/* run systest if present. */
-	L4_ThreadId_t systest_tid = spawn_systask(s0, "systest", NULL);
+	L4_ThreadId_t systest_tid = spawn_systask("systest", NULL);
 	if(!L4_IsNilThread(systest_tid)) {
 		/* wait until it's been removed. */
 		L4_MsgTag_t tag;
