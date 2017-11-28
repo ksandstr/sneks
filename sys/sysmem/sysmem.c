@@ -10,6 +10,7 @@
 #include <ccan/list/list.h>
 #include <ccan/likely/likely.h>
 #include <ccan/minmax/minmax.h>
+#include <ccan/array_size/array_size.h>
 
 #include <sneks/rbtree.h>
 #include <sneks/mm.h>
@@ -63,9 +64,10 @@ struct systask {
 	struct rb_root mem;			/* of <struct l_page> via rb */
 	struct list_head threads;	/* of <struct st_thr> */
 	uintptr_t brk;	/* program break (inclusive) */
+	uintptr_t min_fault;
 	bool is_root;	/* is this task zero? */
 	int next_utcb;	/* FIXME: replace w/ better UTCB alloc bits */
-	L4_Fpage_t utcb_area;
+	L4_Fpage_t utcb_area, kip_area;
 };
 
 
@@ -376,6 +378,7 @@ static bool handle_pf(
 		list_add_tail(&active_page_list, &phys->link);
 	}
 
+	task->min_fault = min_t(L4_Word_t, task->min_fault, faddr & ~PAGE_MASK);
 	L4_Fpage_t fp = L4_FpageLog2(lp->p_addr & ~PAGE_MASK, PAGE_BITS);
 	L4_Set_Rights(&fp, L4_FullyAccessible);
 	*page_ptr = L4_MapItem(fp, faddr & ~PAGE_MASK);
@@ -411,8 +414,10 @@ static void impl_new_task(
 	struct st_thr *t = alloc_struct(st_thr);
 	task->mem = RB_ROOT;
 	task->brk = 0x10000;	/* 64k should be enough for everyone */
+	task->min_fault = ~PAGE_MASK;
 	task->is_root = RB_EMPTY_ROOT(&all_threads);
 	task->utcb_area = utcb_area;
+	task->kip_area = kip_area;
 	task->next_utcb = 1;
 	list_head_init(&task->threads);
 	t->tid = first_thread;
@@ -636,6 +641,8 @@ abnormal:
 		put_lpage(task, lp);
 		pg->owner = lp;
 		list_add_tail(&active_page_list, &pg->link);
+		task->min_fault = min_t(L4_Word_t, task->min_fault, phys_addr & ~PAGE_MASK);
+		task->brk = max_t(L4_Word_t, task->brk, phys_addr | PAGE_MASK);
 	}
 }
 
@@ -674,6 +681,8 @@ static uint16_t impl_send_virt(
 		rb_erase(&lp->rb, &src->mem);
 		lp->l_addr = dest_addr;
 		put_lpage(dest, lp);
+		dest->min_fault = min_t(L4_Word_t, dest->min_fault, dest_addr & ~PAGE_MASK);
+		dest->brk = max_t(L4_Word_t, dest->brk, dest_addr | PAGE_MASK);
 		return 0;
 	} else if(L4_IsNilThread(dest_tid)) {
 		/* just toss the page. */
@@ -715,6 +724,34 @@ static unsigned short impl_breath_of_life(
 	L4_LoadMR(2, sp);
 	L4_MsgTag_t tag = L4_Send_Timeout(tid, L4_TimePeriod(2 * 1000));
 	return L4_IpcFailed(tag) ? L4_ErrorCode() : 0;
+}
+
+
+
+static int impl_get_shape(
+	L4_Word_t *low_p, L4_Word_t *high_p,
+	L4_Word_t task_raw)
+{
+	L4_ThreadId_t task = { .raw = task_raw };
+	struct systask *t = get_task(task);
+	if(t == NULL) return ENOENT;
+
+#define FP_EDGES(p) L4_Address((p)), L4_Address((p)) + L4_Size((p)) - 1
+	L4_Word_t edges[] = {
+		t->brk, t->min_fault,
+		FP_EDGES(t->utcb_area),
+		FP_EDGES(t->kip_area),
+	};
+#undef FP_EDGES
+
+	*low_p = ~PAGE_MASK;
+	*high_p = 0;
+	for(int i=0; i < ARRAY_SIZE(edges); i++) {
+		*low_p = min(*low_p, edges[i]);
+		*high_p = max(*high_p, edges[i]);
+	}
+
+	return 0;
 }
 
 
@@ -792,6 +829,7 @@ int main(void)
 		.send_virt = &impl_send_virt,
 		.brk = &impl_brk,
 		.breath_of_life = &impl_breath_of_life,
+		.get_shape = &impl_get_shape,
 	};
 
 	for(;;) {

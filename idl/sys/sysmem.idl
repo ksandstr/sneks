@@ -88,6 +88,12 @@ interface Sysmem: L4X2::FaultHandler
 	unsigned short breath_of_life(
 		in L4X2::ThreadId tid,
 		in L4X2::word ip, in L4X2::word sp);
+
+	/* get the inclusive extent of the systask indicated. */
+	void get_shape(
+		out L4X2::word low, out L4X2::word high,
+		in L4X2::ThreadId task)
+			raises(Posix::Errno);
 };
 
 
