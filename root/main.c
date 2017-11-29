@@ -116,6 +116,17 @@ int thrd_create(thrd_t *t, thrd_start_t fn, void *param_ptr)
 		return thrd_error;
 	}
 
+	/* tests that we're no longer paged by sigma0, which is always assigned a
+	 * lower tno than any thread in root.
+	 */
+	if(L4_ThreadNo(L4_Pager()) > L4_ThreadNo(L4_Myself())) {
+		int n = __sysmem_add_thread(L4_Pager(), L4_Myself().raw, tid.raw);
+		if(n != 0) {
+			printf("%s: Sysmem::add_thread() failed, n=%d\n", __func__, n);
+			abort();
+		}
+	}
+
 	L4_Start_SpIp(tid, stk_top, (L4_Word_t)&thread_wrapper);
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
 	L4_LoadMR(1, (L4_Word_t)fn);
