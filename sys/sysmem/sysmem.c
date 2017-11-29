@@ -334,8 +334,9 @@ static void recycle(struct alloc_head *head, void *ptr)
 }
 
 
-/* pagefault handling. this supports two interfaces; see threadctl() and
- * impl_handle_fault().
+/* pagefault handling. this supports two use cases; normal fault service via
+ * impl_handle_fault(), and in-band faults happening during interactions with
+ * systasks such as may arise in e.g. threadctl().
  */
 static bool handle_pf(
 	L4_MapItem_t *page_ptr,
@@ -426,11 +427,37 @@ fail:
 }
 
 
+/* see comment for handle_pf(). */
+static bool interim_fault(L4_MsgTag_t tag)
+{
+	if(L4_IpcFailed(tag) || tag.X.label >> 4 != 0xffe
+		|| tag.X.u != 2 || tag.X.t != 0)
+	{
+		return false;
+	}
+
+	L4_MapItem_t map;
+	L4_Word_t faddr, fip;
+	L4_StoreMR(1, &faddr); L4_StoreMR(2, &fip);
+	L4_Acceptor_t acc = L4_Accepted();
+	printf("sysmem: interim fault addr=%#lx, ip=%#lx\n", faddr, fip);
+	if(!handle_pf(&map, L4_Pager(), faddr, fip)) {
+		printf("%s: pager segfault!\n", __func__);
+		abort();
+	}
+	L4_Accept(acc);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+	L4_LoadMRs(1, 2, map.raw);
+	return true;
+}
+
+
 static int threadctl(
 	L4_ThreadId_t dest,
 	L4_ThreadId_t spacespec, L4_ThreadId_t sched, L4_ThreadId_t pager,
 	void *utcb)
 {
+	L4_ThreadId_t peer = L4_Pager();
 	L4_Accept(L4_UntypedWordsAcceptor);
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xb1c4, .X.u = 5 }.raw);
 	L4_LoadMR(1, dest.raw);
@@ -438,26 +465,8 @@ static int threadctl(
 	L4_LoadMR(3, sched.raw);
 	L4_LoadMR(4, pager.raw);
 	L4_LoadMR(5, (L4_Word_t)utcb);
-	L4_MsgTag_t tag = L4_Call(L4_Pager());
-	/* we just called a process that's paged by this same thread, so we must
-	 * handle pagefaults that occur during the proxy threadctl op.
-	 */
-	while(L4_IpcSucceeded(tag) && tag.X.label >> 4 == 0xffe
-		&& tag.X.u == 2 && tag.X.t == 0)
-	{
-		L4_MapItem_t map;
-		L4_Word_t faddr, fip;
-		L4_StoreMR(1, &faddr); L4_StoreMR(2, &fip);
-		printf("%s: interim fault addr=%#lx, ip=%#lx\n",
-			__func__, faddr, fip);
-		if(!handle_pf(&map, L4_Pager(), faddr, fip)) {
-			printf("%s: pager segfault!\n", __func__);
-			abort();
-		}
-		L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
-		L4_LoadMRs(1, 2, map.raw);
-		tag = L4_Call(L4_Pager());
-	}
+	L4_MsgTag_t tag = L4_Call(peer);
+	while(interim_fault(tag)) tag = L4_Call(peer);
 	int n;
 	if(L4_IpcFailed(tag)) {
 		printf("%s: IPC failed, ec=%#lx\n", __func__, L4_ErrorCode());
@@ -576,9 +585,13 @@ static void impl_send_phys(
 	L4_Word_t phys_addr = frame_num << PAGE_BITS;
 	pg->address = phys_addr;
 
+	L4_ThreadId_t sender = muidl_get_sender();
 	L4_Accept(L4_MapGrantItems(L4_FpageLog2(phys_addr, size_log2)));
-	L4_MsgTag_t tag = L4_Receive_Timeout(muidl_get_sender(),
-		L4_TimePeriod(5 * 1000));
+	L4_MsgTag_t tag = L4_Receive_Timeout(sender, L4_TimePeriod(5 * 1000));
+	while(interim_fault(tag)) {
+		/* NOTE: this refreshes the timeout. */
+		tag = L4_Call_Timeouts(sender, L4_ZeroTime, L4_TimePeriod(5 * 1000));
+	}
 	L4_Accept(L4_UntypedWordsAcceptor);
 	if(L4_IpcFailed(tag)) {
 		printf("failed send_phys second transaction, ec=%lu\n",
@@ -589,7 +602,7 @@ abnormal:
 	} else if(L4_Label(tag) != 0 || L4_UntypedWords(tag) != 0
 		|| L4_TypedWords(tag) != 2)
 	{
-		printf("out-of-band message in send_phys!\n");
+		printf("out-of-band message in send_phys; tag=%#lx!\n", tag.raw);
 		goto abnormal;
 	}
 
