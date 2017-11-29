@@ -21,6 +21,7 @@
 
 
 static tss_t errno_key;
+static uintptr_t current_brk = 0, heap_bottom = 0;
 
 
 void __return_from_main(int main_rc)
@@ -127,9 +128,23 @@ void con_putstr(const char *string)
 }
 
 
+/* mainly for runtime initialization in `vm'. */
+int brk(void *ptr)
+{
+	uintptr_t addr = ((uintptr_t)ptr + PAGE_MASK) & ~PAGE_MASK;
+	if(heap_bottom == 0) heap_bottom = addr;
+	current_brk = addr;
+	int n = __sysmem_brk(L4_Pager(), current_brk);
+	if(n != 0) {
+		errno = n < 0 ? -n : ENOSYS;	/* NOTE: questionable. */
+		n = -1;
+	}
+	return n;
+}
+
+
 void *sbrk(intptr_t increment)
 {
-	static uintptr_t current_brk = 0, heap_bottom = 0;
 	if(current_brk == 0) {
 		extern char _end;
 		current_brk = ((L4_Word_t)&_end + PAGE_MASK) & ~PAGE_MASK;
