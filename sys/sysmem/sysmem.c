@@ -14,6 +14,7 @@
 
 #include <sneks/rbtree.h>
 #include <sneks/mm.h>
+#include <sneks/bitops.h>
 
 #include <l4/types.h>
 #include <l4/kip.h>
@@ -92,15 +93,6 @@ struct alloc_head
 struct alloc_page {
 	void *next;		/* next == NULL means no more fresh allocs */
 };
-
-
-/* TODO: move these into an integer utility header */
-#define MSB(x) (sizeof((x)) * 8 - __builtin_clzl((x)) - 1)
-
-static inline int size_to_shift(size_t sz) {
-	int msb = MSB(sz);
-	return (1 << msb) < sz ? msb + 1 : msb;
-}
 
 
 /* note that this leaves .pages NULL, requiring initialization in alloc(). */

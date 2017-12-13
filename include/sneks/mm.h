@@ -11,9 +11,6 @@
 #define PAGE_SIZE (PAGE_MASK + 1)
 
 
-/* TODO: move into a <sneks/bitops.h> or some such */
-#define MSB(x) (sizeof((x)) * 8 - __builtin_clzl((x)) - 1)
-
 /* usage:
  *
  * int size_log2;

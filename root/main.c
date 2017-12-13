@@ -26,6 +26,7 @@
 
 #include <sneks/mm.h>
 #include <sneks/hash.h>
+#include <sneks/bitops.h>
 
 #include "elf.h"
 #include "muidl.h"

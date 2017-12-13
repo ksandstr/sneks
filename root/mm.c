@@ -17,6 +17,7 @@
 #include <l4/kip.h>
 
 #include <sneks/mm.h>
+#include <sneks/bitops.h>
 
 #include "sysmem-defs.h"
 #include "defs.h"

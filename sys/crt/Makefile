@@ -8,6 +8,7 @@ IDL_OBJS:=$(patsubst %.idl,%-common.o,$(IDL_FILES)) \
 
 LIB_SRC:=$(wildcard *.c)
 LIB_OBJS:=crt0.o $(IDL_OBJS) $(LIB_SRC:.c=.o) \
+	mung-rangealloc.o mung-slab.o \
 	ccan-htable.o
 
 
@@ -33,6 +34,15 @@ libsneks-systask.a: $(LIB_OBJS)
 
 crt1.o: crt1.c sysmem-defs.h kmsg-defs.h info-defs.h
 threads.o: threads.c sysmem-defs.h
+
+
+# build things from mung as guests. this is here rather than config.mk because
+# imports of these things should happen into sys/crt and nowhere else; so
+# having the rule at toplevel is wrong.
+mung-%.o ::
+	@echo "  CC $@ <mung>"
+	@$(CC) -c -o $@ $(wildcard $(MUNG_DIR)/$*.c) $(wildcard $(MUNG_DIR)/lib/$*.c) \
+		$(CFLAGS) -nostartfiles -nodefaultlibs
 
 
 # muidl outputs.
