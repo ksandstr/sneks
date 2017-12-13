@@ -2,6 +2,7 @@
 CCAN_DIR=~/src/ccan
 MUNG_DIR=$(CFGDIR)/../mung
 MUIDL_DIR=$(CFGDIR)/../muidl
+LFHT_DIR=$(CFGDIR)/../lfht
 
 LD=ld.gold
 
@@ -10,7 +11,7 @@ CFLAGS=-O2 -Wall -march=native -std=gnu99 \
 	-m32 -mno-avx -mno-sse2 \
 	-I $(CFGDIR)/include -I $(MUNG_DIR)/include \
 	-I $(MUNG_DIR)/include/fake_clib \
-	-I . -I $(MUIDL_DIR)/include -I $(CCAN_DIR) \
+	-I . -I $(MUIDL_DIR)/include -I $(LFHT_DIR) -I $(CCAN_DIR) \
 	-D_GNU_SOURCE \
 	-fno-pic -fuse-ld=gold -fno-builtin -nostdlib \
 	-Wno-frame-address \
