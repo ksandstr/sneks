@@ -331,7 +331,7 @@ get_ram:
 	}
 	void *ptr = p->next;
 	p->next += (head->sz + head->align - 1) & ~(head->align - 1);
-	if(p->next >= (void *)phys->address + PAGE_SIZE) p->next = NULL;
+	if(p->next >= (void *)phys->address + PAGE_SIZE) goto get_ram;
 
 	return ptr;
 }
