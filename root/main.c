@@ -39,7 +39,7 @@
 
 
 #define THREAD_STACK_SIZE 4096
-#define SYSMEM_SEED_MEGS 2
+#define SYSMEM_SEED_MEGS 24
 
 
 struct sysmem_page {
@@ -544,7 +544,7 @@ static void move_to_sysmem(L4_ThreadId_t sysmem_tid, L4_ThreadId_t sm_pager)
 		{
 			send_phys_to_sysmem(sysmem_tid, false, addr);
 		}
-		remain -= L4_Size(fp);
+		if(L4_Size(fp) > remain) remain = 0; else remain -= L4_Size(fp);
 	}
 }
 

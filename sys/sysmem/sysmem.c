@@ -11,11 +11,13 @@
 #include <ccan/likely/likely.h>
 #include <ccan/minmax/minmax.h>
 #include <ccan/array_size/array_size.h>
+#include <ccan/container_of/container_of.h>
 
 #include <sneks/rbtree.h>
 #include <sneks/mm.h>
 #include <sneks/bitops.h>
 #include <sneks/rootserv.h>
+#include <sneks/lz4.h>
 
 #include <l4/types.h>
 #include <l4/kip.h>
@@ -31,6 +33,15 @@
 
 
 #define NUM_INIT_PAGES 12	/* traditionally enough. */
+#define C_MAGIC 0x740b1d8a
+
+#define LF_SWAP 1	/* p_addr{12..31} designates a c_page. */
+
+/* can't usefully store compressed pages larger than a size that'd leave less
+ * space over than what the minimum compressed result would use.
+ */
+#define MAX_COMPRESSED_SIZE (PAGE_SIZE - sizeof(struct c_hdr) - 26)
+
 
 
 struct l_page;
@@ -44,6 +55,7 @@ struct p_page
 	struct list_node link;
 	L4_Word_t address;
 	struct l_page *owner;	/* single owner iff mapped, otherwise NULL */
+	int age;
 };
 
 
@@ -55,10 +67,23 @@ struct l_page
 {
 	struct rb_node rb;	/* in systask.mem */
 	L4_Word_t l_addr;	/* address in task */
-	/* bits 12..31 indicate syspager address of the physical page when nonzero.
-	 * bits 0..11 are a mask of LF_*, flags of the logical memory.
+	/* bits 0..11 are a mask of LF_*, flags of the logical memory.
+	 * bits 12..31 indicate syspager address of the physical page. depending
+	 * on flags this may be storage for the compressed contents of the virtual
+	 * memory page.
 	 */
 	L4_Word_t p_addr;
+};
+
+
+/* storage header for pages containing compressed memory. */
+struct c_hdr
+{
+	uint32_t magic;	/* C_MAGIC */
+	struct p_page *phys;
+	struct list_node buddy_link;
+	uint16_t a_len, b_len;	/* compressed content length */
+	struct l_page *a, *b;
 };
 
 
@@ -108,6 +133,9 @@ L4_KernelInterfacePage_t *the_kip;
 static struct list_head free_page_list = LIST_HEAD_INIT(free_page_list),
 	active_page_list = LIST_HEAD_INIT(active_page_list),
 	reserved_page_list = LIST_HEAD_INIT(reserved_page_list);
+static unsigned num_free_pages = 0;
+
+static bool repl_enable = false;
 
 static struct alloc_head systask_alloc_head = ALLOC_HEAD(struct systask),
 	st_thr_alloc_head = ALLOC_HEAD(struct st_thr),
@@ -124,6 +152,9 @@ static uint8_t first_mem[PAGE_SIZE * NUM_INIT_PAGES]
  */
 static struct sneks_kmsg_info kmsg_info;
 static struct sneks_abend_info abend_info = { .service = 0 };
+
+
+static struct p_page *get_free_page(void);
 
 
 /* runtime basics. */
@@ -266,6 +297,19 @@ static struct l_page *get_lpage(struct systask *task, L4_Word_t addr)
 }
 
 
+/* hideously inefficient, but there's no real data structure for tracking
+ * these things for now.
+ */
+static struct p_page *get_active_page(L4_Word_t addr)
+{
+	struct p_page *p;
+	list_for_each(&active_page_list, p, link) {
+		if(p->address == addr) return p;
+	}
+	return NULL;
+}
+
+
 /* malloc and free using a tiny static pool of memory.
  *
  * TODO: this is super braindead. replace with the worst babbymode allocator
@@ -289,6 +333,13 @@ void *malloc(size_t sz)
 }
 
 
+void *calloc(size_t nmemb, size_t size) {
+	void *ptr = malloc(nmemb * size);
+	if(ptr != NULL) memset(ptr, 0, nmemb * size);
+	return ptr;
+}
+
+
 void free(void *ptr) {
 	printf("sysmem: tried to free(ptr=%p); does nothing\n", ptr);
 }
@@ -297,7 +348,7 @@ void free(void *ptr) {
 /* sub-page memory allocation and recycling. */
 
 #define alloc_struct(name) (struct name *)alloc(&name ## _alloc_head)
-#define recycle_struct(typ, ptr) recycle(&name ## _alloc_head, (ptr))
+#define recycle_struct(typ, ptr) recycle(&typ ## _alloc_head, (ptr))
 
 static void *alloc(struct alloc_head *head)
 {
@@ -320,10 +371,8 @@ static void *alloc(struct alloc_head *head)
 	struct alloc_page *p = (struct alloc_page *)phys->address;
 	if(p->next == NULL) {
 get_ram:
-		/* get more ram. FIXME: use sophisticated methods. */
-		phys = list_pop(&free_page_list, struct p_page, link);
-		if(phys == NULL) panic("can't get more ram!");
-		assert(phys->owner == NULL);
+		/* get more ram. */
+		phys = get_free_page();
 		list_add(&head->pages, &phys->link);
 		p = (struct alloc_page *)phys->address;
 		p->next = (void *)phys->address
@@ -343,6 +392,203 @@ static void recycle(struct alloc_head *head, void *ptr)
 	memset(ptr + sizeof(void *), 0xde, head->sz - sizeof(void *));
 	*(void **)ptr = head->trash;
 	head->trash = ptr;
+}
+
+
+/* page replacement using a basic clock algorithm and Linux-style aging,
+ * backed by memory compression using LZ4.
+ */
+
+static char lz4_state[LZ4_STREAMSIZE] __attribute__((aligned(8))); /* hueg */
+static struct list_head buddy_list = LIST_HEAD_INIT(buddy_list);
+
+static bool replace_active_page(struct p_page *p)
+{
+	L4_Fpage_t fp = L4_FpageLog2(p->address, PAGE_BITS);
+	L4_Set_Rights(&fp, L4_FullyAccessible);
+	L4_UnmapFpage(fp);
+
+	assert(p->owner != NULL);
+	char outbuf[LZ4_COMPRESSBOUND(PAGE_SIZE)];
+	int n = LZ4_compress_fast_extState(lz4_state, (void *)p->address,
+		outbuf, PAGE_SIZE, sizeof outbuf, 1);
+	if(n == 0 || n >= MAX_COMPRESSED_SIZE) {
+		printf("sysmem: page %#lx wouldn't compress (n=%d)\n",
+			p->address, n);
+		return false;
+	}
+	int c_size = n;
+	// printf("sysmem: page %#lx compressed to %d bytes\n", p->address, c_size);
+
+	/* find the closest matching buddy, i.e. one that causes the least waste
+	 * compared to storing the replaced page in itself.
+	 * TODO: optimize this to not be a silly brute force loop.
+	 */
+	struct c_hdr *best = NULL, *cand;
+	int waste = PAGE_SIZE - sizeof(struct c_hdr) - c_size;
+	list_for_each(&buddy_list, cand, buddy_link) {
+		assert(cand->magic == C_MAGIC);
+		int left = PAGE_SIZE - sizeof(struct c_hdr)
+			- (cand->a != NULL ? cand->a_len : cand->b_len);
+		if(left < c_size) continue;
+		if(left - c_size < waste) {
+			waste = left - c_size;
+			best = cand;
+		}
+	}
+
+	list_del_from(&active_page_list, &p->link);
+	if(best == NULL) {
+		// printf("sysmem: turning it into storage w/ %d bytes left\n", waste);
+		best = (void *)p->address;
+		*best = (struct c_hdr){
+			.magic = C_MAGIC, .phys = p,
+			.a_len = c_size, .a = p->owner,
+		};
+		memcpy(&best[1], outbuf, c_size);
+		list_add(&buddy_list, &best->buddy_link);
+		p->owner->p_addr |= LF_SWAP;
+		p->owner = NULL;
+	} else {
+		// printf("sysmem: storing into existing buddy, wasting %d bytes\n", waste);
+		list_del_from(&buddy_list, &best->buddy_link);
+		void *addr;
+		if(best->a == NULL) {
+			addr = &best[1];
+			best->a = p->owner;
+			best->a_len = c_size;
+		} else {
+			addr = (void *)best + PAGE_SIZE - c_size;
+			assert(addr >= (void *)&best[1]);
+			best->b = p->owner;
+			best->b_len = c_size;
+		}
+		memcpy(addr, outbuf, c_size);
+
+		p->owner->p_addr = ((L4_Word_t)best & ~PAGE_MASK) | LF_SWAP;
+		p->owner = NULL;
+		list_add(&free_page_list, &p->link);
+		num_free_pages++;
+	}
+
+	return true;
+}
+
+
+/* TODO: add proper termination so that a proper and honest OOM doesn't
+ * turn into a perpetual spin.
+ */
+static int replace_pages(void)
+{
+	static struct p_page *hand = NULL;
+	if(hand == NULL || hand->owner == NULL) {
+		hand = list_top(&active_page_list, struct p_page, link);
+	}
+
+	/* examine one Unmap syscall's worth of pages per call. */
+	L4_Fpage_t unmaps[64];
+	struct p_page *ps[ARRAY_SIZE(unmaps)];
+	int n_seen = 0;
+	struct p_page *start = hand;
+	do {
+		if(hand == NULL && list_empty(&active_page_list)) {
+			panic("active_page_list was drained. woe is me");
+		}
+		assert(hand != NULL);
+		assert(hand->owner != NULL);
+		ps[n_seen] = hand;
+		unmaps[n_seen] = L4_FpageLog2(hand->address, PAGE_BITS);
+		L4_Set_Rights(&unmaps[n_seen], 0);
+		hand = list_next(&active_page_list, hand, link);
+		if(hand == NULL) {
+			hand = list_top(&active_page_list, struct p_page, link);
+		}
+	} while(++n_seen < ARRAY_SIZE(unmaps) && start != hand);
+
+	L4_UnmapFpages(ARRAY_SIZE(unmaps), unmaps);
+	int n_freed = 0;
+	for(int i=0; i < n_seen; i++) {
+		if(L4_Rights(unmaps[i]) != 0) ps[i]->age++;
+		else if(ps[i]->age > 0) ps[i]->age >>= 1;
+		else {
+			/* actual replacement. */
+			struct p_page *next = list_next(&active_page_list, ps[i], link);
+			if(replace_active_page(ps[i])) {
+				if(ps[i] == hand) {
+					hand = next != NULL ? next
+						: list_top(&active_page_list, struct p_page, link);
+				}
+				n_freed++;
+			}
+		}
+	}
+
+	return n_freed;
+}
+
+
+static struct p_page *get_free_page(void)
+{
+	struct p_page *p = list_pop(&free_page_list, struct p_page, link);
+	if(p == NULL) panic("out of memory in get_free_page()!");
+	num_free_pages--;
+	p->age = 1;
+
+	/* static low and high watermarks. */
+	if(repl_enable && num_free_pages < 16) {
+		while(num_free_pages < 48) {
+#if 0
+			printf("sysmem: running replacement (nfp=%u)\n",
+				(unsigned)num_free_pages);
+#endif
+			int n_freed = replace_pages();
+			if(n_freed > 0) printf("sysmem: replaced %d pages\n", n_freed);
+		}
+	}
+
+	return p;
+}
+
+
+static struct p_page *decompress(struct l_page *lp)
+{
+	struct c_hdr *ch = (struct c_hdr *)(lp->p_addr & ~PAGE_MASK);
+	assert(ch->magic == C_MAGIC);
+	void *data;
+	int len;
+	bool done;
+	if(ch->a == lp) {
+		data = &ch[1];
+		len = ch->a_len;
+		ch->a = NULL;
+		done = ch->b == NULL;
+	} else {
+		assert(ch->b == lp);
+		data = (void *)ch + PAGE_SIZE - ch->b_len;
+		len = ch->b_len;
+		ch->b = NULL;
+		done = ch->a == NULL;
+	}
+	struct p_page *phys;
+	int n;
+	if(!done) {
+		phys = get_free_page();
+		list_add(&buddy_list, &ch->buddy_link);
+		n = LZ4_decompress_safe(data, (void *)phys->address, len, PAGE_SIZE);
+	} else {
+		/* expand into the same page via a buffer. */
+		list_del_from(&buddy_list, &ch->buddy_link);
+		phys = ch->phys;
+		char buf[len];
+		memcpy(buf, data, len);
+		n = LZ4_decompress_safe(buf, (void *)phys->address, len, PAGE_SIZE);
+	}
+	if(n != PAGE_SIZE) {
+		printf("%s: n=%d\n", __func__, n);
+		panic("invalid decompressed length!");
+	}
+
+	return phys;
 }
 
 
@@ -379,12 +625,16 @@ static bool handle_pf(
 			L4_ThreadNo(tid), L4_Version(tid), faddr, fip);
 	} else if(lp == NULL) {
 		lp = alloc_struct(l_page);
-		struct p_page *phys = list_pop(&free_page_list, struct p_page, link);
-		if(phys == NULL) panic("can't get more ram!");
+		struct p_page *phys = get_free_page();
 		lp->p_addr = phys->address;
 		lp->l_addr = faddr & ~PAGE_MASK;
 		phys->owner = lp;
 		put_lpage(task, lp);
+		list_add_tail(&active_page_list, &phys->link);
+	} else if(lp->p_addr & LF_SWAP) {
+		struct p_page *phys = decompress(lp);
+		lp->p_addr = phys->address;
+		phys->owner = lp;
 		list_add_tail(&active_page_list, &phys->link);
 	}
 
@@ -627,7 +877,8 @@ abnormal:
 		struct list_head *list;
 		/* recognize sysmem's own pages, add them to the reserved list. */
 		extern char _start, _end;
-		if(phys_addr >= (L4_Word_t)&_start && phys_addr < (L4_Word_t)&_end) {
+		L4_Word_t top = ((L4_Word_t)&_end + PAGE_MASK) & ~PAGE_MASK;
+		if(phys_addr >= (L4_Word_t)&_start && phys_addr < top) {
 			/* exclude early memory from add_first_mem(), since it's already
 			 * tracked.
 			 */
@@ -643,7 +894,14 @@ abnormal:
 			list = &free_page_list;
 		}
 
-		if(list != NULL) list_add_tail(list, &pg->link);
+		if(list != NULL) {
+			list_add_tail(list, &pg->link);
+			if(list == &free_page_list
+				&& ++num_free_pages > 60 && !repl_enable)
+			{
+				repl_enable = true;
+			}
+		}
 	} else {
 		/* RAM for things loaded as boot modules. */
 		struct l_page *lp = alloc_struct(l_page);
@@ -651,6 +909,7 @@ abnormal:
 		lp->p_addr = phys_addr;
 		put_lpage(task, lp);
 		pg->owner = lp;
+		pg->age = 1;
 		list_add_tail(&active_page_list, &pg->link);
 		task->min_fault = min_t(L4_Word_t, task->min_fault, phys_addr & ~PAGE_MASK);
 		task->brk = max_t(L4_Word_t, task->brk, phys_addr | PAGE_MASK);
@@ -707,6 +966,49 @@ static uint16_t impl_send_virt(
 }
 
 
+/* TODO: could do unmaps in groups for overhead minimization: add a pointer to
+ * 63 L4_Fpage_t and another to a fill counter.
+ */
+static void remove_l_page(struct systask *task, struct l_page *lp)
+{
+	if(lp->p_addr & LF_SWAP) {
+		struct c_hdr *ch = (struct c_hdr *)(lp->p_addr & ~PAGE_MASK);
+		assert(ch->magic == C_MAGIC);
+		bool done;
+		if(ch->a == lp) {
+			done = ch->b == NULL;
+			ch->a = NULL;
+		} else {
+			assert(ch->b == lp);
+			done = ch->a == NULL;
+			ch->b = NULL;
+		}
+		if(done) {
+			/* implies membership in buddy list */
+			list_del_from(&buddy_list, &ch->buddy_link);
+			assert(ch->phys->owner == NULL);
+			list_add(&free_page_list, &ch->phys->link);
+			num_free_pages++;
+		} else {
+			/* otherwise, it should go in there. */
+			list_add(&buddy_list, &ch->buddy_link);
+		}
+	} else {
+		unmap_page(lp->p_addr & ~PAGE_MASK);
+		struct p_page *phys = get_active_page(lp->p_addr & ~PAGE_MASK);
+		assert(phys != NULL);
+		assert(phys->owner == lp);
+		list_del_from(&active_page_list, &phys->link);
+		phys->owner = NULL;
+		list_add(&free_page_list, &phys->link);
+		num_free_pages++;
+	}
+
+	rb_erase(&lp->rb, &task->mem);
+	recycle_struct(l_page, lp);
+}
+
+
 static void impl_brk(L4_Word_t new_brk)
 {
 	L4_ThreadId_t sender = muidl_get_sender();
@@ -716,10 +1018,26 @@ static void impl_brk(L4_Word_t new_brk)
 		return;
 	}
 
-	/* TODO: handle new_brk < task->brk by marking logical pages
-	 * instareplaceable, or throwing their compressed contents away where
-	 * relevant.
-	 */
+	if(new_brk < task->brk) {
+		/* release pages in range. */
+		uintptr_t low = (new_brk + PAGE_MASK) & ~PAGE_MASK,
+			high = task->brk | PAGE_MASK;
+		/* FIXME: find the low point with an actual tree lookup. */
+		struct l_page *cur = NULL;
+		for(uintptr_t addr = low; addr < high && cur == NULL; addr += PAGE_SIZE) {
+			cur = get_lpage(task, addr);
+		}
+		int n_dropped = 0;
+		while(cur != NULL && cur->l_addr < high) {
+			struct rb_node *next = rb_next(&cur->rb);
+			remove_l_page(task, cur);
+			cur = container_of_or_null(next, struct l_page, rb);
+			n_dropped++;
+		}
+		printf("negative brk %#08lx -> %#08lx released %d pages\n",
+			(L4_Word_t)task->brk, new_brk, n_dropped);
+	}
+
 	task->brk = new_brk;
 	printf("brk for %lu:%lu set to %#lx\n",
 		L4_ThreadNo(sender), L4_Version(sender), new_brk);
@@ -791,6 +1109,7 @@ static void add_first_mem(void)
 		phys->address = (L4_Word_t)&first_mem[i * PAGE_SIZE];
 		phys->owner = NULL;
 		list_add_tail(&free_page_list, &phys->link);
+		num_free_pages++;
 	}
 }
 
