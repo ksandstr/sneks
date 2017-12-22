@@ -8,7 +8,8 @@ LDFLAGS=-e_start -N -nostdlib -L $(MUNG_DIR)/user/lib/l4 -L $(CFGDIR)/lib
 CFLAGS:=$(CFLAGS) -D__KERNEL__ -mstackrealign
 
 OUTPUTS=sysmem
-IDL_OBJS=sysmem-impl-common.o sysmem-impl-service.o
+IDL_OBJS=sysmem-impl-common.o sysmem-impl-service.o \
+	abend-client.o
 
 
 all: $(OUTPUTS)
@@ -30,7 +31,7 @@ sysmem: sysmem.ld crt0.o sysmem.o $(IDL_OBJS) ccan-list.o
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
-sysmem.o: sysmem.c sysmem-impl-defs.h info-defs.h
+sysmem.o: sysmem.c sysmem-impl-defs.h info-defs.h abend-defs.h
 
 
 # muidl outputs.
@@ -56,6 +57,10 @@ sysmem.o: sysmem.c sysmem-impl-defs.h info-defs.h
 %-defs.h: $(CFGDIR)/idl/sys/%.idl
 	@echo "  IDL $< <defs>"
 	@$(MUIDL) $(MUIDLFLAGS) --defs $<
+
+%-client.s: $(CFGDIR)/idl/sys/%.idl
+	@echo "  IDL $< <client>"
+	@$(MUIDL) $(MUIDLFLAGS) --client $<
 
 
 include $(wildcard .deps/*.d)

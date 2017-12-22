@@ -935,6 +935,7 @@ int main(void)
 		abort();
 	}
 	put_sysinfo("kmsg:tid", 1, thrd_tidof_NP(kmsg).raw);
+	put_sysinfo("rootserv:tid", 1, L4_Myself().raw);
 
 	/* run systest if present. */
 	L4_ThreadId_t systest_tid = spawn_systask(s0, "systest", NULL);
@@ -952,7 +953,6 @@ int main(void)
 	}
 
 	printf("*** root entering service mode\n");
-
 	static const struct root_serv_vtable vtab = {
 		.panic = &rs_panic,
 		.long_panic = &rs_long_panic,

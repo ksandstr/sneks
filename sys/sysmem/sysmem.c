@@ -15,6 +15,7 @@
 #include <sneks/rbtree.h>
 #include <sneks/mm.h>
 #include <sneks/bitops.h>
+#include <sneks/rootserv.h>
 
 #include <l4/types.h>
 #include <l4/kip.h>
@@ -25,6 +26,7 @@
 
 #include "muidl.h"
 #include "info-defs.h"
+#include "abend-defs.h"
 #include "sysmem-impl-defs.h"
 
 
@@ -121,15 +123,31 @@ static uint8_t first_mem[PAGE_SIZE * NUM_INIT_PAGES]
  * this one even biggar.
  */
 static struct sneks_kmsg_info kmsg_info;
+static struct sneks_abend_info abend_info = { .service = 0 };
 
 
 /* runtime basics. */
 
-NORETURN void panic(const char *msg)
+NORETURN void abend(long class, const char *fmt, ...)
 {
-	/* TODO: trigger system panic */
-	printf("sysmem: PANIC (%s)\n", msg);
-	for(;;) { L4_Sleep(L4_Never); }
+	va_list al;
+	va_start(al, fmt);
+	char fail[300];
+	vsnprintf(fail, sizeof fail, fmt, al);
+	if(abend_info.service != 0) {
+		L4_ThreadId_t serv = { .raw = abend_info.service };
+		int n = __abend_long_panic(serv, PANIC_EXIT, fail);
+		printf("sysmem: Abend::long_panic() returned n=%d\n", n);
+	} else {
+		printf("[Sneks::Abend not available! fail=`%s']\n", fail);
+	}
+
+	for(;;) L4_Sleep(L4_Never);
+}
+
+
+NORETURN void panic(const char *msg) {
+	abend(0, "sysmem: PANIC (%s)", msg);
 }
 
 
@@ -356,9 +374,9 @@ static bool handle_pf(
 
 	struct l_page *lp = get_lpage(task, faddr & ~PAGE_MASK);
 	if(lp == NULL && (faddr & ~PAGE_MASK) > task->brk) {
-		printf("system task %lu:%lu segfaulted at faddr=%#lx, fip=%#lx\n",
+		abend(PANIC_EXIT | PANICF_SEGV,
+			"systask=%lu:%lu segv; faddr=%#lx fip=%#lx\n",
 			L4_ThreadNo(tid), L4_Version(tid), faddr, fip);
-		return false;
 	} else if(lp == NULL) {
 		lp = alloc_struct(l_page);
 		struct p_page *phys = list_pop(&free_page_list, struct p_page, link);
@@ -548,7 +566,8 @@ static int impl_rm_thread(L4_Word_t raw_space, L4_Word_t gone_thread)
 
 	if(list_empty(&task->threads)) {
 		/* FIXME */
-		printf("%s: would dispose of task=%p (last thread=%lu:%lu gone)\n",
+		abend(PANIC_EXIT,
+			"sysmem: %s: would dispose of task=%p (last thread=%lu:%lu gone)",
 			__func__, task, L4_ThreadNo(tid), L4_Version(tid));
 	}
 
@@ -759,6 +778,12 @@ static int impl_kmsg_block(struct sneks_kmsg_info *kmsg) {
 }
 
 
+static int impl_abend_block(struct sneks_abend_info *it) {
+	*it = abend_info;
+	return 0;
+}
+
+
 static void add_first_mem(void)
 {
 	for(int i=0; i < NUM_INIT_PAGES; i++) {
@@ -794,6 +819,9 @@ static void sysinfo_init_msg(L4_MsgTag_t tag, const L4_Word_t mrs[static 64])
 	if(streq(name, "kmsg:tid")) {
 		kmsg_info.service = mrs[pos++];
 		assert(L4_IsGlobalId((L4_ThreadId_t){ .raw = kmsg_info.service }));
+	} else if(streq(name, "rootserv:tid")) {
+		abend_info.service = mrs[pos++];
+		assert(L4_IsGlobalId((L4_ThreadId_t){ .raw = abend_info.service }));
 	} else {
 		printf("%s: name=`%s' unrecognized\n", __func__, name);
 	}
@@ -812,6 +840,7 @@ int main(void)
 		/* SysInfo stuff */
 		.lookup = &impl_lookup,
 		.kmsg_block = &impl_kmsg_block,
+		.abend_block = &impl_abend_block,
 
 		/* Sysmem proper */
 		.new_task = &impl_new_task,

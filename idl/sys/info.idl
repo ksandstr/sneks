@@ -31,10 +31,16 @@ struct kmsg_info {
 };
 
 
+struct abend_info {
+	L4X2::ThreadId service;
+};
+
+
 [StubPrefix(__info), IfaceLabel(0xe003)]
 interface Info: InfoMeta
 {
 	void kmsg_block(out kmsg_info block) raises(Posix::Errno);
+	void abend_block(out abend_info block) raises(Posix::Errno);
 };
 
 };
