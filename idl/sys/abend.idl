@@ -1,0 +1,30 @@
+
+#ifndef __SYS_ABEND_IDL__
+#define __SYS_ABEND_IDL__
+
+#include <l4x2.idl>
+#include <posixlike.idl>
+#include <sys/kmsg.idl>
+
+
+module Sneks {
+
+/* abnormal termination of system space, reboots, shutdowns, suspend,
+ * hibernate, and so forth.
+ */
+[StubPrefix(__abend), IfaceLabel(0xefff)]	/* effin' */
+interface Abend
+{
+	typedef Kmsg::line line;
+
+	void panic(in line str);
+
+	/* see <sneks/rootserv.h> for PANIC_*, PANICF_* */
+	void long_panic(in long class, in line message);
+
+	/* good night! */
+};
+
+};
+
+#endif

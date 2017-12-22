@@ -1,0 +1,11 @@
+
+/* implementation spec for root's service mode. not for consumption outside
+ * root/.
+ */
+
+#include <sys/abend.idl>
+
+
+interface RootServ: Sneks::Abend
+{
+};

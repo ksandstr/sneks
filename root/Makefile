@@ -23,6 +23,7 @@ distclean:
 
 root: root.ld crt0.o main.o runtime.o mm.o ser_io.o \
 		sysmem-common.o sysmem-client.o kmsg-common.o kmsg-service.o \
+		rootserv-service.o \
 		ccan-htable.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T root.ld \
@@ -30,7 +31,7 @@ root: root.ld crt0.o main.o runtime.o mm.o ser_io.o \
 		-lsneks -ll4 -L /usr/lib32 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
-main.o: main.c sysmem-defs.h kmsg-defs.h
+main.o: main.c sysmem-defs.h kmsg-defs.h rootserv-defs.h
 
 
 # muidl outputs.
@@ -50,6 +51,15 @@ main.o: main.c sysmem-defs.h kmsg-defs.h
 	@$(MUIDL) $(MUIDLFLAGS) --common $<
 
 %-defs.h: $(CFGDIR)/idl/sys/%.idl
+	@echo "  IDL $< <defs>"
+	@$(MUIDL) $(MUIDLFLAGS) --defs $<
+
+# for rootserv-impl.idl
+%-service.s: %.idl
+	@echo "  IDL $< <service>"
+	@$(MUIDL) $(MUIDLFLAGS) --service $<
+
+%-defs.h: %.idl
 	@echo "  IDL $< <defs>"
 	@$(MUIDL) $(MUIDLFLAGS) --defs $<
 

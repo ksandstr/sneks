@@ -1,5 +1,6 @@
 
 #define SNEKS_KMSG_IMPL_SOURCE
+#define ROOTSERV_IMPL_SOURCE
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,11 +28,13 @@
 #include <sneks/mm.h>
 #include <sneks/hash.h>
 #include <sneks/bitops.h>
+#include <sneks/rootserv.h>
 
 #include "elf.h"
 #include "muidl.h"
 #include "sysmem-defs.h"
 #include "kmsg-defs.h"
+#include "rootserv-defs.h"
 #include "defs.h"
 
 
@@ -816,6 +819,96 @@ static void put_sysinfo(const char *name, int nvals, ...)
 }
 
 
+static void halt_all_threads(void)
+{
+	/* TODO: halt the process service thread to lock its data, then crawl over
+	 * said data to delete all existing threads w/ ThreadControl.
+	 */
+}
+
+
+static void guru_meditation(const char *str)
+{
+	int max_line = 0, line = 0;
+	for(int i=0; str[i] != '\0'; i++) {
+		if(str[i] != '\n') line++;
+		else {
+			max_line = max(max_line, line);
+			line = 0;
+		}
+	}
+	max_line = max(max_line, line);
+
+	char header[max_line + 6];
+	memset(header, '*', max_line + 4);
+	header[max_line + 4] = '\n';
+	header[max_line + 5] = '\0';
+	impl_kmsg_putstr(header);
+	const char *last = str;
+	char tmp[max_line + 1];
+	for(int i=0; str[i] != '\0'; i++) {
+		if(str[i] != '\n') continue;
+		impl_kmsg_putstr("* ");
+		size_t len = &str[i] - last;
+		memcpy(tmp, last, len);
+		tmp[len] = '\0';
+		impl_kmsg_putstr(tmp);
+		for(int j=max_line - len; j > 0; j--) impl_kmsg_putstr(" ");
+		impl_kmsg_putstr(" *\n");
+		last = &str[i + 1];
+	}
+	/* the final line. */
+	impl_kmsg_putstr("* ");
+	impl_kmsg_putstr(last);
+	for(int j = max_line - strlen(last); j > 0; j--) impl_kmsg_putstr(" ");
+	impl_kmsg_putstr(" *\n");
+	/* final bar of asterisks. */
+	impl_kmsg_putstr(header);
+}
+
+
+static void rs_long_panic(int32_t class, const char *message)
+{
+	printf("PANIC: %s\n", message);
+	halt_all_threads();
+	switch(class & 0xff) {
+		case PANIC_EXIT:
+			guru_meditation(
+				"With this character's death, the thread of\n"
+				"prophecy is severed.  Restore a saved game\n"
+				"to restore the weave of fate, or persist in\n"
+				"    the doomed world you have created.");
+			break;
+
+		case PANIC_BENIGN:
+			if(class & PANICF_SEGV) {
+				guru_meditation("Press F to pay respects");
+			} else {
+				guru_meditation("sit still to let the time go by");
+			}
+			break;
+
+		default:
+		case PANIC_UNKNOWN: {
+			char str[200];
+			snprintf(str, sizeof str,
+				"Software failure.  Press left mouse button to continue.\n"
+				"           Guru Meditation #%08X.%08X",
+				class, 0xb0a7face);	/* respects to Boaty */
+			guru_meditation(str);
+			break;
+		}
+	}
+
+	for(;;) L4_Sleep(L4_Never);	/* fuck it */
+}
+
+
+static void rs_panic(const char *str) {
+	rs_long_panic(PANIC_UNKNOWN, str);
+}
+
+
 int main(void)
 {
 	printf("hello, world!\n");
@@ -858,8 +951,24 @@ int main(void)
 		}
 	}
 
-	printf("*** root would enter service mode\n");
-	for(;;) L4_Sleep(L4_Never);		/* but fuck it. */
+	printf("*** root entering service mode\n");
 
-	return 0;
+	static const struct root_serv_vtable vtab = {
+		.panic = &rs_panic,
+		.long_panic = &rs_long_panic,
+	};
+	for(;;) {
+		L4_Word_t status = _muidl_root_serv_dispatch(&vtab);
+		if(status == MUIDL_UNKNOWN_LABEL) {
+			/* do nothing. */
+			L4_MsgTag_t tag = muidl_get_tag();
+			printf("rootserv: unknown message label=%#lx, u=%lu, t=%lu\n",
+				L4_Label(tag), L4_UntypedWords(tag), L4_TypedWords(tag));
+		} else if(status != 0 && !MUIDL_IS_L4_ERROR(status)) {
+			printf("rootserv: dispatch status %#lx (last tag %#lx)\n",
+				status, muidl_get_tag().raw);
+		}
+	}
+
+	return 0;	/* but to whom? */
 }
