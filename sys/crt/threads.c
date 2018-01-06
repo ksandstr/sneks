@@ -11,6 +11,7 @@
 
 #include <sneks/mm.h>
 #include <sneks/hash.h>
+#include <sneks/thread.h>
 
 #include <l4/types.h>
 #include <l4/thread.h>
@@ -19,25 +20,10 @@
 #include "sysmem-defs.h"
 
 
-#define STKSIZE (PAGE_SIZE * 2)
-
-
-struct thrd
-{
-	L4_ThreadId_t tid;	/* global */
-	void *stkbase;
-
-	/* exit/join syncing. */
-	_Atomic int res;
-	_Atomic bool alive;
-	struct thrd *_Atomic joiner;
-};
+static size_t hash_thrd(const void *key, void *priv);
 
 
 typedef darray(void *) tssdata;
-
-
-static size_t hash_thrd(const void *key, void *priv);
 
 
 static atomic_flag tss_meta_lock = ATOMIC_FLAG_INIT;
@@ -46,12 +32,43 @@ static struct htable thrd_hash = HTABLE_INITIALIZER(
 	thrd_hash, &hash_thrd, NULL);
 
 
+static size_t hash_thrd(const void *key, void *priv) {
+	const struct thrd *t = key;
+	return int_hash(L4_ThreadNo(t->tid));
+}
+
+
+static bool cmp_thrd_t(const void *cand, void *key) {
+	thrd_t *k = key;
+	const struct thrd *c = cand;
+	return L4_ThreadNo(c->tid) == *k;
+}
+
+
 static void thrd_init(void)
 {
 	/* track the first thread. */
 	struct thrd *t = malloc(sizeof *t);
 	*t = (struct thrd){ .tid = L4_Myself(), .alive = true };
 	htable_add(&thrd_hash, hash_thrd(t, NULL), t);
+}
+
+
+struct thrd *thrd_from_tid(L4_ThreadId_t tid)
+{
+	if(L4_IsNilThread(tid)) return NULL;
+	thrd_t thr = L4_ThreadNo(L4_GlobalIdOf(tid));
+
+	/* FIXME: protect thrd_hash from concurrency! */
+	return htable_get(&thrd_hash, int_hash(thr), &cmp_thrd_t, &thr);
+}
+
+
+L4_ThreadId_t thrd_to_tid(thrd_t thr)
+{
+	/* FIXME: protect thrd_hash from concurrency! */
+	struct thrd *t = htable_get(&thrd_hash, int_hash(thr), &cmp_thrd_t, &thr);
+	return t != NULL ? t->tid : L4_nilthread;
 }
 
 
@@ -148,19 +165,6 @@ void tss_set(tss_t key, void *ptr)
 
 
 /* threads */
-
-static size_t hash_thrd(const void *key, void *priv) {
-	const struct thrd *t = key;
-	return int_hash(L4_ThreadNo(t->tid));
-}
-
-
-static bool cmp_thrd_t(const void *cand, void *key) {
-	thrd_t *k = key;
-	const struct thrd *c = cand;
-	return L4_ThreadNo(c->tid) == *k;
-}
-
 
 thrd_t thrd_current(void) {
 	return L4_ThreadNo(L4_Myself());
