@@ -236,11 +236,6 @@ int __crt1_entry(void)
 		/* disregard errors due to no possible way to handle. it's an
 		 * optimization anyway.
 		 */
-
-		/* FIXME: remove this once mung's mapdb issue goes away. */
-		L4_Fpage_t p = L4_FpageLog2(addr & ~PAGE_MASK, PAGE_BITS);
-		L4_Set_Rights(&p, L4_FullyAccessible);
-		L4_FlushFpage(p);
 	}
 
 	extern int main(int argc, char *const argv[], char *const envp[]);

@@ -614,20 +614,6 @@ static char **break_argument_list(char *str)
 }
 
 
-/* FIXME: this is an ugly bodge for mung's failure to recognize a smaller
- * subpage at a non-zero offset during recursive Unmap, i.e. the one that
- * sysmem does. flushing explicitly works fine.
- *
- * remove it once mung becomes slightly less fuckered.
- */
-static void toss_page(uintptr_t addr)
-{
-	L4_Fpage_t foo = L4_FpageLog2(addr, PAGE_BITS);
-	L4_Set_Rights(&foo, L4_FullyAccessible);
-	L4_FlushFpage(foo);
-}
-
-
 /* launches a systask from a boot module recognized with @name, appending the
  * given NULL-terminated parameter list to that specified for the module.
  */
@@ -722,7 +708,6 @@ static L4_ThreadId_t spawn_systask(L4_ThreadId_t s0, const char *name, ...)
 				printf("sysmem::send_virt failed, n=%d, ret=%u\n", n, ret);
 				abort();
 			}
-			toss_page((L4_Word_t)copybuf);
 		}
 	}
 	free(copybuf);
@@ -739,7 +724,6 @@ static L4_ThreadId_t spawn_systask(L4_ThreadId_t s0, const char *name, ...)
 		printf("sysmem::send_virt failed on argpage, n=%d, ret=%u\n", n, ret);
 		abort();
 	}
-	toss_page((L4_Word_t)argpage);
 	free(argpage);
 
 	/* start 'er up. */
