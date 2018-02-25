@@ -34,6 +34,7 @@
 
 #define NUM_INIT_PAGES 12	/* traditionally enough. */
 #define C_MAGIC 0x740b1d8a
+#define PROXY_ABEND_LABEL 0xbaa6
 
 #define LF_SWAP 1	/* p_addr{12..31} designates a c_page. */
 
@@ -147,6 +148,8 @@ static struct rb_root all_threads = RB_ROOT;
 static uint8_t first_mem[PAGE_SIZE * NUM_INIT_PAGES]
 	__attribute__((aligned(PAGE_SIZE)));
 
+static L4_ThreadId_t abend_helper_tid;
+
 /* sysinfo data. should be moved into a different module so as to not make
  * this one even biggar.
  */
@@ -159,31 +162,33 @@ static struct p_page *get_free_page(void);
 
 /* runtime basics. */
 
-NORETURN void abend(long class, const char *fmt, ...)
+static void abend(long class, const char *fmt, ...)
 {
 	va_list al;
 	va_start(al, fmt);
-	char fail[300];
+	static char fail[300];
 	vsnprintf(fail, sizeof fail, fmt, al);
-	if(abend_info.service != 0) {
-		L4_ThreadId_t serv = { .raw = abend_info.service };
-		int n = __abend_long_panic(serv, PANIC_EXIT, fail);
-		printf("sysmem: Abend::long_panic() returned n=%d\n", n);
-	} else {
-		printf("[Sneks::Abend not available! fail=`%s']\n", fail);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = PROXY_ABEND_LABEL, .X.u = 2 }.raw);
+	L4_LoadMR(1, class);
+	L4_LoadMR(2, (L4_Word_t)&fail[0]);
+	L4_MsgTag_t tag = L4_Send(abend_helper_tid);
+	if(L4_IpcFailed(tag)) {
+		printf("%s: IPC to abend_helper failed, ec=%#lx\n",
+			__func__, L4_ErrorCode());
 	}
+}
 
+
+void abort(void) {
+	printf("sysmem: abort() called from %p!\n",
+		__builtin_return_address(0));
 	for(;;) L4_Sleep(L4_Never);
 }
 
 
 NORETURN void panic(const char *msg) {
-	abend(0, "sysmem: PANIC (%s)", msg);
-}
-
-
-void abort(void) {
-	panic("sysmem aborted");
+	printf("sysmem: PANIC! %s\n", msg);
+	abort();
 }
 
 
@@ -623,6 +628,7 @@ static bool handle_pf(
 		abend(PANIC_EXIT | PANICF_SEGV,
 			"systask=%lu:%lu segv; faddr=%#lx fip=%#lx\n",
 			L4_ThreadNo(tid), L4_Version(tid), faddr, fip);
+		return false;
 	} else if(lp == NULL) {
 		lp = alloc_struct(l_page);
 		struct p_page *phys = get_free_page();
@@ -693,7 +699,7 @@ fail:
 
 
 /* see comment for handle_pf(). */
-static bool interim_fault(L4_MsgTag_t tag)
+static bool interim_fault(L4_MsgTag_t tag, L4_ThreadId_t peer)
 {
 	if(L4_IpcFailed(tag) || tag.X.label >> 4 != 0xffe
 		|| tag.X.u != 2 || tag.X.t != 0)
@@ -706,7 +712,7 @@ static bool interim_fault(L4_MsgTag_t tag)
 	L4_StoreMR(1, &faddr); L4_StoreMR(2, &fip);
 	L4_Acceptor_t acc = L4_Accepted();
 	printf("sysmem: interim fault addr=%#lx, ip=%#lx\n", faddr, fip);
-	if(!handle_pf(&map, L4_Pager(), faddr, fip)) {
+	if(!handle_pf(&map, peer, faddr, fip)) {
 		printf("%s: pager segfault!\n", __func__);
 		abort();
 	}
@@ -731,7 +737,7 @@ static int threadctl(
 	L4_LoadMR(4, pager.raw);
 	L4_LoadMR(5, (L4_Word_t)utcb);
 	L4_MsgTag_t tag = L4_Call(peer);
-	while(interim_fault(tag)) tag = L4_Call(peer);
+	while(interim_fault(tag, peer)) tag = L4_Call(peer);
 	int n;
 	if(L4_IpcFailed(tag)) {
 		printf("%s: IPC failed, ec=%#lx\n", __func__, L4_ErrorCode());
@@ -742,6 +748,51 @@ static int threadctl(
 		n = res;
 	}
 	return n;
+}
+
+
+static void abend_helper_thread(void)
+{
+	for(;;) {
+		L4_ThreadId_t sender;
+		L4_MsgTag_t tag = L4_Ipc(L4_nilthread, L4_anylocalthread,
+			L4_Timeouts(L4_Never, L4_Never), &sender);
+		if(L4_IpcFailed(tag) || L4_Label(tag) != PROXY_ABEND_LABEL) {
+			printf("sysmem: %s: ipc failed, tag=%#lx, ec=%#lx\n",
+				__func__, tag.raw, L4_ErrorCode());
+			continue;
+		}
+
+		L4_Word_t cls, ptr;
+		L4_StoreMR(1, &cls);
+		L4_StoreMR(2, &ptr);
+		const char *fail = (void *)ptr;
+		if(abend_info.service != 0) {
+			L4_ThreadId_t serv = { .raw = abend_info.service };
+			int n = __abend_long_panic(serv, cls, fail);
+			printf("sysmem: Abend::long_panic() returned n=%d\n", n);
+		} else {
+			printf("[Sneks::Abend not available! fail=`%s']\n", fail);
+		}
+	}
+}
+
+
+static void start_abend_helper(void)
+{
+	L4_ThreadId_t self = L4_Myself();
+	abend_helper_tid = L4_GlobalId(L4_ThreadNo(self) + 1, L4_Version(self));
+	uintptr_t utcb_base = L4_MyLocalId().raw & ~511;
+	int n = threadctl(abend_helper_tid, self, self, self,
+		(void *)utcb_base + 512);
+	if(n != 0) {
+		printf("%s: threadctl failed, n=%d\n", __func__, n);
+		abort();
+	}
+
+	struct p_page *stkpage = get_free_page();
+	L4_Start_SpIp(abend_helper_tid, stkpage->address + PAGE_SIZE - 16,
+		(L4_Word_t)&abend_helper_thread);
 }
 
 
@@ -854,7 +905,7 @@ static void impl_send_phys(
 	L4_ThreadId_t sender = muidl_get_sender();
 	L4_Accept(L4_MapGrantItems(L4_FpageLog2(phys_addr, size_log2)));
 	L4_MsgTag_t tag = L4_Receive_Timeout(sender, L4_TimePeriod(5 * 1000));
-	while(interim_fault(tag)) {
+	while(interim_fault(tag, sender)) {
 		/* NOTE: this refreshes the timeout. */
 		tag = L4_Call_Timeouts(sender, L4_ZeroTime, L4_TimePeriod(5 * 1000));
 	}
@@ -1151,6 +1202,7 @@ int main(void)
 {
 	the_kip = L4_GetKernelInterface();
 	add_first_mem();
+	start_abend_helper();
 
 	static const struct sysmem_impl_vtable vtab = {
 		/* L4.X2 stuff */

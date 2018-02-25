@@ -899,8 +899,9 @@ int main(void)
 
 	L4_ThreadId_t s0 = L4_Pager();
 	L4_ThreadId_t sm_pager = L4_nilthread, sysmem = start_sysmem(&sm_pager);
-	printf("sysmem started at %lu:%lu\n",
-		L4_ThreadNo(sysmem), L4_Version(sysmem));
+	printf("sysmem started at %lu:%lu (sm_pager=%lu:%lu)\n",
+		L4_ThreadNo(sysmem), L4_Version(sysmem),
+		L4_ThreadNo(sm_pager), L4_Version(sm_pager));
 	move_to_sysmem(sysmem, sm_pager);
 
 	/* test sysmem out by allocating hugely. */
