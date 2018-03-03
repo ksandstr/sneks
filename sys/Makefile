@@ -1,21 +1,18 @@
 
-# NOTE: no line for systest here. it should be linked last, so that's done from
-# the toplevel Makefile instead.
+SUBDIRS=crt sysmem vm test
+
+# systest has special linkage because it should go last; so it's excluded from
+# the main list.
+NOTEST_SUBDIRS:=$(filter-out test,$(SUBDIRS))
+
+
 all:
-	+@make -C crt all
-	+@make -C sysmem all
-	+@make -C vm all
+	+@$(foreach d,$(NOTEST_SUBDIRS),make -C $d all;)
 
 
 clean:
-	+@make -C crt clean
-	+@make -C sysmem clean
-	+@make -C vm clean
-	+@make -C test clean
+	+@$(foreach d,$(SUBDIRS),make -C $d clean;)
 
 
 distclean:
-	+@make -C crt distclean
-	+@make -C sysmem distclean
-	+@make -C vm distclean
-	+@make -C test distclean
+	+@$(foreach d,$(SUBDIRS),make -C $d distclean;)
