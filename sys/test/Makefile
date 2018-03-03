@@ -29,7 +29,7 @@ distclean:
 	@rm -rf .deps $(OUTPUTS)
 
 
-systest: $(LDSCRIPT) systest.o harness.o optcompat.o $(TEST_OBJS) \
+systest: $(LDSCRIPT) systest.o harness.o $(TEST_OBJS) \
 		ccan-opt.a ccan-htable.o ccan-talloc.o ccan-autodata.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T $(LDSCRIPT) \

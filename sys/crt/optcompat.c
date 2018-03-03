@@ -1,5 +1,5 @@
-/* quarter-arsed strtol() family and such things. these do nothing! this is
- * only here so that CCAN's opt module will link into systest.
+/* quarter-arsed strtod() and such things. these do nothing! this is only here
+ * so that CCAN's opt module will link.
  */
 
 #include <stdio.h>
@@ -21,16 +21,6 @@ double strtod(const char *nptr, char **endptr)
 {
 	printf("%s: not implemented!\n", __func__);
 	abort();
-}
-
-
-long int strtol(const char *nptr, char **endptr, int base) {
-	return strtoll(nptr, endptr, base);
-}
-
-
-int atoi(const char *str) {
-	return strtol(str, NULL, 10);
 }
 
 
