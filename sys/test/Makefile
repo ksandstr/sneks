@@ -38,4 +38,8 @@ systest: $(LDSCRIPT) systest.o harness.o $(TEST_OBJS) \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
+test-initrd:
+	@echo "hello, world" >$(INITRD)/hello.txt
+
+
 include $(wildcard .deps/*.d)
