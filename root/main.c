@@ -13,9 +13,11 @@
 #include <unistd.h>
 #include <assert.h>
 #include <errno.h>
+#include <ccan/compiler/compiler.h>
 #include <ccan/likely/likely.h>
 #include <ccan/htable/htable.h>
 #include <ccan/array_size/array_size.h>
+#include <ccan/str/str.h>
 
 #include <l4/types.h>
 #include <l4/thread.h>
@@ -53,6 +55,9 @@ L4_KernelInterfacePage_t *the_kip;
 
 static L4_ThreadId_t sigma0_tid, sysmem_tid;
 static int sysmem_pages = 0, sysmem_self_pages = 0;
+
+
+extern NORETURN void panic(const char *msg);
 
 
 static size_t hash_sysmem_page(const void *key, void *priv) {
@@ -294,10 +299,15 @@ static L4_BootRec_t *find_boot_module(
 			found = true;
 			cmdline_rest = strchr(slash, ' ');
 			break;
+		} else if(slash == NULL && streq(cmdline, name)) {
+			found = true;
+			cmdline_rest = NULL;
+			break;
 		}
 	}
-	if(found && cmdline_rest != NULL && cmd_rest_p != NULL) {
-		*cmd_rest_p = strdup(cmdline_rest);
+	if(cmd_rest_p != NULL) {
+		*cmd_rest_p = cmdline_rest == NULL || !found
+			? NULL : strdup(cmdline_rest);
 	}
 	return found ? rec : NULL;
 }
@@ -934,6 +944,84 @@ static void start_vm(void)
 }
 
 
+static void mount_initrd(void)
+{
+	const L4_Time_t timeout = L4_TimePeriod(10 * 1000);
+
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	char *img_rest = NULL;
+	L4_BootRec_t *img = find_boot_module(kip, "initrd.img", &img_rest);
+	if(img == NULL || img->type != L4_BootInfo_Module) {
+		printf("no initrd.img found (type=%d), skipping\n",
+			img == NULL ? -1 : (int)img->type);
+		return;
+	}
+
+	L4_ThreadId_t self = L4_MyGlobalId();
+	char tid[32];
+	snprintf(tid, sizeof tid, "%lu:%lu",
+		L4_ThreadNo(self), L4_Version(self));
+	L4_ThreadId_t initrd_tid = spawn_systask("fs.squashfs",
+		"--boot-initrd", tid, NULL);
+	if(L4_IsNilThread(initrd_tid)) {
+		panic("can't start fs.squashfs to mount initrd!");
+	}
+
+	/* first message communicates length of image, reply carries start
+	 * address.
+	 */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+	L4_LoadMR(1, L4_Module_Size(img));
+	L4_MsgTag_t tag = L4_Call_Timeouts(initrd_tid, timeout, timeout);
+	if(L4_IpcFailed(tag)) goto ipcfail;
+	L4_Word_t start; L4_StoreMR(1, &start);
+
+	uint8_t *copybuf = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
+	for(size_t off = 0; off < L4_Module_Size(img); off += PAGE_SIZE) {
+		size_t left = L4_Module_Size(img) - off;
+		memcpy(copybuf, (void *)L4_Module_Start(img) + off,
+			min_t(size_t, left, PAGE_SIZE));
+		if(left < PAGE_SIZE) memset(copybuf + left, 0, PAGE_SIZE - left);
+		uint16_t ret = 0;
+		int n = __sysmem_send_virt(sysmem_tid, &ret, (L4_Word_t)copybuf,
+			initrd_tid.raw, start + off);
+		if(n != 0 || ret != 0) {
+			printf("sysmem::send_virt failed, n=%d, ret=%u\n", n, ret);
+			abort();
+		}
+
+		L4_Fpage_t pg = L4_FpageLog2(L4_Module_Start(img) + off, PAGE_BITS);
+		L4_Set_Rights(&pg, L4_FullyAccessible);
+		send_phys_to_sysmem(sysmem_tid, false, pg);
+		if(left < PAGE_SIZE) {
+			printf("warning: sent %#lx..%#lx to sysmem\n",
+				L4_Module_Start(img) + off,
+				L4_Module_Start(img) + off + PAGE_SIZE - 1);
+		}
+	}
+	free(copybuf);
+
+	/* sync & get mount status. */
+	L4_LoadMR(0, 0);
+	tag = L4_Call_Timeouts(initrd_tid, timeout, timeout);
+	if(L4_IpcFailed(tag)) goto ipcfail;
+	L4_Word_t status; L4_StoreMR(1, &status);
+
+	if(status != 0) {
+		printf("initrd mount failure, status=%lu\n", status);
+		panic("can't mount initrd!");
+	}
+
+	/* TODO: release physical memory of initrd image? */
+
+	return;
+
+ipcfail:
+	printf("IPC fail; tag=%#lx, ec=%lu\n", tag.raw, L4_ErrorCode());
+	panic("couldn't do init protocol with fs.squashfs!");
+}
+
+
 static int impl_kmsg_putstr(const char *str)
 {
 	extern void ser_putstr(const char *str);
@@ -1180,10 +1268,10 @@ int main(void)
 	 * trade pages as memory pressure changes between microkernel, system
 	 * space, and user space.)
 	 */
-	/* FIXME: launch fs.cramfs for /initrd, spawn init(8). */
-
 	printf("sysmem has been given %d pages and %d own pages\n",
 		sysmem_pages, sysmem_self_pages);
+
+	mount_initrd();
 
 	/* run systest if present. */
 	L4_ThreadId_t systest_tid = spawn_systask("systest", NULL);

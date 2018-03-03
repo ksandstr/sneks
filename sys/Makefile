@@ -1,5 +1,5 @@
 
-SUBDIRS=crt sysmem vm test
+SUBDIRS=crt sysmem vm fs.squashfs test
 
 # systest has special linkage because it should go last; so it's excluded from
 # the main list.

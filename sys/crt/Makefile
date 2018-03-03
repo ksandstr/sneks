@@ -22,7 +22,7 @@ all: libsneks-systask.a
 
 
 clean:
-	@rm -f *.o *.a
+	@rm -f *.o *.a $(CLEAN_PATS)
 
 
 distclean:

@@ -20,7 +20,7 @@ CFLAGS=-O2 -Wall -march=native -std=gnu99 \
 MUIDL:=$(abspath $(MUIDL_DIR)/muidl)
 MUIDLFLAGS=-I $(MUIDL_DIR)/share/idl -I $(MUNG_DIR)/idl -I $(CFGDIR)/idl
 
-CLEAN_PATS=*-service.s *-client.s *-common.s *-defs.h
+CLEAN_PATS=*-service.s *-client.s *-common.s *-defs.h ccan-*.a
 
 
 # build patterns below this line.

@@ -1,0 +1,10 @@
+
+/* implementation spec for fs.squashfs. not for client use. */
+
+#include <sys/fs.idl>
+
+
+interface SquashfsImpl: Sneks::Fs
+{
+	/* nothing extra. */
+};
