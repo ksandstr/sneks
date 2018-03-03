@@ -6,7 +6,7 @@ include config.mk
 
 
 # NOTE: the sys/test line should be last!
-all: tags
+all: tags initrd.img
 	+@make -C lib all
 	+@make -C root all
 	+@make -C sys all
@@ -14,7 +14,7 @@ all: tags
 
 
 clean:
-	@rm -f *.o $(CLEAN_PATS)
+	@rm -f *.o initrd.img $(CLEAN_PATS)
 	+@make -C sys clean
 	+@make -C root clean
 	+@make -C lib clean
@@ -36,6 +36,11 @@ check: all
 	@echo "-- system tests..."
 	@$(CFGDIR)/../mung/user/testbench/report.pl
 	@echo "-- all tests completed!"
+
+
+initrd.img: scripts/make-sneks-initrd.sh
+	@rm -f $@
+	+@scripts/make-sneks-initrd.sh $@
 
 
 tags: $(shell find . -iname "*.[ch]" -or -iname "*.p[lm]")

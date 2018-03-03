@@ -1,5 +1,6 @@
 # outputs
 tags
+initrd.img
 
 # detritus
 .*.sw[opn]
