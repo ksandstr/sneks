@@ -119,11 +119,27 @@ void con_putstr(const char *string)
 		call_once(&kmsg_once, &init_kmsg_tid);
 	}
 
-	int n = __kmsg_putstr(kmsg_tid, string);
-	if(n != 0) {
-		char buf[100];
-		snprintf(buf, sizeof buf, "con_putstr: Kmsg::putstr failed, n=%d", n);
-		L4_KDB_PrintString(buf);
+	char tmp[SNEKS_KMSG_MAX_LINE];
+	while(*string != '\0') {
+		const char *end = strchr(string, '\n');
+		int n;
+		if(end == NULL) n = __kmsg_putstr(kmsg_tid, string);
+		else {
+			end++;	/* include the line feed */
+			int len = min_t(int, sizeof tmp - 1, end - string);
+			memcpy(tmp, string, len);
+			tmp[len] = '\0';
+			n = __kmsg_putstr(kmsg_tid, tmp);
+			string += len;
+		}
+
+		if(n != 0) {
+			snprintf(tmp, sizeof tmp,
+				"con_putstr: Kmsg::putstr failed, n=%d", n);
+			L4_KDB_PrintString(tmp);
+			break;
+		}
+		if(end == NULL) break;
 	}
 }
 
