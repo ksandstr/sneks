@@ -14,7 +14,6 @@
 START_TEST(open_file_and_read)
 {
 	plan_tests(4);
-	todo_start("no functionality");
 
 	int fd = open("/initrd/systest/sys/test/hello.txt", O_RDONLY);
 	if(!ok1(fd > 0)) {
