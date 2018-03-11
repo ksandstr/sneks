@@ -148,6 +148,7 @@ static L4_ThreadId_t abend_helper_tid;
 static struct sneks_kmsg_info kmsg_info;
 static struct sneks_abend_info abend_info;
 static struct sneks_uapi_info uapi_info;
+static struct sneks_rootfs_info rootfs_info;
 
 
 static struct p_page *get_free_page(void);
@@ -1089,6 +1090,12 @@ static int impl_uapi_block(struct sneks_uapi_info *it) {
 }
 
 
+static int impl_rootfs_block(struct sneks_rootfs_info *it) {
+	*it = rootfs_info;
+	return 0;
+}
+
+
 static void add_first_mem(void)
 {
 	for(int i=0; i < NUM_INIT_PAGES; i++) {
@@ -1120,21 +1127,35 @@ static void sysinfo_init_msg(L4_MsgTag_t tag, const L4_Word_t mrs[static 64])
 	} while(!haszero(mrs[pos++]) && pos < u);
 	buffer[pos * sizeof(L4_Word_t)] = '\0';
 
-	/* TODO: come up with a fancy method for setting this stuff. */
 	const char *name = buffer;
-	if(streq(name, "kmsg:tid")) {
-		kmsg_info.service = mrs[pos++];
-		assert(L4_IsGlobalId((L4_ThreadId_t){ .raw = kmsg_info.service }));
-	} else if(streq(name, "rootserv:tid")) {
-		abend_info.service = mrs[pos++];
-		assert(L4_IsGlobalId((L4_ThreadId_t){ .raw = abend_info.service }));
-	} else if(streq(name, "uapi:tid")) {
-		uapi_info.service = mrs[pos++];
-		assert(L4_IsGlobalId((L4_ThreadId_t){ .raw = uapi_info.service }));
-		if(L4_IsNilThread(abend_helper_tid)) {
-			if(uapi_info.service != L4_nilthread.raw) start_abend_helper();
+	bool found = false;
+	if(strends(name, ":tid")) {
+		static const struct {
+			const char *blockname;
+			L4_Word_t *tid_raw_p;
+			void (*call)(void);
+		} tids[] = {
+			{ "kmsg", &kmsg_info.service },
+			{ "rootserv", &abend_info.service },
+			{ "uapi", &uapi_info.service, &start_abend_helper },
+			{ "rootfs", &rootfs_info.service },
+		};
+		char *sep = strchr(name, ':');
+		*sep = '\0';
+		L4_ThreadId_t tid = { .raw = mrs[pos++] };
+		assert(L4_IsGlobalId(tid));
+		for(int i=0; i < ARRAY_SIZE(tids); i++) {
+			if(streq(name, tids[i].blockname)) {
+				found = true;
+				*tids[i].tid_raw_p = tid.raw;
+				if(tids[i].call != NULL && !L4_IsNilThread(tid)) {
+					(*tids[i].call)();
+				}
+			}
 		}
-	} else {
+	}
+
+	if(!found) {
 		printf("%s: name=`%s' unrecognized\n", __func__, name);
 	}
 }
@@ -1154,6 +1175,7 @@ int main(void)
 		.kmsg_block = &impl_kmsg_block,
 		.abend_block = &impl_abend_block,
 		.uapi_block = &impl_uapi_block,
+		.rootfs_block = &impl_rootfs_block,
 
 		/* Sysmem proper */
 		.rm_task = &impl_rm_task,

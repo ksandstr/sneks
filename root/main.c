@@ -944,7 +944,7 @@ static void start_vm(void)
 }
 
 
-static void mount_initrd(void)
+static L4_ThreadId_t mount_initrd(void)
 {
 	const L4_Time_t timeout = L4_TimePeriod(10 * 1000);
 
@@ -954,7 +954,7 @@ static void mount_initrd(void)
 	if(img == NULL || img->type != L4_BootInfo_Module) {
 		printf("no initrd.img found (type=%d), skipping\n",
 			img == NULL ? -1 : (int)img->type);
-		return;
+		return L4_nilthread;
 	}
 
 	L4_ThreadId_t self = L4_MyGlobalId();
@@ -989,17 +989,17 @@ static void mount_initrd(void)
 			printf("sysmem::send_virt failed, n=%d, ret=%u\n", n, ret);
 			abort();
 		}
-
-		L4_Fpage_t pg = L4_FpageLog2(L4_Module_Start(img) + off, PAGE_BITS);
-		L4_Set_Rights(&pg, L4_FullyAccessible);
-		send_phys_to_sysmem(sysmem_tid, false, pg);
-		if(left < PAGE_SIZE) {
-			printf("warning: sent %#lx..%#lx to sysmem\n",
-				L4_Module_Start(img) + off,
-				L4_Module_Start(img) + off + PAGE_SIZE - 1);
-		}
 	}
 	free(copybuf);
+
+	/* chuck phys memory to sysmem. */
+	L4_Word_t addr, sz;
+	for_page_range(L4_Module_Start(img),
+		(L4_Module_Start(img) + L4_Module_Size(img) + PAGE_MASK) & ~PAGE_MASK,
+		addr, sz)
+	{
+		send_phys_to_sysmem(sysmem_tid, false, L4_FpageLog2(addr, sz));
+	}
 
 	/* sync & get mount status. */
 	L4_LoadMR(0, 0);
@@ -1014,7 +1014,7 @@ static void mount_initrd(void)
 
 	/* TODO: release physical memory of initrd image? */
 
-	return;
+	return initrd_tid;
 
 ipcfail:
 	printf("IPC fail; tag=%#lx, ec=%lu\n", tag.raw, L4_ErrorCode());
@@ -1271,7 +1271,8 @@ int main(void)
 	printf("sysmem has been given %d pages and %d own pages\n",
 		sysmem_pages, sysmem_self_pages);
 
-	mount_initrd();
+	L4_ThreadId_t initrd_tid = mount_initrd();
+	put_sysinfo("rootfs:tid", 1, initrd_tid.raw);
 
 	/* run systest if present. */
 	L4_ThreadId_t systest_tid = spawn_systask("systest", NULL);

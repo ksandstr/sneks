@@ -6,6 +6,8 @@
 #include <errno.h>
 #include <unistd.h>
 
+#include <ccan/likely/likely.h>
+
 #include <l4/types.h>
 #include <l4/thread.h>
 #include <l4/ipc.h>
@@ -20,6 +22,8 @@
 #include "info-defs.h"
 #include "kmsg-defs.h"
 
+
+L4_ThreadId_t __rootfs_tid = { .raw = 0 };
 
 static tss_t errno_key;
 static uintptr_t current_brk = 0, heap_bottom = 0;
@@ -250,6 +254,14 @@ int __crt1_entry(void)
 		__sysmem_send_virt(L4_Pager(), &rv, addr, L4_nilthread.raw, 0);
 		/* disregard errors. */
 	}
+
+	struct sneks_rootfs_info blk;
+	int n = __info_rootfs_block(L4_Pager(), &blk);
+	if(unlikely(n != 0)) {
+		printf("crt1: can't get rootfs block, n=%d!\n", n);
+		return 1;
+	}
+	__rootfs_tid.raw = blk.service;
 
 	extern int main(int argc, char *const argv[], char *const envp[]);
 	return main(argc, argv, NULL);

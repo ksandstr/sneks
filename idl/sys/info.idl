@@ -41,12 +41,18 @@ struct uapi_info {
 };
 
 
+struct rootfs_info {
+	L4X2::ThreadId service;		/* implementing Sneks::Fs */
+};
+
+
 [StubPrefix(__info), IfaceLabel(0xe003)]
 interface Info: InfoMeta
 {
 	void kmsg_block(out kmsg_info block) raises(Posix::Errno);
 	void abend_block(out abend_info block) raises(Posix::Errno);
 	void uapi_block(out uapi_info block) raises(Posix::Errno);
+	void rootfs_block(out rootfs_info block) raises(Posix::Errno);
 };
 
 };
