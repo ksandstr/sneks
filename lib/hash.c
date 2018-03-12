@@ -17,3 +17,11 @@ uint32_t int_hash(uint32_t key)
 	key = key ^ (key >> 15);
 	return key;
 }
+
+
+/* probably this is slower than need be. but it'll do, and it's two distinct
+ * dep chains anyway so maybe not so much slower.
+ */
+uint32_t int64_hash(uint64_t key) {
+	return int_hash(key) ^ int_hash(key >> 32);
+}

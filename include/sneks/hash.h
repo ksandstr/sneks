@@ -10,5 +10,7 @@
 extern uint32_t int_hash(uint32_t key);
 #define word_hash(x) int_hash((uint32_t)(x))
 
+extern uint32_t int64_hash(uint64_t key);
+
 
 #endif
