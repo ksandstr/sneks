@@ -13,7 +13,7 @@ CFLAGS=-O2 -Wall -march=native -std=gnu99 \
 	-I $(MUNG_DIR)/include/fake_clib \
 	-I . -I $(MUIDL_DIR)/include -I $(LFHT_DIR) -I $(CCAN_DIR) \
 	-D_GNU_SOURCE \
-	-fno-pic -fuse-ld=gold -fno-builtin -nostdlib \
+	-fno-pic -fuse-ld=gold -fno-builtin -nostdlib -ffreestanding \
 	-Wno-frame-address \
 	#-DDEBUG_ME_HARDER #-D_L4_DEBUG_ME_HARDER #-DCCAN_LIST_DEBUG
 
