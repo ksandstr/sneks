@@ -6,6 +6,8 @@ include ../config.mk
 LIB_SRC:=$(wildcard *.c)
 LIB_OBJS:=$(subst .c,.o,$(LIB_SRC))
 
+CFLAGS:=$(CFLAGS) -D__SNEKS__=1
+
 
 # it's our utility library, we get to call it whatever we damn well please. in
 # this case it'll be just libsneks, and woe betide the fool who depends on it
