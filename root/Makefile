@@ -34,34 +34,4 @@ root: root.ld crt0.o main.o runtime.o mm.o ser_io.o \
 main.o: main.c sysmem-defs.h kmsg-defs.h rootserv-defs.h
 
 
-# muidl outputs.
-# TODO: we don't really need to hear first about the services being generated,
-# and then the common bit, the client, and then the defs. there's AS chatter
-# about the first three too.
-%-service.s: $(CFGDIR)/idl/sys/%.idl
-	@echo "  IDL $< <service>"
-	@$(MUIDL) $(MUIDLFLAGS) --service $<
-
-%-client.s: $(CFGDIR)/idl/sys/%.idl
-	@echo "  IDL $< <client>"
-	@$(MUIDL) $(MUIDLFLAGS) --client $<
-
-%-common.s: $(CFGDIR)/idl/sys/%.idl
-	@echo "  IDL $< <common>"
-	@$(MUIDL) $(MUIDLFLAGS) --common $<
-
-%-defs.h: $(CFGDIR)/idl/sys/%.idl
-	@echo "  IDL $< <defs>"
-	@$(MUIDL) $(MUIDLFLAGS) --defs $<
-
-# for rootserv-impl.idl
-%-service.s: %.idl
-	@echo "  IDL $< <service>"
-	@$(MUIDL) $(MUIDLFLAGS) --service $<
-
-%-defs.h: %.idl
-	@echo "  IDL $< <defs>"
-	@$(MUIDL) $(MUIDLFLAGS) --defs $<
-
-
 include $(wildcard .deps/*.d)

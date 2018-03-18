@@ -22,6 +22,9 @@ MUIDLFLAGS=-I $(MUIDL_DIR)/share/idl -I $(MUNG_DIR)/idl -I $(CFGDIR)/idl
 CLEAN_PATS=*-service.s *-client.s *-common.s *-defs.h
 
 
+# build patterns below this line.
+
+
 %.o: %.c
 	@echo "  CC $@"
 	@$(CC) -c -o $@ $< $(CFLAGS) -nostartfiles -nodefaultlibs -MMD
@@ -56,3 +59,28 @@ ccan-%.a ::
 
 .deps:
 	@mkdir -p .deps
+
+
+# IDL compiler outputs.
+#
+# TODO: we don't really need to hear first about the services being generated,
+# and then the common bit, the client, and then the defs. there's AS chatter
+# about the first three too.
+
+vpath %.idl $(CFGDIR)/idl/sys
+
+%-service.s: %.idl
+	@echo "  IDL $< <service>"
+	@$(MUIDL) $(MUIDLFLAGS) --service $<
+
+%-client.s: %.idl
+	@echo "  IDL $< <client>"
+	@$(MUIDL) $(MUIDLFLAGS) --client $<
+
+%-common.s: %.idl
+	@echo "  IDL $< <common>"
+	@$(MUIDL) $(MUIDLFLAGS) --common $<
+
+%-defs.h: %.idl
+	@echo "  IDL $< <defs>"
+	@$(MUIDL) $(MUIDLFLAGS) --defs $<
