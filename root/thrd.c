@@ -31,10 +31,6 @@ struct rt_thread {
 };
 
 
-/* TODO: replace this with a real Sneks::Proc etc. implementation */
-static L4_ThreadId_t uapi_tid = { .raw = 0 };
-
-
 L4_ThreadId_t thrd_tidof_NP(thrd_t t) {
 	return (L4_ThreadId_t){ .raw = t };
 }
@@ -115,7 +111,7 @@ int thrd_create(thrd_t *t, thrd_start_t fn, void *param_ptr)
 {
 	L4_ThreadId_t tid;
 
-	if(L4_IsNilThread(uapi_tid)) {
+	if(L4_IsNilThread(uapi_tid) || pidof_NP(L4_Myself()) == 0) {
 		static L4_Word_t utcb_base;
 		static int next_tid, next_utcb_slot = 1;
 		static L4_ThreadId_t s0_tid;
@@ -222,7 +218,7 @@ again:
 	}
 
 	L4_ThreadId_t t_tid = thrd_tidof_NP(thrd);
-	if(!L4_IsNilThread(uapi_tid)) {
+	if(!L4_IsNilThread(uapi_tid) && pidof_NP(L4_Myself()) != 0) {
 		assert(L4_IsGlobalId(t_tid));
 		int n = __proc_remove_thread(uapi_tid, t_tid.raw,
 			L4_LocalIdOf(t_tid).raw);

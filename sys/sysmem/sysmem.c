@@ -154,7 +154,8 @@ static L4_ThreadId_t abend_helper_tid;
  * this one even biggar.
  */
 static struct sneks_kmsg_info kmsg_info;
-static struct sneks_abend_info abend_info = { .service = 0 };
+static struct sneks_abend_info abend_info;
+static struct sneks_uapi_info uapi_info;
 
 
 static struct p_page *get_free_page(void);
@@ -1153,6 +1154,12 @@ static int impl_abend_block(struct sneks_abend_info *it) {
 }
 
 
+static int impl_uapi_block(struct sneks_uapi_info *it) {
+	*it = uapi_info;
+	return 0;
+}
+
+
 static void add_first_mem(void)
 {
 	for(int i=0; i < NUM_INIT_PAGES; i++) {
@@ -1192,6 +1199,9 @@ static void sysinfo_init_msg(L4_MsgTag_t tag, const L4_Word_t mrs[static 64])
 	} else if(streq(name, "rootserv:tid")) {
 		abend_info.service = mrs[pos++];
 		assert(L4_IsGlobalId((L4_ThreadId_t){ .raw = abend_info.service }));
+	} else if(streq(name, "uapi:tid")) {
+		uapi_info.service = mrs[pos++];
+		assert(L4_IsGlobalId((L4_ThreadId_t){ .raw = uapi_info.service }));
 	} else {
 		printf("%s: name=`%s' unrecognized\n", __func__, name);
 	}
@@ -1212,6 +1222,7 @@ int main(void)
 		.lookup = &impl_lookup,
 		.kmsg_block = &impl_kmsg_block,
 		.abend_block = &impl_abend_block,
+		.uapi_block = &impl_uapi_block,
 
 		/* Sysmem proper */
 		.new_task = &impl_new_task,

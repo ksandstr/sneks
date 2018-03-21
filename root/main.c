@@ -28,6 +28,7 @@
 #include <sneks/mm.h>
 #include <sneks/hash.h>
 #include <sneks/bitops.h>
+#include <sneks/process.h>
 #include <sneks/rootserv.h>
 
 #include "elf.h"
@@ -203,22 +204,25 @@ void send_phys_to_sysmem(L4_ThreadId_t sysmem_tid, bool self, L4_Word_t addr)
 }
 
 
-/* create a new system task in a waiting condition: the returned thread exists
- * in a space configured to @kip_area, @utcb_area, its utcb location is set to
- * the very start of @utcb_area, it'll be paged by the calling thread's pager
- * (which should be sysmem), and it can be started by the pager (or a
- * propagator for it) with a L4.X2 breath-of-life message.
- */
 static L4_ThreadId_t new_task(L4_Fpage_t kip_area, L4_Fpage_t utcb_area)
 {
-	static int task_offset = 1;
-	/* FIXME: this is a fucked up silly way to allocate thread IDs for system
-	 * tasks. manage these better.
-	 */
-	L4_ThreadId_t new_tid = L4_GlobalId(
-			L4_ThreadNo(L4_Myself()) + task_offset * 100, 1),
-		pager = L4_Pager();
-	task_offset++;
+	static int task_offset = SNEKS_MIN_SYSID + 2;
+
+	lock_uapi();
+	int pid = task_offset++, n = add_task(pid, kip_area, utcb_area);
+	if(n < 0) {
+		printf("%s: add_task failed, n=%d\n", __func__, n);
+		abort();
+	}
+	void *utcb_loc;
+	L4_ThreadId_t new_tid = allocate_thread(pid, &utcb_loc);
+	if(L4_IsNilThread(new_tid)) {
+		printf("%s: allocate_thread failed\n", __func__);
+		abort();
+	}
+	unlock_uapi();
+
+	L4_ThreadId_t pager = L4_Pager();
 	L4_Word_t res = L4_ThreadControl(new_tid, new_tid,
 		pager, pager, (void *)-1);
 	if(res != 1) {
@@ -234,8 +238,7 @@ static L4_ThreadId_t new_task(L4_Fpage_t kip_area, L4_Fpage_t utcb_area)
 			__func__, L4_ErrorCode());
 		abort();
 	}
-	res = L4_ThreadControl(new_tid, new_tid, pager,
-		pager, (void *)L4_Address(utcb_area));
+	res = L4_ThreadControl(new_tid, new_tid, pager, pager, utcb_loc);
 	if(res != 1) {
 		fprintf(stderr, "%s: second ThreadControl failed, ec=%lu\n",
 			__func__, L4_ErrorCode());
@@ -808,11 +811,25 @@ int main(void)
 		sysmem = start_sysmem(&sm_pager);
 	move_to_sysmem(sysmem, sm_pager);
 
+	uapi_init();
+	/* FIXME: probe the root_utcb limit with ThreadControl.
+	 * FIXME: get KIP length from KIP.
+	 */
+	L4_Fpage_t root_kip = L4_FpageLog2(
+			(L4_Word_t)L4_GetKernelInterface(), PAGE_BITS),
+		root_utcb = L4_Fpage(L4_MyLocalId().raw & ~511u, 64 * 1024);
+	int n = add_task(SNEKS_MIN_SYSID, root_kip, root_utcb);
+	if(n < 0) {
+		printf("can't create root task, n=%d\n", n);
+		abort();
+	}
+	rt_thrd_tests();
+
 	/* TODO: launch mem, fs.cramfs here */
 
 	/* configure sysinfo. */
 	thrd_t kmsg;
-	int n = thrd_create(&kmsg, &kmsg_impl_fn, NULL);
+	n = thrd_create(&kmsg, &kmsg_impl_fn, NULL);
 	if(n != thrd_success) {
 		printf("can't start kmsg!\n");
 		abort();
@@ -820,6 +837,15 @@ int main(void)
 	put_sysinfo("kmsg:tid", 1, thrd_tidof_NP(kmsg).raw);
 	put_sysinfo("rootserv:tid", 1, L4_Myself().raw);
 
+	/* launch the userspace API server. */
+	thrd_t uapi;
+	n = thrd_create(&uapi, &uapi_loop, NULL);
+	if(n != thrd_success) {
+		printf("can't start uapi!\n");
+		abort();
+	}
+	put_sysinfo("uapi:tid", 1, thrd_tidof_NP(uapi).raw);
+	uapi_tid = thrd_tidof_NP(uapi);
 	/* TODO: move these into a root internal test setup, like mung has with
 	 * "ktest".
 	 */

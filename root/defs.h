@@ -33,4 +33,19 @@ extern void rt_thrd_tests(void);
 extern L4_ThreadId_t thrd_tidof_NP(thrd_t t);
 
 
+/* from uapi.c */
+
+extern L4_ThreadId_t uapi_tid;	/* nil before uapi activation */
+
+extern int add_task(int pid, L4_Fpage_t kip_area, L4_Fpage_t utcb_area);
+extern L4_ThreadId_t allocate_thread(int pid, void **utcb_loc_p);
+extern void free_thread(L4_ThreadId_t tid, void *utcb_loc);
+extern void lock_uapi(void);
+extern void unlock_uapi(void);
+
+extern int uapi_loop(void *param_ptr);
+
+extern void uapi_init(void);
+
+
 #endif
