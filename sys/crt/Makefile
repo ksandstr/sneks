@@ -2,7 +2,7 @@
 export CFGDIR:=$(abspath ../..)
 include $(CFGDIR)/config.mk
 
-IDL_FILES=sysmem.idl kmsg.idl info.idl
+IDL_FILES=sysmem.idl kmsg.idl info.idl proc.idl
 IDL_OBJS:=$(patsubst %.idl,%-common.o,$(IDL_FILES)) \
 	$(patsubst %.idl,%-client.o,$(IDL_FILES))
 
@@ -11,6 +11,7 @@ LIB_OBJS:=crt0.o $(IDL_OBJS) $(LIB_SRC:.c=.o) \
 	mung-rangealloc.o mung-slab.o \
 	ccan-htable.o
 
+vpath %.idl $(CFGDIR)/idl/api
 
 # the system task runtime library is, much like the utility library (which it
 # depends on), unsuitable for use out of tree.
@@ -33,7 +34,7 @@ libsneks-systask.a: $(LIB_OBJS)
 
 
 crt1.o: crt1.c sysmem-defs.h kmsg-defs.h info-defs.h
-threads.o: threads.c sysmem-defs.h
+threads.o: threads.c sysmem-defs.h proc-defs.h info-defs.h
 
 
 # build things from mung as guests.

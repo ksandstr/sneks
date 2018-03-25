@@ -14,6 +14,7 @@
 #include <l4/kdebug.h>
 
 #include <sneks/mm.h>
+#include <sneks/process.h>
 
 #include "sysmem-defs.h"
 #include "info-defs.h"
@@ -26,7 +27,7 @@ static uintptr_t current_brk = 0, heap_bottom = 0;
 
 void __return_from_main(int main_rc)
 {
-	int n = __sysmem_rm_thread(L4_Pager(), L4_Myself().raw, L4_Myself().raw);
+	int n = __sysmem_rm_task(L4_Pager(), getpid());
 	assert(n != 0);
 	L4_KDB_PrintString("systask __return_from_main failed!");
 	for(;;) { L4_Sleep(L4_Never); }
@@ -188,24 +189,21 @@ void *sbrk(intptr_t increment)
 }
 
 
-/* ultra stubbery. getpid() is only used by dlmalloc, and even in there for no
- * good reason. but the stub must remain.
- */
-int getpid(void) {
-	return 666;
-}
-
-
 int atexit(void (*fn)(void)) {
 	/* does nothing since systasks don't exit in a conventional sense. */
 	return 0;
 }
 
 
+int getpid(void) {
+	return pidof_NP(L4_Myself());
+}
+
+
 void exit(int status)
 {
-	/* TODO: do something */
-	printf("%s: called! aborting.\n", __func__);
+	int n = __sysmem_rm_task(L4_Pager(), getpid());
+	printf("%s: Sysmem::rm_task() returned n=%d\n", __func__, n);
 	for(;;) abort();
 }
 
@@ -242,16 +240,14 @@ int __crt1_entry(void)
 	memcpy(copy, argbase, arglen + 1);
 	for(int i=0; i <= argc; i++) argv[i] += &copy[0] - argbase;
 
-	/* call sysmem to throw away argmem */
+	/* throw away argmem */
 	for(uintptr_t addr = (uintptr_t)argc_p;
 		addr <= (uintptr_t)argmem;
 		addr += PAGE_SIZE)
 	{
 		uint16_t rv;
 		__sysmem_send_virt(L4_Pager(), &rv, addr, L4_nilthread.raw, 0);
-		/* disregard errors due to no possible way to handle. it's an
-		 * optimization anyway.
-		 */
+		/* disregard errors. */
 	}
 
 	extern int main(int argc, char *const argv[], char *const envp[]);

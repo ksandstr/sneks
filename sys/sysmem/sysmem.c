@@ -16,6 +16,7 @@
 #include <sneks/rbtree.h>
 #include <sneks/mm.h>
 #include <sneks/bitops.h>
+#include <sneks/process.h>
 #include <sneks/rootserv.h>
 #include <sneks/lz4.h>
 
@@ -88,23 +89,14 @@ struct c_hdr
 };
 
 
-/* a system task tracked by sysmem. */
-struct systask {
-	struct rb_root mem;			/* of <struct l_page> via rb */
-	struct list_head threads;	/* of <struct st_thr> */
-	uintptr_t brk;	/* program break (inclusive) */
+struct systask
+{
+	struct rb_node rb;		/* in systask_tree by ->pid asc */
+	struct rb_root mem;		/* of <struct l_page> via rb */
+	uintptr_t brk;			/* program break (inclusive) */
 	uintptr_t min_fault;
-	bool is_root;	/* is this task zero? */
-	int next_utcb;	/* FIXME: replace w/ better UTCB alloc bits */
-	L4_Fpage_t utcb_area, kip_area;
-};
-
-
-struct st_thr {
-	struct rb_node rb;			/* in all_threads, per L4_ThreadNo(tid) */
-	struct list_node link;		/* in systask.threads */
-	struct systask *task;
-	L4_ThreadId_t tid;
+	L4_Fpage_t utcb_area, kip_area;	/* FIXME: fill these in */
+	uint16_t pid;			/* systask ID per pidof_NP() */
 };
 
 
@@ -139,11 +131,10 @@ static unsigned num_free_pages = 0;
 static bool repl_enable = false;
 
 static struct alloc_head systask_alloc_head = ALLOC_HEAD(struct systask),
-	st_thr_alloc_head = ALLOC_HEAD(struct st_thr),
 	p_page_alloc_head = ALLOC_HEAD(struct p_page),
 	l_page_alloc_head = ALLOC_HEAD(struct l_page);
 
-static struct rb_root all_threads = RB_ROOT;
+static struct rb_root systask_tree = RB_ROOT;
 
 static uint8_t first_mem[PAGE_SIZE * NUM_INIT_PAGES]
 	__attribute__((aligned(PAGE_SIZE)));
@@ -208,37 +199,29 @@ void __assert_failure(
 
 /* data structure manipulation. */
 
-static inline int thr_cmp(const struct st_thr *a, const struct st_thr *b) {
-	return (int)L4_ThreadNo(a->tid) - (int)L4_ThreadNo(b->tid);
-}
-
-
-static struct st_thr *get_thr(L4_ThreadId_t tid)
+static struct systask *find_task(int pid)
 {
-	if(!L4_IsGlobalId(tid)) return NULL;
+	if(pid < SNEKS_MIN_SYSID) return NULL;
 
-	struct rb_node *n = all_threads.rb_node;
-	int a = L4_ThreadNo(tid);
+	struct rb_node *n = systask_tree.rb_node;
 	while(n != NULL) {
-		struct st_thr *t = rb_entry(n, struct st_thr, rb);
-		int b = L4_ThreadNo(t->tid);
-		if(a < b) n = n->rb_left;
-		else if(a > b) n = n->rb_right;
+		struct systask *t = rb_entry(n, struct systask, rb);
+		if(pid < t->pid) n = n->rb_left;
+		else if(pid > t->pid) n = n->rb_right;
 		else return t;
 	}
 	return NULL;
 }
 
 
-static inline struct st_thr *put_thr_helper(struct st_thr *t)
+static struct systask *put_task_helper(struct systask *t)
 {
-	struct rb_node **p = &all_threads.rb_node, *parent = NULL;
-	int a = L4_ThreadNo(t->tid);
+	struct rb_node **p = &systask_tree.rb_node, *parent = NULL;
 	while(*p != NULL) {
 		parent = *p;
-		struct st_thr *oth = rb_entry(parent, struct st_thr, rb);
-		if(a < L4_ThreadNo(oth->tid)) p = &(*p)->rb_left;
-		else if(a > L4_ThreadNo(oth->tid)) p = &(*p)->rb_right;
+		struct systask *oth = rb_entry(parent, struct systask, rb);
+		if(t->pid < oth->pid) p = &(*p)->rb_left;
+		else if(t->pid > oth->pid) p = &(*p)->rb_right;
 		else return oth;
 	}
 
@@ -247,19 +230,12 @@ static inline struct st_thr *put_thr_helper(struct st_thr *t)
 }
 
 
-static void put_thr(struct st_thr *t)
+static void put_task(struct systask *t)
 {
-	struct st_thr *dupe = put_thr_helper(t);
-	if(dupe != NULL) panic("duplicate in put_thr()!");
-	rb_insert_color(&t->rb, &all_threads);
-
-	assert(get_thr(t->tid) == t);
-}
-
-
-static struct systask *get_task(L4_ThreadId_t tid) {
-	struct st_thr *t = get_thr(tid);
-	return t != NULL ? t->task : NULL;
+	struct systask *dupe = put_task_helper(t);
+	if(dupe != NULL) panic("duplicate in put_task()!");
+	rb_insert_color(&t->rb, &systask_tree);
+	assert(find_task(t->pid) == t);
 }
 
 
@@ -598,6 +574,27 @@ static struct p_page *decompress(struct l_page *lp)
 }
 
 
+/* constructs systasks as they appear. could return errptrs instead, there's a
+ * few different kinds of fail in there.
+ */
+static struct systask *get_task(int pid)
+{
+	assert(pid >= SNEKS_MIN_SYSID);
+	struct systask *t = find_task(pid);
+	if(t == NULL) {
+		t = alloc_struct(systask);
+		t->mem = RB_ROOT;
+		t->brk = 0x10000;	/* 64k should be enough for everyone */
+		t->min_fault = ~PAGE_MASK;
+		t->pid = pid;
+		t->kip_area = t->utcb_area = L4_Nilpage;
+		put_task(t);
+	}
+
+	return t;
+}
+
+
 /* pagefault handling. this supports two use cases; normal fault service via
  * impl_handle_fault(), and in-band faults happening during interactions with
  * systasks such as may arise in e.g. threadctl().
@@ -617,10 +614,15 @@ static bool handle_pf(
 		return false;
 	}
 
-	struct systask *task = get_task(tid);
+	struct systask *task = get_task(pidof_NP(tid));
 	if(task == NULL) {
-		printf("sysmem: unknown task %lu:%lu\n",
-			L4_ThreadNo(tid), L4_Version(tid));
+		if(pidof_NP(tid) < SNEKS_MIN_SYSID) {
+			printf("sysmem: illegal pf from non-systask tid=%lu:%lu (pid=%u)\n",
+				L4_ThreadNo(tid), L4_Version(tid), pidof_NP(tid));
+		} else {
+			printf("sysmem: unknown tid=%lu:%lu (pid=%u)\n",
+				L4_ThreadNo(tid), L4_Version(tid), pidof_NP(tid));
+		}
 		return false;
 	}
 
@@ -661,41 +663,6 @@ static void impl_handle_fault(
 	if(!handle_pf(page_ptr, muidl_get_sender(), faddr, fip)) {
 		muidl_raise_no_reply();
 	}
-}
-
-
-static void impl_new_task(
-	L4_Fpage_t kip_area, L4_Fpage_t utcb_area, L4_Word_t first_thread_raw)
-{
-	L4_ThreadId_t first_thread = { .raw = first_thread_raw };
-	if(L4_IsLocalId(first_thread) || L4_IsNilThread(first_thread)) {
-		printf("sysmem: invalid first_thread=%#lx\n", first_thread.raw);
-		goto fail;
-	} else if(get_thr(first_thread) != NULL) {
-		printf("sysmem: tried to duplicate first_thread=%lu:%lu\n",
-			L4_ThreadNo(first_thread), L4_Version(first_thread));
-		goto fail;
-	}
-
-	struct systask *task = alloc_struct(systask);
-	struct st_thr *t = alloc_struct(st_thr);
-	task->mem = RB_ROOT;
-	task->brk = 0x10000;	/* 64k should be enough for everyone */
-	task->min_fault = ~PAGE_MASK;
-	task->is_root = RB_EMPTY_ROOT(&all_threads);
-	task->utcb_area = utcb_area;
-	task->kip_area = kip_area;
-	task->next_utcb = 1;
-	list_head_init(&task->threads);
-	t->tid = first_thread;
-	t->task = task;
-	list_add_tail(&task->threads, &t->link);
-	put_thr(t);
-
-	return;
-
-fail:
-	panic("sysmem is very confused and sad");
 }
 
 
@@ -797,83 +764,41 @@ static void start_abend_helper(void)
 }
 
 
-static int impl_add_thread(L4_Word_t raw_space, L4_Word_t new_thread)
+static void impl_rm_task(int32_t pid)
 {
-	L4_ThreadId_t tid = { .raw = new_thread };
-	if(get_thr(tid) != NULL) {
-		printf("sysmem: new_thread=%lu:%lu exists\n",
-			L4_ThreadNo(tid), L4_Version(tid));
-		return -EEXIST;
-	}
+	printf("%s: pid=%d\n", __func__, pid);
+	if(pid < SNEKS_MIN_SYSID) return;
+	struct systask *t = find_task(pid);
+	if(t == NULL) return;
 
-	struct systask *caller = get_task(muidl_get_sender());
-	if(caller == NULL) {
-		printf("sysmem: unknown caller\n");
-		return -EINVAL;
-	}
-	L4_ThreadId_t space = { .raw = raw_space };
-	struct systask *task = get_task(space);
-	if(task == NULL) {
-		printf("sysmem: space=%#lx doesn't exist\n", space.raw);
-		return -EINVAL;
-	}
+	L4_Fpage_t fp[64];
+	int n_fp = 0;
+	for(struct rb_node *cur = rb_first(&t->mem), *next; cur != NULL; cur = next) {
+		next = rb_next(cur);
 
-	if(!caller->is_root) {
-		int n = threadctl(tid, space, L4_Myself(), L4_Myself(),
-			(void *)(L4_Address(task->utcb_area) + 512 * task->next_utcb++));
-		if(n != 0) {
-			printf("%s: threadctl failed, n=%d\n", __func__, n);
-			return -EINVAL;
+		struct l_page *lp = rb_entry(cur, struct l_page, rb);
+		struct p_page *p = get_active_page(lp->p_addr & ~PAGE_MASK);
+		if(p == NULL) {
+			printf("sysmem: rm_task: can't find phys page for log=%#lx?\n",
+				lp->l_addr & ~PAGE_MASK);
+			continue;
 		}
-	}
 
-	struct st_thr *t = alloc_struct(st_thr);
-	t->tid = tid;
-	t->task = task;
-	list_add_tail(&task->threads, &t->link);
-	put_thr(t);
-
-	return 0;
-}
-
-
-static int impl_rm_thread(L4_Word_t raw_space, L4_Word_t gone_thread)
-{
-	L4_ThreadId_t tid = { .raw = gone_thread };
-	struct st_thr *t = get_thr(tid);
-	if(t == NULL) return -ENOENT;
-
-	L4_ThreadId_t space = { .raw = raw_space };
-	struct systask *task = get_task(space);
-	if(task == NULL || t->task != task) return -EINVAL;
-
-	struct systask *caller = get_task(muidl_get_sender());
-	if(caller == NULL) {
-		printf("sysmem: unknown caller\n");
-		return -EINVAL;
-	}
-
-	if(!caller->is_root) {
-		int n = threadctl(tid, L4_nilthread, L4_nilthread,
-			L4_nilthread, (void *)-1);
-		if(n != 0) {
-			printf("%s: threadctl failed, n=%d\n", __func__, n);
-			return -EINVAL;
+		fp[n_fp] = L4_FpageLog2(p->address, PAGE_BITS);
+		L4_Set_Rights(&fp[n_fp], L4_FullyAccessible);
+		if(++n_fp == ARRAY_SIZE(fp)) {
+			L4_UnmapFpages(ARRAY_SIZE(fp), fp);
+			n_fp = 0;
 		}
+		list_del_from(&active_page_list, &p->link);
+		list_add(&free_page_list, &p->link);
+		rb_erase(&lp->rb, &t->mem);
+		recycle_struct(l_page, lp);
 	}
+	if(n_fp > 0) L4_UnmapFpages(n_fp, fp);
 
-	list_del_from(&task->threads, &t->link);
-	rb_erase(&t->rb, &all_threads);
-	recycle(&st_thr_alloc_head, t);
-
-	if(list_empty(&task->threads)) {
-		/* FIXME */
-		abend(PANIC_EXIT,
-			"sysmem: %s: would dispose of task=%p (last thread=%lu:%lu gone)",
-			__func__, task, L4_ThreadNo(tid), L4_Version(tid));
-	}
-
-	return 0;
+	rb_erase(&t->rb, &systask_tree);
+	recycle_struct(systask, t);
 }
 
 
@@ -884,8 +809,12 @@ static void impl_send_phys(
 	assert(L4_IsNilThread(dest_tid) || L4_IsGlobalId(dest_tid));
 	struct systask *task = NULL;
 	if(!L4_IsNilThread(dest_tid)) {
-		task = get_task(dest_tid);
-		if(task == NULL) return;
+		int dest_pid = pidof_NP(dest_tid);
+		if(dest_pid < SNEKS_MIN_SYSID) {
+			printf("%s: dest_pid=%d is a no-go\n", __func__, dest_pid);
+			return;
+		}
+		task = get_task(dest_pid);
 	}
 
 	/* TODO: handle arbitrary sizes of page. this is unquestionably a good
@@ -980,16 +909,26 @@ static void unmap_page(L4_Word_t address)
 static uint16_t impl_send_virt(
 	L4_Word_t src_addr, L4_Word_t dest_tid_raw, L4_Word_t dest_addr)
 {
-	L4_ThreadId_t src_tid = muidl_get_sender(),
-		dest_tid = { .raw = dest_tid_raw };
-	struct systask *src = get_task(src_tid),
-		*dest = get_task(dest_tid);
+	int src_pid = pidof_NP(muidl_get_sender());
+	if(src_pid < SNEKS_MIN_SYSID) {
+		printf("%s: invalid src_pid=%d\n", __func__, src_pid);
+		return EINVAL;
+	}
+	struct systask *src = get_task(src_pid);
 	if(src == NULL) return ENOENT;
 
 	struct l_page *lp = get_lpage(src, src_addr);
 	if(lp == NULL) return EFAULT;
 
-	if(dest != NULL) {
+	L4_ThreadId_t dest_tid = { .raw = dest_tid_raw };
+	if(!L4_IsNilThread(dest_tid)) {
+		int dest_pid = pidof_NP(dest_tid);
+		if(dest_pid < SNEKS_MIN_SYSID) {
+			printf("%s: invalid dest_pid=%d\n", __func__, dest_pid);
+			return EINVAL;
+		}
+
+		struct systask *dest = get_task(dest_pid);
 		struct l_page *dstp = get_lpage(dest, dest_addr);
 		if(dstp != NULL) {
 			/* toss the previous page. */
@@ -1064,7 +1003,12 @@ static void remove_l_page(struct systask *task, struct l_page *lp)
 static void impl_brk(L4_Word_t new_brk)
 {
 	L4_ThreadId_t sender = muidl_get_sender();
-	struct systask *task = get_task(sender);
+	int pid = pidof_NP(sender);
+	if(pid < SNEKS_MIN_SYSID) {
+		printf("sysmem: %s: invalid pid=%d\n", __func__, pid);
+		return;
+	}
+	struct systask *task = get_task(pid);
 	if(task == NULL) {
 		printf("sysmem: %s: no such task\n", __func__);
 		return;
@@ -1108,13 +1052,12 @@ static unsigned short impl_breath_of_life(
 }
 
 
-
 static int impl_get_shape(
 	L4_Word_t *low_p, L4_Word_t *high_p,
 	L4_Word_t task_raw)
 {
 	L4_ThreadId_t task = { .raw = task_raw };
-	struct systask *t = get_task(task);
+	struct systask *t = find_task(pidof_NP(task));
 	if(t == NULL) return ENOENT;
 
 #define FP_EDGES(p) L4_Address((p)), L4_Address((p)) + L4_Size((p)) - 1
@@ -1225,9 +1168,7 @@ int main(void)
 		.uapi_block = &impl_uapi_block,
 
 		/* Sysmem proper */
-		.new_task = &impl_new_task,
-		.add_thread = &impl_add_thread,
-		.rm_thread = &impl_rm_thread,
+		.rm_task = &impl_rm_task,
 		.send_phys = &impl_send_phys,
 		.send_virt = &impl_send_virt,
 		.brk = &impl_brk,

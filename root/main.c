@@ -206,6 +206,7 @@ void send_phys_to_sysmem(L4_ThreadId_t sysmem_tid, bool self, L4_Word_t addr)
 
 static L4_ThreadId_t new_task(L4_Fpage_t kip_area, L4_Fpage_t utcb_area)
 {
+	/* first is root, then sysmem. others after that. */
 	static int task_offset = SNEKS_MIN_SYSID + 2;
 
 	lock_uapi();
@@ -330,7 +331,7 @@ static L4_ThreadId_t start_sysmem(L4_ThreadId_t *pager_p)
 	}
 
 	/* set up the address space & start the main thread. */
-	L4_ThreadId_t sysmem_tid = L4_GlobalId(123, 457);
+	L4_ThreadId_t sysmem_tid = L4_GlobalId(500, (1 << 2) | 2);
 	L4_Word_t res = L4_ThreadControl(sysmem_tid, sysmem_tid,
 		*pager_p, *pager_p, (void *)-1);
 	if(res != 1) {
@@ -367,18 +368,6 @@ static L4_ThreadId_t start_sysmem(L4_ThreadId_t *pager_p)
 		abort();
 	}
 
-	/* basic introductions.
-	 * TODO: probe root UTCB area size with ThreadControl. 
-	 */
-	L4_Fpage_t root_kip = L4_FpageLog2(
-			(L4_Word_t)L4_GetKernelInterface(), PAGE_BITS),
-		root_utcb = L4_Fpage(L4_MyLocalId().raw & ~511u, 64 * 1024);
-	n = __sysmem_new_task(sysmem_tid, root_kip, root_utcb, L4_Myself().raw);
-	if(n != 0) goto sysmem_fail;
-	n = __sysmem_add_thread(sysmem_tid, L4_Myself().raw, pager_p->raw);
-	if(n != 0) goto sysmem_fail;
-
-	/* bequeath memoization consignment upon yonder auxiliary paginator. */
 	struct htable_iter it;
 	for(struct sysmem_page *p = htable_first(pages, &it);
 		p != NULL;
@@ -398,10 +387,6 @@ static L4_ThreadId_t start_sysmem(L4_ThreadId_t *pager_p)
 	/* from now, sysmem_pager_fn will only report segfaults for sysmem. */
 
 	return sysmem_tid;
-
-sysmem_fail:
-	printf("%s: can't configure sysmem: n=%d\n", __func__, n);
-	abort();
 }
 
 
@@ -454,6 +439,104 @@ static void move_to_sysmem(L4_ThreadId_t sysmem_tid, L4_ThreadId_t sm_pager)
 			send_phys_to_sysmem(sysmem_tid, false, addr);
 		}
 		if(L4_Size(fp) > remain) remain = 0; else remain -= L4_Size(fp);
+	}
+}
+
+
+static void pop_interrupt_to(L4_ThreadId_t dest)
+{
+	L4_ThreadId_t old_exh = L4_ExceptionHandler();
+	L4_Set_ExceptionHandler(dest);
+	asm volatile ("int $99" ::: "memory");
+	L4_Set_ExceptionHandler(old_exh);
+}
+
+
+static void rename_forbidden_thread(
+	L4_ThreadId_t sender, L4_MsgTag_t frame_tag, L4_Word_t *frame)
+{
+	sender = L4_GlobalIdOf(sender);
+	L4_ThreadId_t new_tid = L4_GlobalId(L4_ThreadNo(sender), 2);
+	L4_Word_t res = L4_ThreadControl(new_tid, L4_Myself(), L4_nilthread,
+		L4_nilthread, (void *)-1);
+	if(res != 1) {
+		printf("renaming threadctl failed, ec=%lu\n", L4_ErrorCode());
+		abort();
+	}
+	void *stk = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
+	L4_Word_t *sp = (L4_Word_t *)(stk + PAGE_SIZE - 16 + 4);
+	*(--sp) = L4_Myself().raw;
+	*(--sp) = 0xabadc0de;
+	L4_Start_SpIp(new_tid, (L4_Word_t)sp, (L4_Word_t)&pop_interrupt_to);
+	L4_MsgTag_t tag = L4_Receive_Timeout(new_tid, L4_TimePeriod(2000));
+	if(L4_IpcFailed(tag)) {
+		printf("%s: can't get exception message, ec=%lu\n",
+			__func__, L4_ErrorCode());
+		abort();
+	}
+	/* reply w/ old frame to resuscitate old context. */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = frame_tag.X.u }.raw);
+	L4_LoadMRs(1, frame_tag.X.u, frame);
+	tag = L4_Reply(new_tid);
+	if(L4_IpcFailed(tag)) {
+		printf("%s: frame reply failed, ec=%lu\n", __func__, L4_ErrorCode());
+		abort();
+	}
+
+	free(stk);
+}
+
+
+static int rename_helper_fn(void *param_ptr)
+{
+	for(;;) {
+		L4_ThreadId_t sender;
+		L4_MsgTag_t tag = L4_Wait(&sender);
+		if(L4_IpcFailed(tag)) {
+			printf("%s: ipc failed, ec=%#lx\n", __func__, L4_ErrorCode());
+			continue;
+		}
+
+		if((L4_Label(tag) & 0xfff0) == 0xffb0) {
+			L4_Word_t frame[64];
+			L4_StoreMRs(1, tag.X.u + tag.X.t, frame);
+			frame[0] += 2;	/* skip past int $nn */
+			rename_forbidden_thread(sender, tag, frame);
+		} else if(L4_Label(tag) == 0xf00d && L4_IsLocalId(sender)) {
+			/* call it quits. */
+			break;
+		} else {
+			printf("%s: sender=%lu:%lu, tag=%#lx unrecognized\n", __func__,
+				L4_ThreadNo(sender), L4_Version(sender), tag.raw);
+		}
+	}
+	return 0;
+}
+
+
+/* move the boot thread out of the forbidden range. this requires use of a
+ * helper thread, which we'll spawn first.
+ */
+static COLD void rename_first_threads(void)
+{
+	thrd_t helper;
+	int n = thrd_create(&helper, &rename_helper_fn, NULL);
+	if(n != thrd_success) {
+		printf("%s: thrd_create failed, n=%d\n", __func__, n);
+		abort();
+	}
+	pop_interrupt_to(thrd_tidof_NP(helper));
+
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xf00d }.raw);
+	L4_MsgTag_t tag = L4_Send(thrd_tidof_NP(helper));
+	if(L4_IpcFailed(tag)) {
+		printf("%s: helper quit msg failed, ec=%lu\n", __func__, L4_ErrorCode());
+		abort();
+	}
+	n = thrd_join(helper, NULL);
+	if(n != thrd_success) {
+		printf("%s: helper join failed, n=%d\n", __func__, n);
+		abort();
 	}
 }
 
@@ -580,13 +663,9 @@ static L4_ThreadId_t spawn_systask(L4_ThreadId_t s0, const char *name, ...)
 		L4_Address(utcb_area), L4_Size(utcb_area),
 		L4_Address(kip_area), L4_Size(kip_area), lowest);
 
+	assert(!L4_IsNilThread(uapi_tid));
 	/* create the task w/ all of that shit & what-not. */
 	L4_ThreadId_t new_tid = new_task(kip_area, utcb_area);
-	int n = __sysmem_new_task(sysmem_tid, kip_area, utcb_area, new_tid.raw);
-	if(n != 0) {
-		printf("sysmem::new_task failed, n=%d\n", n);
-		abort();
-	}
 
 	/* copy each page to a vmem buffer, then send_virt it over to the new
 	 * process at the correct address.
@@ -611,8 +690,8 @@ static L4_ThreadId_t spawn_systask(L4_ThreadId_t s0, const char *name, ...)
 				memset(copybuf, '\0', PAGE_SIZE);
 			}
 			uint16_t ret = 0;
-			n = __sysmem_send_virt(sysmem_tid, &ret, (L4_Word_t)copybuf,
-				new_tid.raw, ep->p_vaddr + off);
+			int n = __sysmem_send_virt(sysmem_tid, &ret,
+				(L4_Word_t)copybuf, new_tid.raw, ep->p_vaddr + off);
 			if(n != 0 || ret != 0) {
 				printf("sysmem::send_virt failed, n=%d, ret=%u\n", n, ret);
 				abort();
@@ -627,7 +706,7 @@ static L4_ThreadId_t spawn_systask(L4_ThreadId_t s0, const char *name, ...)
 	void *argpage = make_argpage(name, args, al);
 	va_end(al);
 	uint16_t ret;
-	n = __sysmem_send_virt(sysmem_tid, &ret, (L4_Word_t)argpage,
+	int n = __sysmem_send_virt(sysmem_tid, &ret, (L4_Word_t)argpage,
 		new_tid.raw, L4_Address(kip_area) - PAGE_SIZE);
 	if(n != 0 || ret != 0) {
 		printf("sysmem::send_virt failed on argpage, n=%d, ret=%u\n", n, ret);
@@ -806,6 +885,7 @@ int main(void)
 {
 	printf("hello, world!\n");
 	rt_thrd_init();
+	rename_first_threads();
 
 	L4_ThreadId_t s0 = L4_Pager(), sm_pager = L4_nilthread,
 		sysmem = start_sysmem(&sm_pager);

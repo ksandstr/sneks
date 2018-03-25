@@ -18,6 +18,8 @@
 #include <l4/ipc.h>
 
 #include "sysmem-defs.h"
+#include "proc-defs.h"
+#include "info-defs.h"
 
 
 static size_t hash_thrd(const void *key, void *priv);
@@ -26,6 +28,9 @@ static size_t hash_thrd(const void *key, void *priv);
 typedef darray(void *) tssdata;
 
 
+L4_ThreadId_t __uapi_tid;
+
+static once_flag init_once = ONCE_FLAG_INIT;
 static atomic_flag tss_meta_lock = ATOMIC_FLAG_INIT;
 static darray(tss_dtor_t) tss_meta = darray_new();
 static struct htable thrd_hash = HTABLE_INITIALIZER(
@@ -47,6 +52,16 @@ static bool cmp_thrd_t(const void *cand, void *key) {
 
 static void thrd_init(void)
 {
+	struct sneks_uapi_info ui;
+	int n = __info_uapi_block(L4_Pager(), &ui);
+	if(n != 0) {
+		fprintf(stderr, "%s: can't get UAPI info block, n=%d\n", __func__, n);
+		abort();
+	}
+	__uapi_tid.raw = ui.service;
+	assert(!L4_IsNilThread(__uapi_tid));
+	assert(L4_IsGlobalId(__uapi_tid));
+
 	/* track the first thread. */
 	struct thrd *t = malloc(sizeof *t);
 	*t = (struct thrd){ .tid = L4_Myself(), .alive = true };
@@ -178,27 +193,23 @@ static void wrapper_fn(thrd_start_t fn, void *ptr) {
 
 int thrd_create(thrd_t *thread, thrd_start_t fn, void *param_ptr)
 {
+	call_once(&init_once, &thrd_init);
+
 	struct thrd *t = malloc(sizeof *t);
 	if(t == NULL) return thrd_nomem;
 	t->stkbase = aligned_alloc(STKSIZE, STKSIZE);
 	if(t->stkbase == NULL) { free(t); return thrd_nomem; }
-	/* for now, use sequential IDs starting from the first thread to call
-	 * thrd_create(), i.e. main().
-	 */
-	static int next_tno = -1;
-	if(unlikely(next_tno < 0)) {
-		thrd_init();
-		next_tno = thrd_current() + 1;
+
+	int n = __proc_create_thread(__uapi_tid, &t->tid.raw);
+	if(n != 0) {
+		fprintf(stderr, "%s: Proc::create_thread failed, n=%d\n", __func__, n);
+		free(t->stkbase);
+		free(t);
+		return thrd_error;
 	}
-	t->tid = L4_GlobalId(next_tno++, 2);
 	t->alive = true;
 	t->res = -1;
 	t->joiner = NULL;
-	int n = __sysmem_add_thread(L4_Pager(), L4_Myself().raw, t->tid.raw);
-	if(n != 0) {
-		printf("%s: add_thread failed, n=%d\n", __func__, n);
-		goto err;
-	}
 
 	bool ok = htable_add(&thrd_hash, hash_thrd(t, NULL), t);
 	if(!ok) goto err;
@@ -216,7 +227,6 @@ int thrd_create(thrd_t *thread, thrd_start_t fn, void *param_ptr)
 		(L4_Word_t)&wrapper_fn, (L4_Word_t)p);
 	if(n != 0 || ec != 0) {
 		printf("%s: breath of life failed, n=%d, ec=%u\n", __func__, n, ec);
-		__sysmem_rm_thread(L4_Pager(), L4_Myself().raw, t->tid.raw);
 		goto err;
 	}
 
@@ -224,6 +234,7 @@ int thrd_create(thrd_t *thread, thrd_start_t fn, void *param_ptr)
 	return thrd_success;
 
 err:
+	__proc_remove_thread(__uapi_tid, t->tid.raw, L4_LocalIdOf(t->tid).raw);
 	free(t->stkbase);
 	free(t);
 	return thrd_error;
@@ -271,15 +282,16 @@ void thrd_exit(int res)
 		htable_del(&thrd_hash, int_hash(self), t);
 		free(t->stkbase);
 		free(t);
-		__sysmem_rm_thread(L4_Pager(), L4_Myself().raw, L4_Myself().raw);
+		__proc_remove_thread(__uapi_tid, L4_Myself().raw, L4_MyLocalId().raw);
 	} else {
 		/* (other side disposes @t.) */
 	}
 
 	/* this halts the thread. (but loop around it just in case.) */
 	for(;;) {
-		asm volatile ("int $0xd0");	/* die die die */
 		L4_Sleep(L4_Never);
+		L4_Set_ExceptionHandler(L4_nilthread);
+		asm volatile ("int $0xd0");	/* die die die */
 	}
 }
 
@@ -298,7 +310,7 @@ again:
 		if(res_p != NULL) *res_p = t->res;
 		free(t->stkbase);
 		free(t);
-		int n = __sysmem_rm_thread(L4_Pager(), L4_Myself().raw, tid.raw);
+		int n = __proc_remove_thread(__uapi_tid, tid.raw, L4_LocalIdOf(tid).raw);
 		return n == 0 ? thrd_success : thrd_error;
 	} else {
 		/* passive join. */

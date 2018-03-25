@@ -36,7 +36,7 @@ root: root.ld crt0.o main.o runtime.o thrd.o uapi.o mm.o ser_io.o \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 main.o: main.c sysmem-defs.h kmsg-defs.h rootserv-defs.h
-thrd.o: thrd.c sysmem-defs.h proc-defs.h
+thrd.o: thrd.c proc-defs.h
 uapi.o: uapi.c root-uapi-defs.h
 
 

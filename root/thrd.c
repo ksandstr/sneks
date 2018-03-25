@@ -13,7 +13,6 @@
 #include <l4/ipc.h>
 
 #include "defs.h"
-#include "sysmem-defs.h"
 #include "proc-defs.h"
 
 
@@ -111,15 +110,13 @@ int thrd_create(thrd_t *t, thrd_start_t fn, void *param_ptr)
 {
 	L4_ThreadId_t tid;
 
-	if(L4_IsNilThread(uapi_tid) || pidof_NP(L4_Myself()) == 0) {
+	if(L4_IsNilThread(uapi_tid)) {
 		static L4_Word_t utcb_base;
 		static int next_tid, next_utcb_slot = 1;
-		static L4_ThreadId_t s0_tid;
 		static bool first = true;
 		if(unlikely(first)) {
 			utcb_base = L4_MyLocalId().raw & ~511ul;
 			next_tid = L4_ThreadNo(L4_Myself()) + 1;
-			s0_tid = L4_Pager();
 			first = false;
 		}
 		tid = L4_GlobalId(next_tid, L4_Version(L4_Myself()));
@@ -128,16 +125,6 @@ int thrd_create(thrd_t *t, thrd_start_t fn, void *param_ptr)
 		if(r == 0) {
 			printf("%s: threadctl failed, ec=%#lx\n", __func__, L4_ErrorCode());
 			return thrd_error;
-		}
-		if(!L4_SameThreads(L4_Pager(), s0_tid)) {
-			int n = __sysmem_add_thread(L4_Pager(), L4_Myself().raw, tid.raw);
-			if(n != 0) {
-				printf("%s: Sysmem::add_thread failed, n=%d\n", __func__, n);
-				/* FIXME: clean up... or remove this bit as the interface goes
-				 * away
-				 */
-				abort();
-			}
 		}
 		next_utcb_slot++;
 		next_tid++;
@@ -218,7 +205,7 @@ again:
 	}
 
 	L4_ThreadId_t t_tid = thrd_tidof_NP(thrd);
-	if(!L4_IsNilThread(uapi_tid) && pidof_NP(L4_Myself()) != 0) {
+	if(!L4_IsNilThread(uapi_tid)) {
 		assert(L4_IsGlobalId(t_tid));
 		int n = __proc_remove_thread(uapi_tid, t_tid.raw,
 			L4_LocalIdOf(t_tid).raw);

@@ -15,7 +15,6 @@
 START_TEST(pidof_basic)
 {
 	plan_tests(5);
-	todo_start("impl is a stub");
 
 	ok1(pidof_NP(L4_Myself()) > 0);
 	ok1(pidof_NP(L4_Myself()) != pidof_NP(L4_Pager()));

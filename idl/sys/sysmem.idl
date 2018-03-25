@@ -10,33 +10,10 @@
 [StubPrefix(__sysmem), IfaceLabel(0xe001)]
 interface Sysmem: L4X2::FaultHandler
 {
-	/* system task creation. */
-	void new_task(
-		in L4X2::Fpage kip_area, in L4X2::Fpage utcb_area,
-		in L4X2::ThreadId first_thread);
-
-	/* add and remove threads from spaces. spaces are identified by any of
-	 * their member threads in the L4.X2 style. the first thread is added in
-	 * new_task(). removal of the last thread in a given space destroys that
-	 * space.
-	 *
-	 * when {add,rm}_thread are called from a non-root system task, sysmem
-	 * will call proxy ThreadControl to create the affected threads and set up
-	 * their scheduling and memory management as indicated by @space, or
-	 * delete them where relevant. when called from the root task, it only
-	 * informs systask that the affected TID is (no longer) associated with
-	 * @space.
-	 *
-	 * add_thread() fails with -EEXIST if @new_thread duplicates the same
-	 * thread number in any space. rm_thread() fails with -ENOENT if
-	 * @gone_thread isn't in @space (notably, @space = @gone_thread is valid
-	 * iff @gone_thread is valid.) both fail with -EINVAL if @space doesn't
-	 * reference an existing task.
+	/* systask lifecycle. new tasks are introduced as their IDs appear at the
+	 * interface, so the only lifecycle call is cleanup.
 	 */
-	void add_thread(in L4X2::ThreadId space, in L4X2::ThreadId new_thread)
-		raises(Posix::Errno);
-	void rm_thread(in L4X2::ThreadId space, in L4X2::ThreadId gone_thread)
-		raises(Posix::Errno);
+	void rm_task(in long systask_id);
 
 	/* physical memory transfer from root. the caller should continue by
 	 * sending one GrantItem of a page at most 1 << @size_log2 bytes long
