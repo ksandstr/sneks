@@ -2,6 +2,8 @@
 export CFGDIR:=$(abspath ..)
 include $(CFGDIR)/config.mk
 
+vpath %.idl $(CFGDIR)/idl/api
+
 LDFLAGS=-e_start -N -nostdlib -L $(MUNG_DIR)/user/lib/l4 -L $(CFGDIR)/lib
 # under -O3, GCC may produce SSE instructions in a runtime that doesn't align
 # the stack properly. FIXME: repair that, then remove -mstackrealign.
@@ -21,9 +23,9 @@ distclean:
 	@rm -rf .deps $(OUTPUTS)
 
 
-root: root.ld crt0.o main.o runtime.o mm.o ser_io.o \
+root: root.ld crt0.o main.o thrd.o runtime.o mm.o ser_io.o \
 		sysmem-common.o sysmem-client.o kmsg-common.o kmsg-service.o \
-		rootserv-service.o \
+		rootserv-service.o proc-common.o proc-client.o \
 		ccan-htable.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T root.ld \
@@ -32,6 +34,7 @@ root: root.ld crt0.o main.o runtime.o mm.o ser_io.o \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 main.o: main.c sysmem-defs.h kmsg-defs.h rootserv-defs.h
+thrd.o: thrd.c sysmem-defs.h proc-defs.h
 
 
 include $(wildcard .deps/*.d)

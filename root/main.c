@@ -38,7 +38,6 @@
 #include "defs.h"
 
 
-#define THREAD_STACK_SIZE 4096
 #define SYSMEM_SEED_MEGS 24
 
 
@@ -55,99 +54,6 @@ static size_t hash_sysmem_page(const void *key, void *priv) {
 static bool sysmem_page_cmp(const void *cand, void *key) {
 	const struct sysmem_page *p = cand;
 	return p->address == *(L4_Word_t *)key;
-}
-
-
-/* roottask's threading is implemented in terms of C11 threads, or a subset
- * thereof anyway.
- */
-typedef int (*thrd_start_t)(void *);
-
-
-static void thread_wrapper(L4_ThreadId_t parent)
-{
-	L4_Set_UserDefinedHandle(0);
-	L4_Set_ExceptionHandler(L4_nilthread);
-
-	L4_Accept(L4_UntypedWordsAcceptor);
-	L4_MsgTag_t tag = L4_Receive(parent);
-	if(L4_IpcFailed(tag)) {
-		printf("%s: init failed, ec=%#lx\n", __func__, L4_ErrorCode());
-		abort();
-	}
-	L4_Word_t fn, param;
-	L4_StoreMR(1, &fn);
-	L4_StoreMR(2, &param);
-	int retval = (*(thrd_start_t)fn)((void *)param);
-	printf("%s: thread exiting, retval=%d\n", __func__, retval);
-	/* FIXME: actually exit */
-	for(;;) L4_Sleep(L4_Never);
-}
-
-
-int thrd_create(thrd_t *t, thrd_start_t fn, void *param_ptr)
-{
-	static L4_Word_t utcb_base;
-	static int next_tid;
-
-	static bool first = true;
-	if(unlikely(first)) {
-		utcb_base = L4_MyLocalId().raw & ~511ul;
-		next_tid = L4_ThreadNo(L4_Myself()) + 1;
-		first = false;
-	}
-
-	L4_ThreadId_t tid = L4_GlobalId(next_tid++, 1);
-	*t = tid.raw;
-
-	void *stack = malloc(THREAD_STACK_SIZE);
-	L4_Word_t stk_top = ((L4_Word_t)stack + THREAD_STACK_SIZE - 16) & ~0xfu;
-#ifdef __SSE__
-	/* FIXME: see comment in mung testbench start_thread_long() */
-	stk_top += 4;
-#endif
-	L4_Word_t *sp = (L4_Word_t *)stk_top;
-	*(--sp) = L4_Myself().raw;
-	*(--sp) = 0xdeadb007;
-	stk_top = (L4_Word_t)sp;
-
-	static int next_utcb_slot = 1;
-	L4_Word_t r = L4_ThreadControl(tid, L4_Myself(), L4_Myself(),
-		L4_Pager(), (void *)(utcb_base + next_utcb_slot++ * 512));
-	if(r == 0) {
-		printf("%s: threadctl failed, ec=%#lx\n", __func__, L4_ErrorCode());
-		free(stack);
-		return thrd_error;
-	}
-
-	/* tests that we're no longer paged by sigma0, which is always assigned a
-	 * lower tno than any thread in root.
-	 */
-	if(L4_ThreadNo(L4_Pager()) > L4_ThreadNo(L4_Myself())) {
-		int n = __sysmem_add_thread(L4_Pager(), L4_Myself().raw, tid.raw);
-		if(n != 0) {
-			printf("%s: Sysmem::add_thread() failed, n=%d\n", __func__, n);
-			abort();
-		}
-	}
-
-	L4_Start_SpIp(tid, stk_top, (L4_Word_t)&thread_wrapper);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
-	L4_LoadMR(1, (L4_Word_t)fn);
-	L4_LoadMR(2, (L4_Word_t)param_ptr);
-	L4_MsgTag_t tag = L4_Send(tid);
-	if(L4_IpcFailed(tag)) {
-		printf("%s: init send failed, ec=%#lx\n", __func__, L4_ErrorCode());
-		/* FIXME: do a real error exit */
-		abort();
-	}
-
-	return thrd_success;
-}
-
-
-L4_ThreadId_t thrd_tidof_NP(thrd_t t) {
-	return (L4_ThreadId_t){ .raw = t };
 }
 
 
@@ -896,6 +802,7 @@ static void rs_panic(const char *str) {
 int main(void)
 {
 	printf("hello, world!\n");
+	rt_thrd_init();
 
 	L4_ThreadId_t s0 = L4_Pager(), sm_pager = L4_nilthread,
 		sysmem = start_sysmem(&sm_pager);

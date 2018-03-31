@@ -6,6 +6,7 @@
 	.align 16
 _start:
 	leal __stack, %esp
+	subl $80, %esp
 	pushl $__return_from_main
 	jmp main
 
@@ -15,7 +16,7 @@ __return_from_main:
 	int $1
 	jmp __return_from_main
 
-# two pages' worth should be well enough.
+# FIXME: get this from same source as main.c!
 	.bss
-	.space 8192
+	.space 4096
 __stack:
