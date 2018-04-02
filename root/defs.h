@@ -27,6 +27,7 @@ extern void send_phys_to_sysmem(
 /* from thrd.c */
 
 extern void rt_thrd_init(void);
+extern void rt_thrd_tests(void);
 
 /* FIXME: rename this to match the one in sys/crt (& later, userspace) */
 extern L4_ThreadId_t thrd_tidof_NP(thrd_t t);

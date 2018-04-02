@@ -820,6 +820,11 @@ int main(void)
 	put_sysinfo("kmsg:tid", 1, thrd_tidof_NP(kmsg).raw);
 	put_sysinfo("rootserv:tid", 1, L4_Myself().raw);
 
+	/* TODO: move these into a root internal test setup, like mung has with
+	 * "ktest".
+	 */
+	rt_thrd_tests();
+
 	/* run systest if present. */
 	L4_ThreadId_t systest_tid = spawn_systask(s0, "systest", NULL);
 	if(!L4_IsNilThread(systest_tid)) {

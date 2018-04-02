@@ -253,3 +253,35 @@ COLD void rt_thrd_init(void)
 	int dummy;
 	rt_thread_ctor(rt_thread_in(&dummy));
 }
+
+
+/* selftests below this line. */
+
+COLD int return_one_fn(void *param_ptr) {
+	return 1;
+}
+
+
+/* TODO: convert this to a bunch of tap tests, move into a formal test harness
+ * for root-internal stuff. (like mung has "ktest".)
+ */
+COLD void rt_thrd_tests(void)
+{
+	printf("rt_thrd self-test (uapi_tid=%lu:%lu)...\n",
+		L4_ThreadNo(uapi_tid), L4_Version(uapi_tid));
+
+	/* basic create and join, seven times over. */
+	int total = 0;
+	for(int i=0; i < 7; i++) {
+		thrd_t t;
+		int n = thrd_create(&t, &return_one_fn, NULL);
+		assert(n == thrd_success);
+		int res = -1;
+		n = thrd_join(t, &res);
+		assert(n == thrd_success);
+		total += res;
+	}
+	assert(total == 7);
+
+	printf("rt_thrd self-test OK!\n");
+}
