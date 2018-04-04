@@ -47,6 +47,9 @@ struct sysmem_page {
 };
 
 
+static L4_KernelInterfacePage_t *the_kip;
+
+
 static size_t hash_sysmem_page(const void *key, void *priv) {
 	const struct sysmem_page *p = key;
 	return word_hash(p->address);
@@ -285,7 +288,7 @@ static L4_BootRec_t *find_boot_module(
 
 static L4_ThreadId_t start_sysmem(L4_ThreadId_t *pager_p)
 {
-	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	L4_KernelInterfacePage_t *kip = the_kip;
 	L4_BootRec_t *rec = find_boot_module(kip, "sysmem", NULL);
 	if(rec == NULL) {
 		printf("can't find sysmem's module! was it loaded?\n");
@@ -614,7 +617,7 @@ static L4_ThreadId_t spawn_systask(L4_ThreadId_t s0, const char *name, ...)
 	L4_ThreadId_t sysmem_tid = L4_Pager();
 	assert(!L4_SameThreads(sysmem_tid, s0));
 
-	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	L4_KernelInterfacePage_t *kip = the_kip;
 	char *rest = NULL;
 	L4_BootRec_t *mod = find_boot_module(kip, name, &rest);
 	printf("name=`%s', mod=%p, rest=`%s'\n", name, mod, rest);
@@ -881,9 +884,49 @@ static void rs_panic(const char *str) {
 }
 
 
+static bool is_good_utcb(void *ptr)
+{
+	const L4_ThreadId_t dump_tid = L4_GlobalId(1000, 7);
+	L4_Word_t res = L4_ThreadControl(dump_tid, L4_Myself(),
+		L4_Pager(), L4_Myself(), ptr);
+	if(res == 1) {
+		res = L4_ThreadControl(dump_tid, L4_nilthread, L4_nilthread,
+			L4_nilthread, (void *)-1);
+		if(res != 1) {
+			printf("can't delete dump_tid=%lu:%lu, ec=%lu\n",
+				L4_ThreadNo(dump_tid), L4_Version(dump_tid), L4_ErrorCode());
+			abort();
+		}
+		return true;
+	} else if(L4_ErrorCode() != 6) {
+		printf("%s: can't probe ptr=%p: ec=%lu?\n", __func__,
+			ptr, L4_ErrorCode());
+	}
+	return false;
+}
+
+
+static L4_Fpage_t probe_root_utcb_area(void)
+{
+	int u_align = 1 << L4_UtcbAlignmentLog2(the_kip),
+		u_size = L4_UtcbSize(the_kip);
+
+	L4_Word_t base = L4_MyLocalId().raw & ~(u_align - 1),
+		bad = base + PAGE_SIZE, good = base + u_size;
+	while(is_good_utcb((void *)bad)) {
+		good = bad;
+		bad += bad - base;
+	}
+	if(is_good_utcb((void *)(bad - u_size))) good = bad;
+
+	return L4_Fpage(base, good - base);
+}
+
+
 int main(void)
 {
 	printf("hello, world!\n");
+	the_kip = L4_GetKernelInterface();
 	rt_thrd_init();
 	rename_first_threads();
 
@@ -892,12 +935,9 @@ int main(void)
 	move_to_sysmem(sysmem, sm_pager);
 
 	uapi_init();
-	/* FIXME: probe the root_utcb limit with ThreadControl.
-	 * FIXME: get KIP length from KIP.
-	 */
-	L4_Fpage_t root_kip = L4_FpageLog2(
-			(L4_Word_t)L4_GetKernelInterface(), PAGE_BITS),
-		root_utcb = L4_Fpage(L4_MyLocalId().raw & ~511u, 64 * 1024);
+	L4_Fpage_t root_kip = L4_FpageLog2((L4_Word_t)the_kip,
+			L4_KipAreaSizeLog2(the_kip)),
+		root_utcb = probe_root_utcb_area();
 	int n = add_task(SNEKS_MIN_SYSID, root_kip, root_utcb);
 	if(n < 0) {
 		printf("can't create root task, n=%d\n", n);
