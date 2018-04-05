@@ -260,16 +260,15 @@ void thrd_exit(int res)
 	/* set up for passive exit. */
 	atomic_store(&t->res, res);
 	atomic_store(&t->alive, false);
-	if(t->joiner != NULL) {
+	struct thrd *joiner = atomic_load(&t->joiner);
+	if(joiner != NULL) {
 		/* active exit happened instead. */
 		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
 		L4_LoadMR(1, res);
-		L4_Send(t->joiner->tid);
-		uintptr_t stkbase = (uintptr_t)t & ~(STKSIZE - 1);
-		free((void *)stkbase);
+		L4_Send(joiner->tid);
 		__proc_remove_thread(__uapi_tid, L4_Myself().raw, L4_MyLocalId().raw);
 	} else {
-		/* (other side disposes @t.) */
+		/* (other side calls Proc::remove_thread.) */
 	}
 
 	/* this halts the thread. (but loop around it just in case.) */
@@ -289,25 +288,26 @@ int thrd_join(thrd_t thr, int *res_p)
 	}
 
 	L4_ThreadId_t tid = t->tid;
-again:
+	uintptr_t stkbase = (uintptr_t)t & ~(STKSIZE - 1);
 	if(!atomic_load(&t->alive)) {
+active:
 		/* active join. */
 		if(res_p != NULL) *res_p = t->res;
-		uintptr_t stkbase = (uintptr_t)t & ~(STKSIZE - 1);
 		free((void *)stkbase);
 		int n = __proc_remove_thread(__uapi_tid, tid.raw, L4_LocalIdOf(tid).raw);
 		return n == 0 ? thrd_success : thrd_error;
 	} else {
 		/* passive join. */
-		atomic_store(&t->joiner, (struct thrd *)thrd_current());
-		if(!atomic_load(&t->alive)) goto again;
-		/* (unlock here.) */
+		int dummy;
+		atomic_store(&t->joiner, thrd_in_stack(&dummy));
+		if(!atomic_load(&t->alive)) goto active;
 		L4_Accept(L4_UntypedWordsAcceptor);
 		L4_MsgTag_t tag = L4_Receive(tid);
 		if(L4_IpcFailed(tag)) return thrd_error;
 		else {
 			L4_Word_t resw; L4_StoreMR(1, &resw);
 			if(res_p != NULL) *res_p = resw;
+			free((void *)stkbase);
 			return thrd_success;
 		}
 	}
