@@ -18,5 +18,6 @@ __return_from_main:
 
 # FIXME: get this from same source as main.c!
 	.bss
+	.align 4096
 	.space 4096
 __stack:
