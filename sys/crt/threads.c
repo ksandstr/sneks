@@ -72,10 +72,10 @@ struct thrd *thrd_from_tid(L4_ThreadId_t tid)
 
 	/* read thread stack pointer. */
 	L4_Word_t dummy, sp = 0;
-	L4_ThreadId_t tid_out;
-	L4_ExchangeRegisters(tid, 1 << 9, /* d-eliver */
+	L4_ThreadId_t dummy_tid, tid_out;
+	tid_out = L4_ExchangeRegisters(tid, 1 << 9, /* d-eliver */
 		0, 0, 0, 0, L4_nilthread, &dummy, &sp, &dummy, &dummy, &dummy,
-		&tid_out);
+		&dummy_tid);
 	if(L4_IsNilThread(tid_out)) return NULL;
 	assert(sp >= 0x10000);
 	struct thrd *t = thrd_in_stack((void *)sp);
