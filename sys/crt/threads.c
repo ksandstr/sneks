@@ -17,7 +17,6 @@
 #include <l4/thread.h>
 #include <l4/ipc.h>
 
-#include "sysmem-defs.h"
 #include "proc-defs.h"
 #include "info-defs.h"
 
@@ -218,17 +217,11 @@ int thrd_create(thrd_t *thread, thrd_start_t fn, void *param_ptr)
 #ifdef __SSE__
 	top += 4;
 #endif
-	L4_Word_t *p = (L4_Word_t *)top;
-	*(--p) = (L4_Word_t)param_ptr;
-	*(--p) = (L4_Word_t)fn;
-	*(--p) = 0xfeedf007;	/* why else would it be in your mouth? */
-	uint16_t ec = 0;
-	n = __sysmem_breath_of_life(L4_Pager(), &ec, t->tid.raw,
-		(L4_Word_t)&wrapper_fn, (L4_Word_t)p);
-	if(n != 0 || ec != 0) {
-		printf("%s: breath of life failed, n=%d, ec=%u\n", __func__, n, ec);
-		goto err;
-	}
+	L4_Word_t *sp = (L4_Word_t *)top;
+	*(--sp) = (L4_Word_t)param_ptr;
+	*(--sp) = (L4_Word_t)fn;
+	*(--sp) = 0xfeedf007;	/* why else would it be in your mouth? */
+	L4_Start_SpIp(t->tid, (L4_Word_t)sp, (L4_Word_t)&wrapper_fn);
 
 	*thread = L4_ThreadNo(t->tid);
 	return thrd_success;
