@@ -5,7 +5,6 @@
 
 #include <ccan/list/list.h>
 #include <l4/types.h>
-#include <l4/thread.h>
 
 
 #define STKSIZE (PAGE_SIZE * 2)
@@ -18,10 +17,11 @@ struct mtx_wait {
 };
 
 
+/* stkbase is address of thrd & ~(STKSIZE - 1). */
 struct thrd
 {
+	int magic;
 	L4_ThreadId_t tid;	/* global */
-	void *stkbase;
 	struct mtx_wait mw;
 
 	/* exit/join syncing. */
@@ -34,6 +34,8 @@ struct thrd
 /* convenience extras */
 extern struct thrd *thrd_from_tid(L4_ThreadId_t tid);
 extern L4_ThreadId_t thrd_to_tid(thrd_t t);
+
+#define thrd_tidof_NP(t) thrd_to_tid((t))
 
 
 #endif

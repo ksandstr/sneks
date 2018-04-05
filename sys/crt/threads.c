@@ -6,7 +6,6 @@
 #include <threads.h>
 #include <ccan/likely/likely.h>
 #include <ccan/darray/darray.h>
-#include <ccan/htable/htable.h>
 #include <ccan/list/list.h>
 
 #include <sneks/mm.h>
@@ -21,8 +20,7 @@
 #include "info-defs.h"
 
 
-static size_t hash_thrd(const void *key, void *priv);
-
+#define SYSCRT_THREAD_MAGIC 0xbea7deaf	/* not a drummer */
 
 typedef darray(void *) tssdata;
 
@@ -32,25 +30,30 @@ L4_ThreadId_t __uapi_tid;
 static once_flag init_once = ONCE_FLAG_INIT;
 static atomic_flag tss_meta_lock = ATOMIC_FLAG_INIT;
 static darray(tss_dtor_t) tss_meta = darray_new();
-static struct htable thrd_hash = HTABLE_INITIALIZER(
-	thrd_hash, &hash_thrd, NULL);
 
 
-static size_t hash_thrd(const void *key, void *priv) {
-	const struct thrd *t = key;
-	return int_hash(L4_ThreadNo(t->tid));
+static void thread_ctor(struct thrd *t, L4_ThreadId_t tid)
+{
+	*t = (struct thrd){
+		.magic = SYSCRT_THREAD_MAGIC,
+		.alive = true, .tid = tid,
+	};
 }
 
 
-static bool cmp_thrd_t(const void *cand, void *key) {
-	thrd_t *k = key;
-	const struct thrd *c = cand;
-	return L4_ThreadNo(c->tid) == *k;
+static struct thrd *thrd_in_stack(void *stkptr)
+{
+	uintptr_t base = (uintptr_t)stkptr & ~(STKSIZE - 1),
+		ctx = (base + STKSIZE - sizeof(struct thrd)) & ~0x3f;
+	return (struct thrd *)ctx;
 }
 
 
 static void thrd_init(void)
 {
+	struct thrd *t = thrd_in_stack(&t);
+	thread_ctor(t, L4_Myself());
+
 	struct sneks_uapi_info ui;
 	int n = __info_uapi_block(L4_Pager(), &ui);
 	if(n != 0) {
@@ -60,29 +63,33 @@ static void thrd_init(void)
 	__uapi_tid.raw = ui.service;
 	assert(!L4_IsNilThread(__uapi_tid));
 	assert(L4_IsGlobalId(__uapi_tid));
-
-	/* track the first thread. */
-	struct thrd *t = malloc(sizeof *t);
-	*t = (struct thrd){ .tid = L4_Myself(), .alive = true };
-	htable_add(&thrd_hash, hash_thrd(t, NULL), t);
 }
 
 
 struct thrd *thrd_from_tid(L4_ThreadId_t tid)
 {
 	if(L4_IsNilThread(tid)) return NULL;
-	thrd_t thr = L4_ThreadNo(L4_GlobalIdOf(tid));
 
-	/* FIXME: protect thrd_hash from concurrency! */
-	return htable_get(&thrd_hash, int_hash(thr), &cmp_thrd_t, &thr);
+	/* read thread stack pointer. */
+	L4_Word_t dummy, sp = 0;
+	L4_ThreadId_t tid_out;
+	L4_ExchangeRegisters(tid, 1 << 9, /* d-eliver */
+		0, 0, 0, 0, L4_nilthread, &dummy, &sp, &dummy, &dummy, &dummy,
+		&tid_out);
+	if(L4_IsNilThread(tid_out)) return NULL;
+	assert(sp >= 0x10000);
+	struct thrd *t = thrd_in_stack((void *)sp);
+	if(t->magic != SYSCRT_THREAD_MAGIC) t = NULL;
+	return t;
 }
 
 
 L4_ThreadId_t thrd_to_tid(thrd_t thr)
 {
-	/* FIXME: protect thrd_hash from concurrency! */
-	struct thrd *t = htable_get(&thrd_hash, int_hash(thr), &cmp_thrd_t, &thr);
-	return t != NULL ? t->tid : L4_nilthread;
+	assert(sizeof(thrd_t) == sizeof(struct thrd *));
+	struct thrd *t = (struct thrd *)thr;
+	assert(t->magic == SYSCRT_THREAD_MAGIC);
+	return t->tid;
 }
 
 
@@ -181,7 +188,8 @@ void tss_set(tss_t key, void *ptr)
 /* threads */
 
 thrd_t thrd_current(void) {
-	return L4_ThreadNo(L4_Myself());
+	int foo;
+	return (thrd_t)thrd_in_stack(&foo);
 }
 
 
@@ -194,26 +202,19 @@ int thrd_create(thrd_t *thread, thrd_start_t fn, void *param_ptr)
 {
 	call_once(&init_once, &thrd_init);
 
-	struct thrd *t = malloc(sizeof *t);
-	if(t == NULL) return thrd_nomem;
-	t->stkbase = aligned_alloc(STKSIZE, STKSIZE);
-	if(t->stkbase == NULL) { free(t); return thrd_nomem; }
+	void *stkbase = aligned_alloc(STKSIZE, STKSIZE);
+	if(stkbase == NULL) return thrd_nomem;
+	struct thrd *t = thrd_in_stack(stkbase);
+	thread_ctor(t, L4_nilthread);
 
 	int n = __proc_create_thread(__uapi_tid, &t->tid.raw);
 	if(n != 0) {
 		fprintf(stderr, "%s: Proc::create_thread failed, n=%d\n", __func__, n);
-		free(t->stkbase);
-		free(t);
+		free(stkbase);
 		return thrd_error;
 	}
-	t->alive = true;
-	t->res = -1;
-	t->joiner = NULL;
 
-	bool ok = htable_add(&thrd_hash, hash_thrd(t, NULL), t);
-	if(!ok) goto err;
-
-	uintptr_t top = ((uintptr_t)t->stkbase + STKSIZE - 16) & ~0xfu;
+	uintptr_t top = ((L4_Word_t)t - 16) & ~0xfu;
 #ifdef __SSE__
 	top += 4;
 #endif
@@ -223,14 +224,8 @@ int thrd_create(thrd_t *thread, thrd_start_t fn, void *param_ptr)
 	*(--sp) = 0xfeedf007;	/* why else would it be in your mouth? */
 	L4_Start_SpIp(t->tid, (L4_Word_t)sp, (L4_Word_t)&wrapper_fn);
 
-	*thread = L4_ThreadNo(t->tid);
+	*thread = (thrd_t)t;
 	return thrd_success;
-
-err:
-	__proc_remove_thread(__uapi_tid, t->tid.raw, L4_LocalIdOf(t->tid).raw);
-	free(t->stkbase);
-	free(t);
-	return thrd_error;
 }
 
 
@@ -260,10 +255,8 @@ void thrd_exit(int res)
 
 	L4_Set_UserDefinedHandle(res);
 
-	/* TODO: protect thrd_hash with a mutex */
-	thrd_t self = thrd_current();
-	struct thrd *t = htable_get(&thrd_hash, int_hash(self),
-		&cmp_thrd_t, &self);
+	struct thrd *t = thrd_in_stack(&res);
+	assert(t->magic == SYSCRT_THREAD_MAGIC);
 	/* set up for passive exit. */
 	atomic_store(&t->res, res);
 	atomic_store(&t->alive, false);
@@ -272,9 +265,8 @@ void thrd_exit(int res)
 		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
 		L4_LoadMR(1, res);
 		L4_Send(t->joiner->tid);
-		htable_del(&thrd_hash, int_hash(self), t);
-		free(t->stkbase);
-		free(t);
+		uintptr_t stkbase = (uintptr_t)t & ~(STKSIZE - 1);
+		free((void *)stkbase);
 		__proc_remove_thread(__uapi_tid, L4_Myself().raw, L4_MyLocalId().raw);
 	} else {
 		/* (other side disposes @t.) */
@@ -291,26 +283,23 @@ void thrd_exit(int res)
 
 int thrd_join(thrd_t thr, int *res_p)
 {
-	/* TODO: protect thrd_hash with a mutex */
-	struct thrd *t = htable_get(&thrd_hash, int_hash(thr), &cmp_thrd_t, &thr);
-	if(t == NULL || t->joiner != NULL) return thrd_error;
+	struct thrd *t = (struct thrd *)thr;
+	if(t->magic != SYSCRT_THREAD_MAGIC || t->joiner != NULL) {
+		return thrd_error;
+	}
+
 	L4_ThreadId_t tid = t->tid;
 again:
 	if(!atomic_load(&t->alive)) {
 		/* active join. */
-		htable_del(&thrd_hash, int_hash(thr), t);
-		/* (unlock here.) */
 		if(res_p != NULL) *res_p = t->res;
-		free(t->stkbase);
-		free(t);
+		uintptr_t stkbase = (uintptr_t)t & ~(STKSIZE - 1);
+		free((void *)stkbase);
 		int n = __proc_remove_thread(__uapi_tid, tid.raw, L4_LocalIdOf(tid).raw);
 		return n == 0 ? thrd_success : thrd_error;
 	} else {
 		/* passive join. */
-		thrd_t self = thrd_current();
-		t->joiner = htable_get(&thrd_hash, int_hash(self),
-			&cmp_thrd_t, &self);
-		assert(t->joiner != NULL);
+		atomic_store(&t->joiner, (struct thrd *)thrd_current());
 		if(!atomic_load(&t->alive)) goto again;
 		/* (unlock here.) */
 		L4_Accept(L4_UntypedWordsAcceptor);

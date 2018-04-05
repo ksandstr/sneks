@@ -8,8 +8,7 @@ IDL_OBJS:=$(patsubst %.idl,%-common.o,$(IDL_FILES)) \
 
 LIB_SRC:=$(wildcard *.c)
 LIB_OBJS:=crt0.o $(IDL_OBJS) $(LIB_SRC:.c=.o) \
-	mung-rangealloc.o mung-slab.o \
-	ccan-htable.o
+	mung-rangealloc.o mung-slab.o
 
 vpath %.idl $(CFGDIR)/idl/api
 
