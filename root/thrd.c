@@ -83,20 +83,14 @@ void thrd_exit(int res)
 }
 
 
-static void thread_wrapper(L4_ThreadId_t parent)
+static void thread_wrapper(L4_Word_t fn, L4_Word_t param)
 {
+	/* TODO: do something useful with these. TSD and reporting of math faults,
+	 * for example.
+	 */
 	L4_Set_UserDefinedHandle(0);
 	L4_Set_ExceptionHandler(L4_nilthread);
 
-	L4_Accept(L4_UntypedWordsAcceptor);
-	L4_MsgTag_t tag = L4_Receive(parent);
-	if(L4_IpcFailed(tag)) {
-		printf("%s: init failed, ec=%#lx\n", __func__, L4_ErrorCode());
-		abort();
-	}
-	L4_Word_t fn, param;
-	L4_StoreMR(1, &fn);
-	L4_StoreMR(2, &param);
 	int retval = (*(thrd_start_t)fn)((void *)param);
 	thrd_exit(retval);
 }
@@ -145,20 +139,10 @@ int thrd_create(thrd_t *t, thrd_start_t fn, void *param_ptr)
 	stk_top += 4;
 #endif
 	L4_Word_t *sp = (L4_Word_t *)stk_top;
-	*(--sp) = L4_Myself().raw;
+	*(--sp) = (L4_Word_t)param_ptr;
+	*(--sp) = (L4_Word_t)fn;
 	*(--sp) = 0xdeadb007;
-	stk_top = (L4_Word_t)sp;
-
-	L4_Start_SpIp(tid, stk_top, (L4_Word_t)&thread_wrapper);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
-	L4_LoadMR(1, (L4_Word_t)fn);
-	L4_LoadMR(2, (L4_Word_t)param_ptr);
-	L4_MsgTag_t tag = L4_Send(tid);
-	if(L4_IpcFailed(tag)) {
-		printf("%s: init send failed, ec=%#lx\n", __func__, L4_ErrorCode());
-		/* FIXME: do a real error exit */
-		abort();
-	}
+	L4_Start_SpIp(tid, (L4_Word_t)sp, (L4_Word_t)&thread_wrapper);
 
 	*t = tid.raw;
 	return thrd_success;
