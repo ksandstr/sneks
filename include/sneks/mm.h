@@ -4,6 +4,8 @@
 
 #include <string.h>
 #include <ccan/minmax/minmax.h>
+#include <l4/types.h>
+#include <sneks/bitops.h>
 
 
 #define PAGE_BITS 12
@@ -29,6 +31,12 @@
 		_A < _E; \
 		(_addr) = (_A += (1 << _S)), \
 			(_sizelog2) = _S = min_t(unsigned, ffsl(_A) - 1, MSB(_E - _A)))
+
+
+/* upper bound of the number of iterations for_page_range() runs for the given
+ * range.
+ */
+#define page_range_bound(start, end) ((MSB((end) - (start)) - PAGE_BITS) * 2)
 
 
 #endif

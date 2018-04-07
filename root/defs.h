@@ -25,7 +25,7 @@ extern void mm_enable_sysmem(L4_ThreadId_t sysmem_tid);
 extern L4_KernelInterfacePage_t *the_kip;
 
 extern void send_phys_to_sysmem(
-	L4_ThreadId_t sysmem_tid, bool self, L4_Word_t addr);
+	L4_ThreadId_t sysmem_tid, bool self, L4_Fpage_t fp);
 
 
 /* from thrd.c */

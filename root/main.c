@@ -183,16 +183,15 @@ static void add_sysmem_pages(struct htable *ht, L4_Word_t start, L4_Word_t end)
 /* adds the page to root's space if @self is true; or to either sysmem's free
  * memory pool or its set of reserved pages otherwise.
  */
-void send_phys_to_sysmem(L4_ThreadId_t sysmem_tid, bool self, L4_Word_t addr)
+void send_phys_to_sysmem(L4_ThreadId_t sysmem_tid, bool self, L4_Fpage_t pg)
 {
 	int n = __sysmem_send_phys(sysmem_tid,
 		self ? L4_Myself().raw : L4_nilthread.raw,
-		addr >> PAGE_BITS, PAGE_BITS);
+		L4_Address(pg) >> PAGE_BITS, L4_SizeLog2(pg));
 	if(n != 0) {
 		printf("%s: ipc fail, n=%d\n", __func__, n);
 		abort();
 	}
-	L4_Fpage_t pg = L4_FpageLog2(addr, PAGE_BITS);
 	L4_Set_Rights(&pg, L4_FullyAccessible);
 	L4_GrantItem_t gi = L4_GrantItem(pg, 0);
 	L4_Accept(L4_UntypedWordsAcceptor);
@@ -379,7 +378,7 @@ static L4_ThreadId_t start_sysmem(L4_ThreadId_t *pager_p)
 		L4_Word_t addr = atomic_load(&p->address);
 		if(addr == 0) continue;
 
-		send_phys_to_sysmem(sysmem_tid, false, addr);
+		send_phys_to_sysmem(sysmem_tid, false, L4_FpageLog2(addr, PAGE_BITS));
 		if(atomic_exchange(&p->address, 0) != 0) {
 			htable_delval(pages, &it);
 			free(p);
@@ -416,7 +415,7 @@ static void move_to_sysmem(L4_ThreadId_t sysmem_tid, L4_ThreadId_t sm_pager)
 		addr < (L4_Word_t)&_end;
 		addr += PAGE_SIZE)
 	{
-		send_phys_to_sysmem(sysmem_tid, true, addr);
+		send_phys_to_sysmem(sysmem_tid, true, L4_FpageLog2(addr, PAGE_BITS));
 	}
 	mm_enable_sysmem(sysmem_tid);
 
@@ -435,12 +434,7 @@ static void move_to_sysmem(L4_ThreadId_t sysmem_tid, L4_ThreadId_t sm_pager)
 			}
 		}
 		printf("adding %#lx:%#lx to sysmem\n", L4_Address(fp), L4_Size(fp));
-		for(L4_Word_t addr = L4_Address(fp);
-			addr < L4_Address(fp) + L4_Size(fp);
-			addr += PAGE_SIZE)
-		{
-			send_phys_to_sysmem(sysmem_tid, false, addr);
-		}
+		send_phys_to_sysmem(sysmem_tid, false, fp);
 		if(L4_Size(fp) > remain) remain = 0; else remain -= L4_Size(fp);
 	}
 }
@@ -620,17 +614,29 @@ static L4_ThreadId_t spawn_systask(L4_ThreadId_t s0, const char *name, ...)
 	L4_KernelInterfacePage_t *kip = the_kip;
 	char *rest = NULL;
 	L4_BootRec_t *mod = find_boot_module(kip, name, &rest);
-	printf("name=`%s', mod=%p, rest=`%s'\n", name, mod, rest);
+	// printf("name=`%s', mod=%p, rest=`%s'\n", name, mod, rest);
 	char **args = break_argument_list(rest);
 
 	/* get the boot module's pages from sigma0. */
-	L4_Word_t start_addr = L4_Module_Start(mod);
-	int num_mod_pages = (L4_Module_Size(mod) + PAGE_MASK) >> PAGE_BITS;
-	L4_Fpage_t mod_pages[num_mod_pages];
-	for(int i=0; i < num_mod_pages; i++) {
-		mod_pages[i] = L4_Sigma0_GetPage(s0,
-			L4_FpageLog2(start_addr + i * PAGE_SIZE, PAGE_BITS));
+	L4_Word_t start_addr = L4_Module_Start(mod), mod_size = L4_Module_Size(mod);
+	int sz, np = 0,
+		max_pages = page_range_bound(start_addr, start_addr + mod_size);
+	L4_Word_t addr;
+	L4_Fpage_t mod_pages[max_pages];
+	for_page_range(start_addr, start_addr + mod_size, addr, sz) {
+		// printf("  %#lx:%#lx\n", addr, 1ul << sz);
+		assert(np < max_pages);
+		mod_pages[np] = L4_FpageLog2(addr, sz);
+		L4_Set_Rights(&mod_pages[np], L4_FullyAccessible);
+		L4_Fpage_t res = L4_Sigma0_GetPage(s0, mod_pages[np]);
+		if(L4_IsNilFpage(res)) {
+			printf("%s: sigma0 didn't return page for %#lx:%#lx\n",
+				__func__, L4_Address(mod_pages[np]), L4_Size(mod_pages[np]));
+			abort();
+		}
+		np++;
 	}
+	assert(np <= max_pages);
 
 	const Elf32_Ehdr *ee = (void *)start_addr;
 	if(memcmp(ee->e_ident, ELFMAG, SELFMAG) != 0) {
@@ -728,9 +734,9 @@ static L4_ThreadId_t spawn_systask(L4_ThreadId_t s0, const char *name, ...)
 	/* toss the module pages into sysmem as spare RAM. no need for 'em
 	 * anymore.
 	 */
-	for(int i=0; i < num_mod_pages; i++) {
+	for(int i=0; i < np; i++) {
 		if(L4_IsNilFpage(mod_pages[i])) continue;
-		send_phys_to_sysmem(sysmem_tid, false, L4_Address(mod_pages[i]));
+		send_phys_to_sysmem(sysmem_tid, false, mod_pages[i]);
 	}
 
 	free(args);

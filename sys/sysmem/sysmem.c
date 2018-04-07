@@ -834,6 +834,57 @@ static void impl_rm_task(int32_t pid)
 }
 
 
+static void add_free_page(struct p_page *pg)
+{
+	/* "any old RAM" mode */
+	struct list_head *list;
+	/* recognize sysmem's own pages, add them to the reserved list. */
+	extern char _start, _end;
+	L4_Word_t top = ((L4_Word_t)&_end + PAGE_MASK) & ~PAGE_MASK,
+		phys_addr = pg->address;
+	if(phys_addr >= (L4_Word_t)&_start && phys_addr < top) {
+		/* exclude early memory from add_first_mem(), since it's already
+		 * tracked.
+		 */
+		if(phys_addr >= (L4_Word_t)&first_mem[0]
+			&& phys_addr < (L4_Word_t)&first_mem[sizeof first_mem])
+		{
+			list = NULL;
+		} else {
+			/* early memory (program image) not within first_mem[]. */
+			list = &reserved_page_list;
+		}
+	} else {
+		list = &free_page_list;
+	}
+
+	if(list != NULL) {
+		list_add_tail(list, &pg->link);
+		if(list == &free_page_list
+			&& ++num_free_pages > 60 && !repl_enable)
+		{
+			repl_enable = true;
+		}
+	}
+}
+
+
+static void add_task_page(struct systask *task, struct p_page *pg)
+{
+	/* RAM for things loaded as boot modules. */
+	L4_Word_t phys_addr = pg->address;
+	struct l_page *lp = alloc_struct(l_page);
+	lp->l_addr = phys_addr;
+	lp->p_addr = phys_addr;
+	put_lpage(task, lp);
+	pg->owner = lp;
+	pg->age = 1;
+	list_add_tail(&active_page_list, &pg->link);
+	task->min_fault = min_t(L4_Word_t, task->min_fault, phys_addr & ~PAGE_MASK);
+	task->brk = max_t(L4_Word_t, task->brk, phys_addr | PAGE_MASK);
+}
+
+
 static void impl_send_phys(
 	L4_Word_t dest_raw, L4_Word_t frame_num, int size_log2)
 {
@@ -849,23 +900,9 @@ static void impl_send_phys(
 		task = get_task(dest_pid);
 	}
 
-	/* TODO: handle arbitrary sizes of page. this is unquestionably a good
-	 * thing to have; it'll make very large initializations happen in the
-	 * blink of an eye. but it's still for the "four gigs of physical RAM"
-	 * series, way out there.
-	 */
-	if(size_log2 != PAGE_BITS) {
-		printf("send_phys can't hack this size_log2\n");
-		return;
-	}
-
-	struct p_page *pg = alloc_struct(p_page);
-	pg->owner = NULL;
-	L4_Word_t phys_addr = frame_num << PAGE_BITS;
-	pg->address = phys_addr;
-
 	L4_ThreadId_t sender = muidl_get_sender();
-	L4_Accept(L4_MapGrantItems(L4_FpageLog2(phys_addr, size_log2)));
+	L4_Accept(L4_MapGrantItems(
+		L4_FpageLog2(frame_num << PAGE_BITS, size_log2)));
 	L4_MsgTag_t tag = L4_Receive_Timeout(sender, L4_TimePeriod(5 * 1000));
 	while(interim_fault(tag, sender)) {
 		/* NOTE: this refreshes the timeout. */
@@ -876,7 +913,6 @@ static void impl_send_phys(
 		printf("failed send_phys second transaction, ec=%lu\n",
 			L4_ErrorCode());
 abnormal:
-		recycle(&p_page_alloc_head, pg);
 		return;
 	} else if(L4_Label(tag) != 0 || L4_UntypedWords(tag) != 0
 		|| L4_TypedWords(tag) != 2)
@@ -885,47 +921,12 @@ abnormal:
 		goto abnormal;
 	}
 
-	if(task == NULL) {
-		/* "any old RAM" mode */
-		struct list_head *list;
-		/* recognize sysmem's own pages, add them to the reserved list. */
-		extern char _start, _end;
-		L4_Word_t top = ((L4_Word_t)&_end + PAGE_MASK) & ~PAGE_MASK;
-		if(phys_addr >= (L4_Word_t)&_start && phys_addr < top) {
-			/* exclude early memory from add_first_mem(), since it's already
-			 * tracked.
-			 */
-			if(phys_addr >= (L4_Word_t)&first_mem[0]
-				&& phys_addr < (L4_Word_t)&first_mem[sizeof first_mem])
-			{
-				list = NULL;
-			} else {
-				/* early memory (program image) not within first_mem[]. */
-				list = &reserved_page_list;
-			}
-		} else {
-			list = &free_page_list;
-		}
-
-		if(list != NULL) {
-			list_add_tail(list, &pg->link);
-			if(list == &free_page_list
-				&& ++num_free_pages > 60 && !repl_enable)
-			{
-				repl_enable = true;
-			}
-		}
-	} else {
-		/* RAM for things loaded as boot modules. */
-		struct l_page *lp = alloc_struct(l_page);
-		lp->l_addr = phys_addr;
-		lp->p_addr = phys_addr;
-		put_lpage(task, lp);
-		pg->owner = lp;
-		pg->age = 1;
-		list_add_tail(&active_page_list, &pg->link);
-		task->min_fault = min_t(L4_Word_t, task->min_fault, phys_addr & ~PAGE_MASK);
-		task->brk = max_t(L4_Word_t, task->brk, phys_addr | PAGE_MASK);
+	int n_pages = 1 << (size_log2 - PAGE_BITS);
+	for(int i=0; i < n_pages; i++) {
+		struct p_page *pg = alloc_struct(p_page);
+		pg->owner = NULL;
+		pg->address = (frame_num + i) << PAGE_BITS;
+		if(task == NULL) add_free_page(pg); else add_task_page(task, pg);
 	}
 }
 

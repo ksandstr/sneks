@@ -11,6 +11,7 @@
 #include <ccan/likely/likely.h>
 #include <ccan/minmax/minmax.h>
 #include <ccan/array_size/array_size.h>
+#include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
 #include <l4/sigma0.h>
@@ -78,20 +79,11 @@ void *sbrk(intptr_t increment)
 }
 
 
-void mm_enable_sysmem(L4_ThreadId_t sysmem_tid)
+COLD void mm_enable_sysmem(L4_ThreadId_t sysmem_tid)
 {
 	/* send me your money! */
 	for(int i=0; i < pre_heap_pos; i++) {
-		/* for now, sysmem only does single pages at a time. this should be
-		 * changed once it gains leeter skillz.
-		 */
-		L4_Fpage_t fp = pre_heap_pages[i];
-		for(uintptr_t addr = L4_Address(fp);
-			addr < L4_Address(fp) + L4_Size(fp);
-			addr += PAGE_SIZE)
-		{
-			send_phys_to_sysmem(sysmem_tid, true, addr);
-		}
+		send_phys_to_sysmem(sysmem_tid, true, pre_heap_pages[i]);
 	}
 	pre_heap_pos = -1;
 
