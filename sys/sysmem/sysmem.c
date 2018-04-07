@@ -12,6 +12,7 @@
 #include <ccan/minmax/minmax.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/container_of/container_of.h>
+#include <ccan/compiler/compiler.h>
 
 #include <sneks/rbtree.h>
 #include <sneks/mm.h>
@@ -585,7 +586,7 @@ static struct systask *get_task(int pid)
 
 /* pagefault handling. this supports two use cases; normal fault service via
  * impl_handle_fault(), and in-band faults happening during interactions with
- * systasks such as may arise in e.g. threadctl().
+ * systasks such as may arise in e.g. Proc::create_thread().
  */
 static bool handle_pf(
 	L4_MapItem_t *page_ptr,
@@ -679,34 +680,6 @@ static bool interim_fault(L4_MsgTag_t tag, L4_ThreadId_t peer)
 }
 
 
-static int threadctl(
-	L4_ThreadId_t dest,
-	L4_ThreadId_t spacespec, L4_ThreadId_t sched, L4_ThreadId_t pager,
-	void *utcb)
-{
-	L4_ThreadId_t peer = L4_Pager();
-	L4_Accept(L4_UntypedWordsAcceptor);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xb1c4, .X.u = 5 }.raw);
-	L4_LoadMR(1, dest.raw);
-	L4_LoadMR(2, spacespec.raw);
-	L4_LoadMR(3, sched.raw);
-	L4_LoadMR(4, pager.raw);
-	L4_LoadMR(5, (L4_Word_t)utcb);
-	L4_MsgTag_t tag = L4_Call(peer);
-	while(interim_fault(tag, peer)) tag = L4_Call(peer);
-	int n;
-	if(L4_IpcFailed(tag)) {
-		printf("%s: IPC failed, ec=%#lx\n", __func__, L4_ErrorCode());
-		n = -(int)L4_ErrorCode();
-	} else {
-		L4_Word_t res = 0;
-		L4_StoreMR(1, &res);
-		n = res;
-	}
-	return n;
-}
-
-
 static void abend_helper_thread(void)
 {
 	for(;;) {
@@ -734,16 +707,32 @@ static void abend_helper_thread(void)
 }
 
 
-static void start_abend_helper(void)
+static COLD void start_abend_helper(void)
 {
-	L4_ThreadId_t self = L4_Myself();
-	abend_helper_tid = L4_GlobalId(L4_ThreadNo(self) + 1, L4_Version(self));
-	uintptr_t u_align = 1 << L4_UtcbAlignmentLog2(the_kip),
-		utcb_base = L4_MyLocalId().raw & ~(u_align - 1);
-	int n = threadctl(abend_helper_tid, self, self, self,
-		(void *)utcb_base + L4_UtcbSize(the_kip));
+	L4_ThreadId_t uapi_tid = { .raw = uapi_info.service };
+	assert(!L4_IsNilThread(uapi_tid));
+
+	/* breathing manually */
+	L4_Accept(L4_UntypedWordsAcceptor);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xe801, .X.u = 1 }.raw);
+	L4_LoadMR(1, 0x1234);
+	L4_MsgTag_t tag = L4_Call(uapi_tid);
+	while(interim_fault(tag, uapi_tid)) {
+		tag = L4_Call_Timeouts(uapi_tid, L4_ZeroTime, L4_Never);
+	}
+	int n;
+	if(L4_IpcFailed(tag)) n = L4_ErrorCode();
+	else if(L4_Label(tag) == 1) {
+		L4_Word_t err;
+		L4_StoreMR(1, &err);
+		n = -err;
+	} else if(L4_Label(tag) != 0) {
+		n = -EINVAL;
+	} else {
+		n = 0;
+	}
 	if(n != 0) {
-		printf("%s: threadctl failed, n=%d\n", __func__, n);
+		printf("%s: Proc::create_thread failed, n=%d\n", __func__, n);
 		abort();
 	}
 
@@ -1119,6 +1108,9 @@ static void sysinfo_init_msg(L4_MsgTag_t tag, const L4_Word_t mrs[static 64])
 	} else if(streq(name, "uapi:tid")) {
 		uapi_info.service = mrs[pos++];
 		assert(L4_IsGlobalId((L4_ThreadId_t){ .raw = uapi_info.service }));
+		if(L4_IsNilThread(abend_helper_tid)) {
+			if(uapi_info.service != L4_nilthread.raw) start_abend_helper();
+		}
 	} else {
 		printf("%s: name=`%s' unrecognized\n", __func__, name);
 	}
@@ -1129,7 +1121,6 @@ int main(void)
 {
 	the_kip = L4_GetKernelInterface();
 	add_first_mem();
-	start_abend_helper();
 
 	static const struct sysmem_impl_vtable vtab = {
 		/* L4.X2 stuff */

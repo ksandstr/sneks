@@ -61,28 +61,6 @@ static bool sysmem_page_cmp(const void *cand, void *key) {
 }
 
 
-/* see callsite in sysmem_pager_fn() */
-static int sm_proxy_threadctl(
-	L4_ThreadId_t dest,
-	L4_ThreadId_t spacespec, L4_ThreadId_t sched, L4_ThreadId_t pager,
-	L4_Word_t utcbloc)
-{
-	if(L4_IsLocalId(dest) || L4_IsNilThread(dest)
-		|| L4_LocalIdOf(dest).raw != L4_nilthread.raw
-		/* FIXME: also whether @dest is out of systask range. */
-		|| (spacespec.raw != L4_nilthread.raw
-			&& (dest.raw == spacespec.raw || L4_SameThreads(dest, spacespec))))
-	{
-		return -EINVAL;
-	}
-
-	/* FIXME: microkernel bug. should accept sched=dest during creation. */
-	// sched = dest;
-	int res = L4_ThreadControl(dest, spacespec, sched, pager, (void *)utcbloc);
-	return res == 0 ? L4_ErrorCode() : 0;
-}
-
-
 static int sysmem_pager_fn(void *param_ptr)
 {
 	struct htable *pages = param_ptr;
@@ -135,26 +113,6 @@ static int sysmem_pager_fn(void *param_ptr)
 						__func__, fip, raw_addr);
 					break;
 				}
-			} else if(tag.X.label == 0xb1c4) {
-				/* proxied, restricted ThreadControl. returns negative posix
-				 * errno on dest=SpaceSpecifier, dest in root space, dest
-				 * outside systask range. overrides scheduler and pager.
-				 *
-				 * TODO: should restrict this further to permit only creating
-				 * and deleting forms; SpaceControl allows probing for thread
-				 * ID existence.
-				 */
-				L4_ThreadId_t dest, spacespec, sched, pager;
-				L4_Word_t utcbloc;
-				L4_StoreMR(1, &dest.raw);
-				L4_StoreMR(2, &spacespec.raw);
-				L4_StoreMR(3, &sched.raw);
-				L4_StoreMR(4, &pager.raw);
-				L4_StoreMR(5, &utcbloc);
-				if(!L4_IsNilThread(pager)) pager = sender;
-				int res = sm_proxy_threadctl(dest, spacespec, sched, pager, utcbloc);
-				L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
-				L4_LoadMR(1, res);
 			} else {
 				printf("%s: unrecognized tag=%#lx, sender=%lu:%lu\n", __func__,
 					tag.raw, L4_ThreadNo(sender), L4_Version(sender));
@@ -285,7 +243,8 @@ static L4_BootRec_t *find_boot_module(
 }
 
 
-static L4_ThreadId_t start_sysmem(L4_ThreadId_t *pager_p)
+static L4_ThreadId_t start_sysmem(
+	L4_ThreadId_t *pager_p, L4_Fpage_t *utcb_area, L4_Fpage_t *kip_area)
 {
 	L4_KernelInterfacePage_t *kip = the_kip;
 	L4_BootRec_t *rec = find_boot_module(kip, "sysmem", NULL);
@@ -341,17 +300,18 @@ static L4_ThreadId_t start_sysmem(L4_ThreadId_t *pager_p)
 			__func__, L4_ErrorCode());
 		abort();
 	}
-	L4_Fpage_t utcb_area = L4_FpageLog2(0x100000, 14);
+	*utcb_area = L4_FpageLog2(0x100000, 14);
+	*kip_area = L4_FpageLog2(0xff000, 12);
 	L4_Word_t old_ctl;
-	res = L4_SpaceControl(sysmem_tid, 0, L4_FpageLog2(0xff000, 12),
-		utcb_area, L4_anythread, &old_ctl);
+	res = L4_SpaceControl(sysmem_tid, 0, *kip_area, *utcb_area,
+		L4_anythread, &old_ctl);
 	if(res != 1) {
 		fprintf(stderr, "%s: SpaceControl failed, ec %lu\n",
 			__func__, L4_ErrorCode());
 		abort();
 	}
 	res = L4_ThreadControl(sysmem_tid, sysmem_tid, *pager_p,
-		*pager_p, (void *)L4_Address(utcb_area));
+		*pager_p, (void *)L4_Address(*utcb_area));
 	if(res != 1) {
 		fprintf(stderr, "%s: ThreadControl failed, ec %lu\n",
 			__func__, L4_ErrorCode());
@@ -936,8 +896,9 @@ int main(void)
 	rt_thrd_init();
 	rename_first_threads();
 
+	L4_Fpage_t sm_utcb = L4_Nilpage, sm_kip = L4_Nilpage;
 	L4_ThreadId_t s0 = L4_Pager(), sm_pager = L4_nilthread,
-		sysmem = start_sysmem(&sm_pager);
+		sysmem = start_sysmem(&sm_pager, &sm_utcb, &sm_kip);
 	move_to_sysmem(sysmem, sm_pager);
 
 	uapi_init();
@@ -947,6 +908,11 @@ int main(void)
 	int n = add_task(SNEKS_MIN_SYSID, root_kip, root_utcb);
 	if(n < 0) {
 		printf("can't create root task, n=%d\n", n);
+		abort();
+	}
+	n = add_task(pidof_NP(sysmem), sm_kip, sm_utcb);
+	if(n < 0) {
+		printf("can't create sysmem task, n=%d\n", n);
 		abort();
 	}
 	rt_thrd_tests();

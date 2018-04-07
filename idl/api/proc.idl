@@ -12,7 +12,8 @@ module Sneks {
 [StubPrefix(__proc), IfaceLabel(0xe801)]
 interface Proc
 {
-	void create_thread(out L4X2::ThreadId tid)
+	[Label(0x1234)]		/* (provisional) */
+	void create_thread([MR(1)] out L4X2::ThreadId tid)
 		raises(Posix::Errno);
 
 	/* not replied to if successful and @tid is the caller, even if the

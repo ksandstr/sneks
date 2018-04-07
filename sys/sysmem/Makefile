@@ -9,7 +9,7 @@ CFLAGS:=$(CFLAGS) -D__KERNEL__ -D__SNEKS__=1 -mstackrealign
 
 OUTPUTS=sysmem
 IDL_OBJS=sysmem-impl-common.o sysmem-impl-service.o \
-	abend-client.o
+	abend-common.o abend-client.o
 
 
 all: $(OUTPUTS)

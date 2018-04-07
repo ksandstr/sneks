@@ -96,6 +96,10 @@ int add_task(int pid, L4_Fpage_t kip, L4_Fpage_t utcb)
 		/* roottask initialization. */
 		darray_push(ta->base.threads, L4_MyGlobalId());
 		bitmap_clear_bit(ta->base.utcb_free, 0);
+	} else if(pid > SNEKS_MIN_SYSID && pid == pidof_NP(L4_Pager())) {
+		/* sysmem init. */
+		darray_push(ta->base.threads, L4_Pager());
+		bitmap_clear_bit(ta->base.utcb_free, 0);
 	}
 
 	return 0;
