@@ -11,6 +11,7 @@
 #include <l4/thread.h>
 #include <l4/syscall.h>
 #include <l4/ipc.h>
+#include <l4/kip.h>
 
 #include "defs.h"
 #include "proc-defs.h"
@@ -109,13 +110,14 @@ int thrd_create(thrd_t *t, thrd_start_t fn, void *param_ptr)
 		static int next_tid, next_utcb_slot = 1;
 		static bool first = true;
 		if(unlikely(first)) {
-			utcb_base = L4_MyLocalId().raw & ~511ul;
+			int u_align = 1 << L4_UtcbAlignmentLog2(the_kip);
+			utcb_base = L4_MyLocalId().raw & ~(u_align - 1);
 			next_tid = L4_ThreadNo(L4_Myself()) + 1;
 			first = false;
 		}
 		tid = L4_GlobalId(next_tid, L4_Version(L4_Myself()));
-		L4_Word_t r = L4_ThreadControl(tid, L4_Myself(), L4_Myself(),
-			L4_Pager(), (void *)(utcb_base + next_utcb_slot * 512));
+		L4_Word_t r = L4_ThreadControl(tid, L4_Myself(), L4_Myself(), L4_Pager(),
+			(void *)(utcb_base + next_utcb_slot * L4_UtcbSize(the_kip)));
 		if(r == 0) {
 			printf("%s: threadctl failed, ec=%#lx\n", __func__, L4_ErrorCode());
 			return thrd_error;

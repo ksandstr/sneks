@@ -47,7 +47,7 @@ struct sysmem_page {
 };
 
 
-static L4_KernelInterfacePage_t *the_kip;
+L4_KernelInterfacePage_t *the_kip;
 
 
 static size_t hash_sysmem_page(const void *key, void *priv) {

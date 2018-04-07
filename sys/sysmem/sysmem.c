@@ -738,9 +738,10 @@ static void start_abend_helper(void)
 {
 	L4_ThreadId_t self = L4_Myself();
 	abend_helper_tid = L4_GlobalId(L4_ThreadNo(self) + 1, L4_Version(self));
-	uintptr_t utcb_base = L4_MyLocalId().raw & ~511;
+	uintptr_t u_align = 1 << L4_UtcbAlignmentLog2(the_kip),
+		utcb_base = L4_MyLocalId().raw & ~(u_align - 1);
 	int n = threadctl(abend_helper_tid, self, self, self,
-		(void *)utcb_base + 512);
+		(void *)utcb_base + L4_UtcbSize(the_kip));
 	if(n != 0) {
 		printf("%s: threadctl failed, n=%d\n", __func__, n);
 		abort();

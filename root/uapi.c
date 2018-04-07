@@ -24,7 +24,6 @@
 #define IS_SYSTASK(pid) ((pid) >= SNEKS_MIN_SYSID)
 
 #define TNOS_PER_BITMAP (1 << 16)
-#define UTCB_SIZE 512			/* TODO: get from KIP or some such */
 
 
 typedef darray(L4_ThreadId_t) tidlist;
@@ -55,6 +54,7 @@ union task_all {
 
 
 static struct rangealloc *ra_tasks = NULL;
+static int utcb_size_log2;
 L4_ThreadId_t uapi_tid;
 
 /* TID allocator. this is for the 32-bit mode where the two highest bits of
@@ -90,7 +90,8 @@ int add_task(int pid, L4_Fpage_t kip, L4_Fpage_t utcb)
 	ta->base.kip_area = kip;
 	ta->base.utcb_area = utcb;
 	darray_init(ta->base.threads);
-	ta->base.utcb_free = bitmap_alloc1(L4_Size(utcb) / UTCB_SIZE);
+	ta->base.utcb_free = bitmap_alloc1(
+		1 << (L4_SizeLog2(utcb) - utcb_size_log2));
 	if(pid == SNEKS_MIN_SYSID) {
 		/* roottask initialization. */
 		darray_push(ta->base.threads, L4_MyGlobalId());
@@ -128,7 +129,7 @@ L4_ThreadId_t allocate_thread(int pid, void **utcb_loc_p)
 	union task_all *ta = ra_id2ptr(ra_tasks, pid);
 	assert(!L4_IsNilFpage(ta->base.utcb_area));
 
-	int n_slots = L4_Size(ta->base.utcb_area) / UTCB_SIZE,
+	int n_slots = 1 << (L4_SizeLog2(ta->base.utcb_area) - utcb_size_log2),
 		utcb_slot = bitmap_ffs(ta->base.utcb_free, 0, n_slots);
 	if(utcb_slot == n_slots) {
 		bitmap_set_bit(tno_free_maps[map], bit);
@@ -138,7 +139,7 @@ L4_ThreadId_t allocate_thread(int pid, void **utcb_loc_p)
 	darray_push(ta->base.threads, tid);
 
 	*utcb_loc_p = (void *)(L4_Address(ta->base.utcb_area)
-		+ utcb_slot * UTCB_SIZE);
+		+ (utcb_slot << utcb_size_log2));
 	return tid;
 }
 
@@ -184,7 +185,7 @@ static bool task_remove_thread(
 	assert((L4_Word_t)utcb_loc >= L4_Address(ta->base.utcb_area));
 	L4_Word_t pos = (L4_Word_t)utcb_loc - L4_Address(ta->base.utcb_area);
 	assert(pos < L4_Size(ta->base.utcb_area));
-	int u_slot = pos / UTCB_SIZE;
+	int u_slot = pos >> utcb_size_log2;
 	assert(!bitmap_test_bit(ta->base.utcb_free, u_slot));
 	bitmap_set_bit(ta->base.utcb_free, u_slot);
 
@@ -330,6 +331,8 @@ int uapi_loop(void *param_ptr)
 
 COLD void uapi_init(void)
 {
+	utcb_size_log2 = size_to_shift(L4_UtcbSize(the_kip));
+	assert(1 << utcb_size_log2 >= L4_UtcbSize(the_kip));
 	ra_tasks = RA_NEW(union task_all, 1 << 16);
 	ra_disable_id_0(ra_tasks);
 

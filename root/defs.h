@@ -6,7 +6,9 @@
 
 #include <stdbool.h>
 #include <threads.h>
+
 #include <l4/types.h>
+#include <l4/kip.h>
 
 
 #define THREAD_STACK_SIZE 4096
@@ -19,6 +21,8 @@ extern void mm_enable_sysmem(L4_ThreadId_t sysmem_tid);
 
 
 /* from main.c. should be moved into mm.c, or boot.c, or some such. */
+
+extern L4_KernelInterfacePage_t *the_kip;
 
 extern void send_phys_to_sysmem(
 	L4_ThreadId_t sysmem_tid, bool self, L4_Word_t addr);
