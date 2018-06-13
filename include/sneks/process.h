@@ -37,4 +37,10 @@
 
 extern unsigned pidof_NP(L4_ThreadId_t tid);
 
+/* execve() without the fork(). returns pidof_NP() of the created task's
+ * main() TID.
+ */
+extern int spawn_NP(const char *filename,
+	char *const argv[], char *const envp[]);
+
 #endif

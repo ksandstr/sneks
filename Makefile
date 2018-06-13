@@ -6,11 +6,12 @@ include config.mk
 
 
 # NOTE: the sys/test line should be last!
-all: tags initrd.img
+all: tags
 	+@make -C lib all
 	+@make -C root all
 	+@make -C sys all
 	+@make -C sys/test all
+	+@make initrd.img
 
 
 clean:

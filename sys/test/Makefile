@@ -9,7 +9,7 @@ LDFLAGS=-e_start -N -nostdlib -L $(MUNG_DIR)/user/lib/l4 \
 # the stack properly. FIXME: repair that, then remove -mstackrealign.
 CFLAGS:=$(CFLAGS) -D__KERNEL__ -mstackrealign
 
-OUTPUTS=systest
+OUTPUTS=systest initrd_spawn_partner
 
 # FIXME: this will generate full paths where they're not needed. hack the build
 # scripts present a nicer "  CC sys/foo/t/c11sumthing.c" report to conceal teh
@@ -38,8 +38,17 @@ systest: $(LDSCRIPT) systest.o harness.o $(TEST_OBJS) \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
-test-initrd:
+initrd_spawn_partner: static-user.ld spawn-partner.o
+	@echo "  LD $@"
+	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T static-user.ld \
+		$(CFGDIR)/sys/crt/crt0.o $(filter %.o,$^) $(filter %.a,$^) \
+		$(LIBS) -lsneks -ll4 -L /usr/lib32 -lm \
+		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
+
+
+test-initrd: initrd_spawn_partner
 	@echo "hello, world" >$(INITRD)/hello.txt
+	@install initrd_spawn_partner $(INITRD)/
 
 
 include $(wildcard .deps/*.d)
