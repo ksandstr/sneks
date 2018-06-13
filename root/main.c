@@ -683,6 +683,14 @@ static L4_ThreadId_t spawn_systask(L4_ThreadId_t s0, const char *name, ...)
 	}
 	free(argpage);
 
+	/* allow get_shape(). */
+	n = __sysmem_set_kernel_areas(sysmem_tid, new_tid.raw,
+		utcb_area, kip_area);
+	if(n != 0) {
+		printf("sysmem::set_kernel_areas failed, n=%d\n", n);
+		abort();
+	}
+
 	/* start 'er up. */
 	n = __sysmem_breath_of_life(sysmem_tid, &ret, new_tid.raw,
 		ee->e_entry, 0xdeadbeef);

@@ -1042,6 +1042,29 @@ static int impl_get_shape(
 }
 
 
+static int impl_set_kernel_areas(
+	L4_Word_t task_raw,
+	L4_Fpage_t utcb_area, L4_Fpage_t kip_area)
+{
+	L4_ThreadId_t task = { .raw = task_raw };
+	struct systask *t = find_task(pidof_NP(task));
+	if(t == NULL) return ENOENT;
+
+	if(L4_IsNilFpage(utcb_area) || L4_IsNilFpage(kip_area)) return EINVAL;
+	/* FIXME: check utcb_area and kip_area for being out of userspace VM
+	 * range.
+	 */
+	if(!L4_IsNilFpage(t->utcb_area) || !L4_IsNilFpage(t->kip_area)) {
+		return EEXIST;
+	}
+
+	t->utcb_area = utcb_area; L4_Set_Rights(&t->utcb_area, L4_ReadWriteOnly);
+	t->kip_area = kip_area; L4_Set_Rights(&t->kip_area, L4_ReadWriteOnly);
+
+	return 0;
+}
+
+
 static int impl_lookup(L4_Word_t *info_tid) {
 	*info_tid = L4_MyGlobalId().raw;
 	return 0;
@@ -1139,6 +1162,7 @@ int main(void)
 		.brk = &impl_brk,
 		.breath_of_life = &impl_breath_of_life,
 		.get_shape = &impl_get_shape,
+		.set_kernel_areas = &impl_set_kernel_areas,
 	};
 
 	for(;;) {

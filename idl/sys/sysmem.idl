@@ -66,10 +66,22 @@ interface Sysmem: L4X2::FaultHandler
 		in L4X2::ThreadId tid,
 		in L4X2::word ip, in L4X2::word sp);
 
-	/* get the inclusive extent of the systask indicated. */
+	/* get the inclusive extent of the systask indicated. only valid if
+	 * set_kernel_areas() has been called first.
+	 */
 	void get_shape(
 		out L4X2::word low, out L4X2::word high,
 		in L4X2::ThreadId task)
+			raises(Posix::Errno);
+
+	/* set the UTCB and KIP areas for a systask, which must exist (or ENOENT).
+	 * may only be called once (or EEXIST), both parameters must be valid (or
+	 * EINVAL), neither parameter can point out of the user accessable address
+	 * range (or EFAULT).
+	 */
+	void set_kernel_areas(
+		in L4X2::ThreadId task,
+		in L4X2::Fpage utcb_area, in L4X2::Fpage kip_area)
 			raises(Posix::Errno);
 };
 
