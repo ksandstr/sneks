@@ -12,6 +12,9 @@ module Sneks {
 [StubPrefix(__proc), IfaceLabel(0xe801)]
 interface Proc
 {
+	typedef string<512> pathbuf;
+	typedef string<4096> argbuf; /* substrings separated by 0x1e (RS). */
+
 	[Label(0x1234)]		/* (provisional) */
 	void create_thread([MR(1)] out L4X2::ThreadId tid)
 		raises(Posix::Errno);
@@ -22,6 +25,18 @@ interface Proc
 	 */
 	void remove_thread(in L4X2::ThreadId tid, in L4X2::word utcb_addr)
 		raises(Posix::Errno, muidl::NoReply);
+
+	/* spawns a child process without the expense of fork+exec, or from a
+	 * systask such as to launch userspace helpers or /sbin/init. constructs
+	 * the argument and environment regions using @args and @envs provided;
+	 * the child process need not care whether it was loaded due to exec or
+	 * spawn.
+	 *
+	 * return value is the new process ID.
+	 */
+	unsigned short spawn(
+		in pathbuf filename, in argbuf args, in argbuf envs)
+			raises(Posix::Errno);
 };
 
 

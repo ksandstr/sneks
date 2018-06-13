@@ -309,6 +309,13 @@ static int uapi_remove_thread(L4_Word_t raw_tid, L4_Word_t utcb_addr)
 }
 
 
+static int uapi_spawn(
+	const char *filename, const char *args, const char *envs)
+{
+	return -ENOSYS;
+}
+
+
 int uapi_loop(void *param_ptr)
 {
 	uapi_tid = L4_Myself();
@@ -316,6 +323,7 @@ int uapi_loop(void *param_ptr)
 	static const struct root_uapi_vtable vtab = {
 		.create_thread = &uapi_create_thread,
 		.remove_thread = &uapi_remove_thread,
+		.spawn = &uapi_spawn,
 	};
 	for(;;) {
 		L4_Word_t st = _muidl_root_uapi_dispatch(&vtab);

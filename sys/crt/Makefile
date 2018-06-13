@@ -39,6 +39,7 @@ libsneks-systask.a: $(LIB_OBJS)
 crt1.o: crt1.c sysmem-defs.h kmsg-defs.h info-defs.h
 threads.o: threads.c proc-defs.h info-defs.h
 fileio.o: fileio.c fs-defs.h
+misc.o: misc.c proc-defs.h
 
 
 # build things from mung as guests.
