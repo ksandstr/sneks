@@ -42,7 +42,6 @@
 #include "defs.h"
 
 
-#define SYSMEM_SEED_MEGS 24
 #define THREAD_STACK_SIZE 4096
 
 
@@ -172,7 +171,8 @@ void send_phys_to_sysmem(L4_ThreadId_t sysmem_tid, bool self, L4_Fpage_t pg)
 		abort();
 	}
 
-	if(self) sysmem_self_pages++; else sysmem_pages++;
+	int n_pages = L4_Size(pg) >> PAGE_BITS;
+	if(self) sysmem_self_pages += n_pages; else sysmem_pages += n_pages;
 }
 
 
@@ -677,9 +677,11 @@ static L4_ThreadId_t spawn_systask(const char *name, ...)
 		kip_area = L4_FpageLog2(L4_Address(utcb_area) - PAGE_SIZE,
 			PAGE_BITS);
 	}
+#if 0
 	printf("utcb_area=%#lx:%#lx, kip_area=%#lx:%#lx, lowest=%#x\n",
 		L4_Address(utcb_area), L4_Size(utcb_area),
 		L4_Address(kip_area), L4_Size(kip_area), lowest);
+#endif
 
 	assert(!L4_IsNilThread(uapi_tid));
 	/* create the task w/ all of that shit & what-not. */
@@ -755,7 +757,7 @@ static L4_ThreadId_t spawn_systask(const char *name, ...)
 	for_page_range(start_addr, (start_addr + mod_size + PAGE_MASK) & ~PAGE_MASK,
 		addr, sz)
 	{
-		printf("  %#lx:%#lx\n", addr, 1ul << sz);
+		// printf("  %#lx:%#lx\n", addr, 1ul << sz);
 		L4_Fpage_t p = L4_FpageLog2(addr, sz);
 		L4_Set_Rights(&p, L4_FullyAccessible);
 		send_phys_to_sysmem(sysmem_tid, false, p);
@@ -940,7 +942,6 @@ static void start_vm(void)
 		}
 	}
 	send_phys_to_vm(mem_tid, L4_Nilpage);
-	printf("last_lowmem=%d\n", last_lowmem);
 }
 
 
