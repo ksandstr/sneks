@@ -1254,6 +1254,12 @@ int main(void)
 		printf("can't start uapi!\n");
 		abort();
 	}
+	/* stupid-sync with uapi so that it's ready to handle sysmem's requests.
+	 * without this, sysmem and uapi wind up in a send-send deadlock.
+	 */
+	L4_LoadMR(0, 0);
+	L4_Send(thrd_tidof_NP(uapi));
+
 	put_sysinfo("uapi:tid", 1, thrd_tidof_NP(uapi).raw);
 	uapi_tid = thrd_tidof_NP(uapi);
 	/* TODO: move these into a root internal test setup, like mung has with

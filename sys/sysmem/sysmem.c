@@ -713,7 +713,14 @@ static COLD void start_abend_helper(void)
 	L4_ThreadId_t uapi_tid = { .raw = uapi_info.service };
 	assert(!L4_IsNilThread(uapi_tid));
 
-	/* breathing manually */
+	/* breathing manually.
+	 *
+	 * FIXME: this is hacky as fuck. we need like a millisecond timeout on the
+	 * Call sendphase to unfuck lazily starting UAPI, or they'll wind up in a
+	 * send-send deadlock. and that machinery don't belong outside a possible
+	 * future super interim_fault(). for now, root's UAPI starting bit holds
+	 * our dick for us.
+	 */
 	L4_Accept(L4_UntypedWordsAcceptor);
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xe801, .X.u = 1 }.raw);
 	L4_LoadMR(1, 0x1234);
