@@ -360,6 +360,24 @@ static L4_ThreadId_t start_sysmem(
 		}
 		add_sysmem_pages(pages, ep->p_vaddr, ep->p_vaddr + ep->p_memsz - 1);
 	}
+	/* add a little something something just to get sysmem off the ground. */
+	int rem = 256 * 1024;
+	while(rem > 0) {
+		L4_Fpage_t pg;
+		for(int s = size_to_shift(rem); s >= PAGE_BITS; s--) {
+			pg = L4_Sigma0_GetAny(L4_Pager(), s, L4_CompleteAddressSpace);
+			if(!L4_IsNilFpage(pg)) break;
+		}
+		if(L4_IsNilFpage(pg)) {
+			printf("%s: can't get seed memory from s0!\n", __func__);
+			abort();
+		}
+		printf("%s: sending pg=%#lx:%#lx for sysmem init\n", __func__,
+			L4_Address(pg), L4_Size(pg));
+		add_sysmem_pages(pages, L4_Address(pg),
+			L4_Address(pg) + L4_Size(pg) - 1);
+		rem -= L4_Size(pg);
+	}
 
 	/* set up the address space & start the main thread. */
 	L4_ThreadId_t sysmem_tid = L4_GlobalId(500, (1 << 2) | 2);
@@ -447,25 +465,6 @@ static void move_to_sysmem(L4_ThreadId_t sm_pager)
 		send_phys_to_sysmem(sysmem_tid, true, L4_FpageLog2(addr, PAGE_BITS));
 	}
 	mm_enable_sysmem(sysmem_tid);
-
-	L4_Word_t remain = 128 * 1024;
-	int scale = MSB(remain);
-	while(remain > 0) {
-		L4_Fpage_t fp = L4_Sigma0_GetAny(sigma0_tid, scale, L4_CompleteAddressSpace);
-		if(L4_IsNilFpage(fp)) {
-			if(L4_ErrorCode() == 0 && scale > PAGE_BITS) {
-				scale--;
-				continue;
-			} else {
-				printf("can't pump %lu bytes for sysmem, ec=%lu\n",
-					1lu << scale, L4_ErrorCode());
-				abort();
-			}
-		}
-		printf("adding %#lx:%#lx to sysmem\n", L4_Address(fp), L4_Size(fp));
-		send_phys_to_sysmem(sysmem_tid, false, fp);
-		if(L4_Size(fp) > remain) remain = 0; else remain -= L4_Size(fp);
-	}
 }
 
 
