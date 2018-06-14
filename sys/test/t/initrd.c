@@ -57,7 +57,6 @@ END_TEST
 START_TEST(spawn_into_userspace)
 {
 	plan_tests(3);
-	todo_start("no implementation");
 
 	char my_id[100];
 	snprintf(my_id, sizeof my_id, "%#lx", L4_Myself().raw);
@@ -69,8 +68,9 @@ START_TEST(spawn_into_userspace)
 	L4_ThreadId_t sender = L4_nilthread;
 	bool child_died = false;
 	L4_MsgTag_t tag = L4_Wait_Timeout(L4_TimePeriod(50 * 1000), &sender);
+	L4_Word_t ec = L4_ErrorCode();
 	if(!ok(L4_IpcSucceeded(tag), "got IPC")) {
-		diag("ec=%#lx", L4_ErrorCode());
+		diag("ec=%#lx", ec);
 		child_died = true;
 	}
 	if(!ok(pidof_NP(sender) == cpid, "IPC was from child")) {

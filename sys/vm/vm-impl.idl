@@ -1,0 +1,13 @@
+
+/* implementation spec for vm. not for client use. */
+
+#include <api/vm.idl>
+#include <l4x2.idl>
+
+
+interface VmImpl:
+	L4X2::FaultHandler, L4X2::X86IOFaultHandler,
+	Sneks::VM
+{
+	/* and nothing else. */
+};

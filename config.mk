@@ -68,7 +68,7 @@ ccan-%.a ::
 # and then the common bit, the client, and then the defs. there's AS chatter
 # about the first three too.
 
-vpath %.idl $(CFGDIR)/idl/sys
+vpath %.idl $(CFGDIR)/idl/sys $(CFGDIR)/idl/api
 
 %-service.s: %.idl
 	@echo "  IDL $< <service>"

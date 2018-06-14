@@ -27,7 +27,8 @@ distclean:
 root: root.ld crt0.o main.o runtime.o thrd.o uapi.o mm.o ser_io.o \
 		sysmem-common.o sysmem-client.o kmsg-common.o kmsg-service.o \
 		rootserv-service.o root-uapi-service.o \
-		proc-common.o proc-client.o \
+		proc-common.o proc-client.o vm-common.o vm-client.o \
+		fs-common.o fs-client.o info-common.o info-client.o \
 		ccan-htable.o ccan-bitmap.o mung-rangealloc.o mung-slab.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T root.ld \
@@ -37,7 +38,7 @@ root: root.ld crt0.o main.o runtime.o thrd.o uapi.o mm.o ser_io.o \
 
 main.o: main.c sysmem-defs.h kmsg-defs.h rootserv-defs.h
 thrd.o: thrd.c proc-defs.h
-uapi.o: uapi.c root-uapi-defs.h
+uapi.o: uapi.c root-uapi-defs.h vm-defs.h fs-defs.h info-defs.h
 
 
 # secret nazi forest

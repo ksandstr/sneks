@@ -514,7 +514,9 @@ static struct p_page *get_free_page(void)
 	if(repl_enable && num_free_pages < 16) {
 		while(num_free_pages < 48) {
 			int n_freed = replace_pages();
-			if(n_freed > 0) printf("sysmem: replaced %d pages\n", n_freed);
+			if(n_freed > 0) {
+				// printf("sysmem: replaced %d pages\n", n_freed);
+			}
 		}
 	}
 
@@ -1145,9 +1147,10 @@ static void sysinfo_init_msg(L4_MsgTag_t tag, const L4_Word_t mrs[static 64])
 			{ "kmsg", &kmsg_info.service },
 			{ "rootserv", &abend_info.service },
 			{ "uapi", &uapi_info.service, &start_abend_helper },
+			{ "uapi:vm", &uapi_info.vm },
 			{ "rootfs", &rootfs_info.service },
 		};
-		char *sep = strchr(name, ':');
+		char *sep = strrchr(name, ':');
 		*sep = '\0';
 		L4_ThreadId_t tid = { .raw = mrs[pos++] };
 		assert(L4_IsGlobalId(tid));

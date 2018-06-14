@@ -37,12 +37,13 @@ struct abend_info {
 
 
 struct uapi_info {
-	L4X2::ThreadId service;
+	L4X2::ThreadId service;		/* Sneks::Proc */
+	L4X2::ThreadId vm;			/* Sneks::VM */
 };
 
 
 struct rootfs_info {
-	L4X2::ThreadId service;		/* implementing Sneks::Fs */
+	L4X2::ThreadId service;		/* Sneks::Fs */
 };
 
 

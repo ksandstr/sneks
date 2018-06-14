@@ -37,6 +37,10 @@ interface Proc
 	unsigned short spawn(
 		in pathbuf filename, in argbuf args, in argbuf envs)
 			raises(Posix::Errno);
+
+	/* like POSIX kill(2) */
+	void kill(in long pid, in long sig)
+		raises(Posix::Errno);
 };
 
 

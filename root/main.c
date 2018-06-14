@@ -51,6 +51,7 @@ struct sysmem_page {
 
 
 L4_KernelInterfacePage_t *the_kip;
+L4_ThreadId_t vm_tid = { .raw = 0 };
 
 static L4_ThreadId_t sigma0_tid, sysmem_tid;
 static int sysmem_pages = 0, sysmem_self_pages = 0;
@@ -861,7 +862,7 @@ static void portion_phys(size_t total, L4_ThreadId_t vm_tid, L4_Fpage_t page)
 /* start memory server, hand the physical memory that'd overlap its virtual
  * addresses to sysmem, and do initialization protocol.
  */
-static void start_vm(void)
+static L4_ThreadId_t start_vm(void)
 {
 	L4_ThreadId_t mem_tid = spawn_systask("vm", NULL);
 
@@ -890,7 +891,6 @@ static void start_vm(void)
 	 * either sysmem or vm, depending whether it falls in vm's sysmem-paged
 	 * range and whether sysmem has already received its proper due.
 	 */
-	int last_lowmem = -1;
 	L4_Word_t vm_low, vm_high;
 	bool stale = true;
 	for(int i=0; i < n_phys; i++) {
@@ -899,7 +899,6 @@ static void start_vm(void)
 		L4_Word_t high = L4_Address(page) + L4_Size(page) - 1;
 		if(L4_Address(page) < 1024 * 1024 || high < 1024 * 1024) {
 			// printf("  kept as low memory\n");
-			last_lowmem = i;
 			continue;
 		}
 
@@ -941,6 +940,7 @@ static void start_vm(void)
 		}
 	}
 	send_phys_to_vm(mem_tid, L4_Nilpage);
+	return mem_tid;
 }
 
 
@@ -1267,7 +1267,10 @@ int main(void)
 	 */
 	rt_thrd_tests();
 
-	start_vm();
+	vm_tid = start_vm();
+	assert(!L4_IsNilThread(vm_tid));
+	put_sysinfo("uapi:vm:tid", 1, L4_GlobalIdOf(vm_tid).raw);
+
 	/* FIXME: ensure that sysmem got at least a couple of megs' worth of
 	 * memory to start with. generally vm and its UTCB segment take care of
 	 * that, but still. (this'll be a stopgap until sigma1, sysmem, and vm

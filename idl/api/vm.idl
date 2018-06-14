@@ -1,0 +1,75 @@
+
+#ifndef __API_VM_IDL__
+#define __API_VM_IDL__
+
+#include <muidl.idl>
+#include <l4x2.idl>
+#include <posixlike.idl>
+
+
+module Sneks {
+
+/* (short for virtual memory) */
+[StubPrefix(__vm), IfaceLabel(0xe802)]
+interface VM
+{
+	/* get these from posixlike.idl */
+	typedef unsigned long size_t;
+	typedef unsigned long off_t;
+	typedef unsigned short pid_t;
+
+	/* as in mmap(2) when @target_pid == 0. otherwise, EACCES unless called
+	 * from a systask that spawned @target_pid which hasn't yet been serviced
+	 * a single page fault.
+	 *
+	 * deviates from strict mmap(2) in that when flags contains MAP_PRIVATE
+	 * and @fd_serv and @fd are given, @offset need not be page aligned.
+	 * however, copy-on-write benefits are restricted to aligned maps.
+	 */
+	void mmap(
+		in pid_t target_pid,
+		inout L4X2::word addr, in size_t length, in long prot, in long flags,
+		in L4X2::ThreadId fd_serv, in L4X2::word fd, in off_t offset)
+			raises(Posix::Errno);
+
+#if 0
+	/* self only. */
+	void munmap(in L4X2::word addr, in size_t length)
+		raises(Posix::Errno);
+#endif
+
+	/* virtual memory part of fork(2). systask only. if @srcpid == 0, creates
+	 * an empty space which must be initialized with set_kernel_areas().
+	 * otherwise, a copy-on-write duplicate of @srcpid is created and the utcb
+	 * and kip areas inherited.
+	 */
+	void fork(in pid_t srcpid, in pid_t destpid)
+			raises(Posix::Errno);
+
+	/* configuration of freshly-created address spaces. systask only. */
+	void set_kernel_areas(
+		in pid_t pid,
+		in L4X2::Fpage utcb, in L4X2::Fpage kip)
+			raises(Posix::Errno);
+
+	typedef sequence<octet, 4096> page;
+
+	/* upload a single page of memory to a target process address space. a
+	 * short page is padded out with zeroes. EACCES unless requirements are
+	 * met for mmap's @target_pid.
+	 */
+	void upload_page(in pid_t target_pid, in L4X2::word addr, in page data)
+		raises(Posix::Errno);
+
+	/* systask only. send breath-of-life to a newborn thread. rc is 0 or L4
+	 * ErrorCode of breath-of-life transaction under a 0 send timeout.
+	 */
+	void breath_of_life(
+		out L4X2::word rc,
+		in L4X2::ThreadId target,
+		in L4X2::word sp, in L4X2::word ip);
+};
+
+};
+
+#endif
