@@ -584,7 +584,6 @@ static int squashfs_read(
 
 	uint32_t done = 0, pos = read_pos == ~0u ? fd->file->pos : read_pos,
 		bytes = min_t(uint32_t, count, reg->file_size - pos);
-	// printf("%s: reading %u bytes\n", __func__, bytes);
 	if(bytes == 0) goto end;
 
 	uint64_t block = squashfs_i(nod)->rest_start;
@@ -610,7 +609,8 @@ static int squashfs_read(
 		struct blk *b = cache_get(data_block, lenword);
 		if(b == NULL) return -ENOMEM;	/* or translate an errptr */
 		int seg = min_t(int, bytes - done, b->length);
-		memcpy(&data_buf[done], b->data, seg);
+		memcpy(&data_buf[done],
+			&b->data[pos & ((1 << fs_block_size_log2) - 1)], seg);
 		done += seg;
 		pos += seg;
 		data_block += SQUASHFS_COMPRESSED_SIZE_BLOCK(lenword);
@@ -618,7 +618,7 @@ static int squashfs_read(
 	n = 0;
 
 end:
-	fd->file->pos = pos;
+	if(read_pos == ~0u) fd->file->pos = pos;
 	*data_len_p = done;
 	// printf("%s: pos'=%u, done=%d, n=%d\n", __func__, pos, done, n);
 	return n;
