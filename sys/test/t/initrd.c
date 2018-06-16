@@ -11,8 +11,10 @@
 #include <sneks/test.h>
 
 
-START_TEST(open_file_and_read)
+START_LOOP_TEST(open_file_and_read, iter, 0, 1)
 {
+	const bool two_pieces = !!(iter & 1);
+	diag("two_pieces=%s", btos(two_pieces));
 	plan_tests(4);
 
 	int fd = open("/initrd/systest/sys/test/hello.txt", O_RDONLY);
@@ -21,7 +23,15 @@ START_TEST(open_file_and_read)
 	}
 
 	char buffer[200];
-	int n = read(fd, buffer, sizeof buffer - 1);
+	int n;
+	if(!two_pieces) n = read(fd, buffer, sizeof buffer - 1);
+	else {
+		n = read(fd, buffer, 6);
+		if(n == 6) {
+			int m = read(fd, &buffer[6], sizeof buffer - 7);
+			if(m < 0) n = m; else n += m;
+		}
+	}
 	if(!ok1(n >= 0)) {
 		diag("read(2) failed, errno=%d", errno);
 	}
