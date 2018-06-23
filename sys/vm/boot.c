@@ -23,9 +23,7 @@ static L4_Fpage_t next_phys_page(L4_ThreadId_t root, L4_Word_t *addr_hi)
 	L4_StoreMR(1, &page.raw);
 	L4_StoreMR(2, addr_hi);
 	if(L4_IsNilFpage(page)) {
-		/* termination. */
-		L4_LoadMR(0, 0);
-		L4_Reply(root);
+		/* termination. leave the chain open. */
 	} else {
 		L4_Accept(L4_MapGrantItems(page));
 		L4_LoadMR(0, 0);
@@ -41,7 +39,7 @@ ipcfail:
 }
 
 
-COLD L4_Fpage_t *init_protocol(int *n_phys_p)
+COLD L4_Fpage_t *init_protocol(int *n_phys_p, L4_ThreadId_t *peer_tid_p)
 {
 	L4_ThreadId_t sender;
 	L4_Accept(L4_UntypedWordsAcceptor);
@@ -51,6 +49,7 @@ COLD L4_Fpage_t *init_protocol(int *n_phys_p)
 			L4_ErrorCode());
 		abort();
 	}
+	*peer_tid_p = sender;
 	L4_Word_t total_pages = 0, max_phys = 0;
 	L4_StoreMR(1, &total_pages);
 	L4_StoreMR(2, &max_phys);

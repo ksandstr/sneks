@@ -98,13 +98,21 @@ static COLD void init_phys(L4_Fpage_t *phys, int n_phys)
 int main(int argc, char *argv[])
 {
 	printf("vm sez hello!\n");
+	L4_ThreadId_t init_tid;
 	int n_phys = 0;
-	L4_Fpage_t *phys = init_protocol(&n_phys);
+	L4_Fpage_t *phys = init_protocol(&n_phys, &init_tid);
 	printf("vm: init protocol done.\n");
 
 	init_phys(phys, n_phys);
 	free(phys);
 	printf("vm: physical memory tracking initialized.\n");
+	L4_LoadMR(0, 0);
+	L4_MsgTag_t tag = L4_Reply(init_tid);
+	if(L4_IpcFailed(tag)) {
+		printf("vm: reply to init_tid=%lu:%lu failed, ec=%lu\n",
+			L4_ThreadNo(init_tid), L4_Version(init_tid), L4_ErrorCode());
+		abort();
+	}
 
 	return 0;
 }
