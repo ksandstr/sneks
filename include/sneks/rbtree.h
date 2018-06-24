@@ -156,7 +156,7 @@ extern struct rb_node *__rb_last(struct rb_root *);
 extern void __rb_replace_node(struct rb_node *victim, struct rb_node *new, 
 			    struct rb_root *root);
 
-static inline void rb_link_node(struct rb_node * node, struct rb_node * parent,
+static inline void __rb_link_node(struct rb_node * node, struct rb_node * parent,
 				struct rb_node ** rb_link)
 {
 	node->rb_parent_color = (unsigned long )parent;
@@ -178,6 +178,7 @@ static inline void rb_link_node(struct rb_node * node, struct rb_node * parent,
 #define rb_first __rb_first
 #define rb_last __rb_last
 #define rb_replace_node __rb_replace_node
+#define rb_link_node __rb_link_node
 
 #define RB_FOREACH(_cur, _rootptr) \
 	for(struct rb_node *_cur = rb_first((_rootptr)); \

@@ -60,7 +60,7 @@ static inline struct mtx_info *insert_mtx_info_helper(
 		else if(v > 0) p = &(*p)->rb_right;
 		else return oth;
 	}
-	rb_link_node(&mi->rb, parent, p);
+	__rb_link_node(&mi->rb, parent, p);
 	return NULL;
 }
 
