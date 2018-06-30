@@ -23,6 +23,7 @@
 #include <sneks/hash.h>
 #include <sneks/lz4.h>
 #include <sneks/bitops.h>
+#include <sneks/process.h>
 #include <ukernel/rangealloc.h>
 
 #include "muidl.h"
@@ -130,19 +131,6 @@ static bool cmp_inode_ino(const void *cand, void *key) {
 
 static inline struct inode_ext *squashfs_i(struct inode *n) {
 	return container_of(n, struct inode_ext, fs_inode);
-}
-
-
-/* FIXME: remove this in favour of a proper pidof() which actually tells
- * between userspace processes, systasks, and the forbidden low range.
- */
-static unsigned pidof_NP(L4_ThreadId_t tid)
-{
-	if(likely(L4_IsGlobalId(tid))) return 1;
-	else {
-		/* it's a local TID, so return our local PID. no biggie. */
-		return pidof_NP(L4_MyGlobalId());
-	}
 }
 
 
@@ -408,7 +396,8 @@ static struct fd *get_fd(L4_Word_t param_fd)
 		__func__, param_fd, fd, fd->file, fd->owner, fd->flags);
 #endif
 	if(unlikely(fd->file == NULL)) return NULL;
-	if(unlikely(fd->owner != pidof_NP(muidl_get_sender()))) return NULL;
+	int caller = pidof_NP(muidl_get_sender());
+	if(unlikely(fd->owner != caller && caller < SNEKS_MIN_SYSID)) return NULL;
 
 	return fd;
 }

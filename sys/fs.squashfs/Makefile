@@ -7,7 +7,7 @@ LDFLAGS=-e_start -N -nostdlib -L $(MUNG_DIR)/user/lib/l4 \
 	-L $(CFGDIR)/lib -L $(CFGDIR)/sys/crt
 # under -O3, GCC may produce SSE instructions in a runtime that doesn't align
 # the stack properly. FIXME: repair that, then remove -mstackrealign.
-CFLAGS:=$(CFLAGS) -mstackrealign
+CFLAGS:=$(CFLAGS) -D__SNEKS__=1 -mstackrealign
 
 OUTPUTS=fs.squashfs
 IDL_OBJS=squashfs-impl-common.o squashfs-impl-service.o
