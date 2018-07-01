@@ -140,7 +140,7 @@ static struct rb_root systask_tree = RB_ROOT;
 static uint8_t first_mem[PAGE_SIZE * NUM_INIT_PAGES]
 	__attribute__((aligned(PAGE_SIZE)));
 
-static L4_ThreadId_t abend_helper_tid;
+static L4_ThreadId_t abend_helper_tid, s0_tid;
 
 /* sysinfo data. should be moved into a different module so as to not make
  * this one even biggar.
@@ -1168,9 +1168,44 @@ static void sysinfo_init_msg(L4_MsgTag_t tag, const L4_Word_t mrs[static 64])
 }
 
 
+static void handle_iopf(
+	L4_ThreadId_t sender,
+	L4_MsgTag_t tag, L4_Fpage_t iofp, L4_Word_t eip)
+{
+	assert(L4_IsIoFpage(iofp));
+	assert(!L4_SameThreads(sender, L4_Pager()));
+	assert(!L4_IsNilThread(L4_Pager()));
+#if 0
+	printf("iopf in %lu:%lu, port=%#lx:%#lx, eip=%#lx\n",
+		L4_ThreadNo(sender), L4_Version(sender),
+		L4_IoFpagePort(iofp), L4_IoFpageSize(iofp), eip);
+#endif
+
+	/* forward to sigma0. */
+	L4_LoadMR(0, tag.raw);
+	L4_LoadMR(1, iofp.raw);
+	L4_LoadMR(2, 0xdeadbeef);
+	L4_Accept(L4_MapGrantItems(L4_IoFpageLog2(0, 16)));
+	L4_MsgTag_t tt = L4_Call(s0_tid);
+	if(L4_IpcFailed(tt)) {
+		printf("sysmem: can't forward iopf: ec=%lu\n", L4_ErrorCode());
+		return;
+	}
+	L4_MapItem_t map = L4_MapItem(iofp, 0);
+	L4_Accept(L4_UntypedWordsAcceptor);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
+	L4_LoadMRs(1, 2, map.raw);
+	tt = L4_Reply(sender);
+	if(L4_IpcFailed(tt)) {
+		printf("sysmem: can't send iopf reply: ec=%lu\n", L4_ErrorCode());
+	}
+}
+
+
 int main(void)
 {
 	the_kip = L4_GetKernelInterface();
+	s0_tid = L4_GlobalId(the_kip->ThreadInfo.X.UserBase, 1);
 	add_first_mem();
 
 	static const struct sysmem_impl_vtable vtab = {
@@ -1198,9 +1233,20 @@ int main(void)
 		L4_Word_t status = _muidl_sysmem_impl_dispatch(&vtab);
 		if(status == MUIDL_UNKNOWN_LABEL) {
 			/* special sysinfo initialization stuff. */
-			L4_MsgTag_t tag = muidl_get_tag();
-			L4_Word_t mrs[64]; L4_StoreMRs(1, tag.X.u + tag.X.t, mrs);
 			L4_ThreadId_t sender = muidl_get_sender();
+			L4_MsgTag_t tag = muidl_get_tag();
+			/* I/O faults */
+			if((tag.X.label & 0xfff0) == 0xff80
+				&& tag.X.u == 2 && tag.X.t == 0)
+			{
+				L4_Fpage_t iofp;
+				L4_Word_t eip;
+				L4_StoreMR(1, &iofp.raw);
+				L4_StoreMR(2, &eip);
+				handle_iopf(sender, tag, iofp, eip);
+				continue;
+			}
+			L4_Word_t mrs[64]; L4_StoreMRs(1, tag.X.u + tag.X.t, mrs);
 			if(L4_ThreadNo(sender) < L4_ThreadNo(L4_Myself())
 				&& L4_Label(tag) == 0xbaaf)
 			{
