@@ -39,15 +39,20 @@ interface VM
 #endif
 
 	/* virtual memory part of fork(2). systask only. if @srcpid == 0, creates
-	 * an empty space which must be initialized with set_kernel_areas().
-	 * otherwise, a copy-on-write duplicate of @srcpid is created and the utcb
-	 * and kip areas inherited.
+	 * an empty space which must be initialized with configure(). otherwise, a
+	 * copy-on-write duplicate of @srcpid is created and the utcb and kip
+	 * areas inherited.
 	 */
 	void fork(in pid_t srcpid, in pid_t destpid)
 			raises(Posix::Errno);
 
-	/* configuration of freshly-created address spaces. systask only. */
-	void set_kernel_areas(
+	/* configuration of freshly-created address spaces. systask only. @utcb
+	 * must be located before @kip, which must start where @utcb ends; vm will
+	 * additionally map the constant system information page after @kip.
+	 * return value is the last reserved address.
+	 */
+	void configure(
+		out L4X2::word last_resv,
 		in pid_t pid,
 		in L4X2::Fpage utcb, in L4X2::Fpage kip)
 			raises(Posix::Errno);

@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <assert.h>
 #include <ccan/array_size/array_size.h>
 
 #include <l4/types.h>
@@ -10,13 +11,23 @@
 #include <l4/kdebug.h>
 
 #include <sneks/mm.h>
+#include <sneks/sysinfo.h>
+
+#include "proc-defs.h"
+
+
+L4_KernelInterfacePage_t *__the_kip = NULL;
+struct __sysinfo *__the_sysinfo = NULL;
 
 
 void __return_from_main(void)
 {
+	int n = __proc_exit(__the_sysinfo->api.proc, 0);
+	printf("__proc_exit() returned n=%d\n", n);
 	for(;;) {
+		/* desperate times. */
 		asm volatile ("int $69");
-		L4_Sleep(L4_TimePeriod(10000));
+		L4_Sleep(L4_Never);
 	}
 }
 
@@ -74,6 +85,9 @@ void __crt1_entry(void)
 	static char dummeh[30];
 	strscpy(dummeh, "hi im a dumy!!", sizeof dummeh);
 	printf("user program making noise!\n");
+
+	__the_kip = L4_GetKernelInterface();
+	__the_sysinfo = __get_sysinfo(__the_kip);
 
 	L4_Word_t argpos = ((L4_Word_t)&_end + PAGE_SIZE - 1) & ~PAGE_MASK;
 	char *argv[12], *arg = (char *)argpos;

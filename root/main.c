@@ -32,6 +32,7 @@
 #include <sneks/hash.h>
 #include <sneks/bitops.h>
 #include <sneks/process.h>
+#include <sneks/sysinfo.h>
 #include <sneks/rootserv.h>
 
 #include "elf.h"
@@ -860,10 +861,14 @@ static void portion_phys(size_t total, L4_ThreadId_t vm_tid, L4_Fpage_t page)
 #define FP_HIGH(p) (L4_Address((p)) + L4_Size((p)) - 1)
 
 /* start memory server, hand the physical memory that'd overlap its virtual
- * addresses to sysmem, and do initialization protocol.
+ * addresses to sysmem, and do initialization protocol. this also sets up
+ * read-only sharing of @sip_mem with vm so that it can be mapped into
+ * userspace processes.
  */
-static L4_ThreadId_t start_vm(void)
+static L4_ThreadId_t start_vm(uintptr_t sip_mem)
 {
+	assert((sip_mem & PAGE_MASK) == 0);
+
 	L4_ThreadId_t mem_tid = spawn_systask("vm", NULL);
 
 	/* portion memory out to sysmem, vm, and consumers of various special
@@ -881,11 +886,16 @@ static L4_ThreadId_t start_vm(void)
 	L4_LoadMR(1, total / PAGE_SIZE);
 	L4_LoadMR(2, FP_HIGH(phys[n_phys - 1]));
 	L4_MsgTag_t tag = L4_Call(mem_tid);
-	if(L4_IpcFailed(tag)) {
-		printf("%s: initialization failed, ec=%#lx\n", __func__,
-			L4_ErrorCode());
-		abort();
-	}
+	if(L4_IpcFailed(tag)) goto initfail;
+
+	/* second phase: map the SIP. */
+	L4_Fpage_t sip_page = L4_FpageLog2(sip_mem, PAGE_BITS);
+	L4_Set_Rights(&sip_page, L4_Readable);
+	L4_MapItem_t mi = L4_MapItem(sip_page, 0);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xeffe, .X.t = 2 }.raw);
+	L4_LoadMRs(1, 2, mi.raw);
+	tag = L4_Call(mem_tid);
+	if(L4_IpcFailed(tag)) goto initfail;
 
 	/* capture special ranges (i.e. below 1M) and pass every other page to
 	 * either sysmem or vm, depending whether it falls in vm's sysmem-paged
@@ -941,6 +951,11 @@ static L4_ThreadId_t start_vm(void)
 	}
 	send_phys_to_vm(mem_tid, L4_Nilpage);
 	return mem_tid;
+
+initfail:
+	printf("%s: initialization failed, ec=%#lx\n", __func__,
+		L4_ErrorCode());
+	abort();
 }
 
 
@@ -1267,7 +1282,18 @@ int main(void)
 	 */
 	rt_thrd_tests();
 
-	vm_tid = start_vm();
+	void *sip_mem = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
+	L4_Fpage_t sip_page = L4_FpageLog2((uintptr_t)sip_mem, PAGE_BITS);
+	L4_Set_Rights(&sip_page, L4_FullyAccessible);
+	L4_FlushFpage(sip_page);
+	n = __sysmem_alter_flags(L4_Pager(),
+		L4_nilthread.raw, sip_page, SMATTR_PIN, ~0ul);
+	if(n != 0) {
+		printf("can't pin sip_mem=%p: n=%d\n", sip_mem, n);
+		abort();
+	}
+	memset(sip_mem, '\0', PAGE_SIZE);
+	vm_tid = start_vm((uintptr_t)sip_mem);
 	assert(!L4_IsNilThread(vm_tid));
 	put_sysinfo("uapi:vm:tid", 1, L4_GlobalIdOf(vm_tid).raw);
 
@@ -1282,6 +1308,16 @@ int main(void)
 
 	L4_ThreadId_t initrd_tid = mount_initrd();
 	put_sysinfo("rootfs:tid", 1, initrd_tid.raw);
+
+	struct __sysinfo *sip = sip_mem;
+	*sip = (struct __sysinfo){
+		.magic = SNEKS_SYSINFO_MAGIC,
+		.sysinfo_size_log2 = PAGE_BITS,
+		.api.proc = uapi_tid,
+		.api.vm = vm_tid,
+		.memory.page_size_log2 = PAGE_BITS,
+		.memory.biggest_page_log2 = PAGE_BITS,
+	};
 
 	/* run systest if present. */
 	L4_ThreadId_t systest_tid = spawn_systask("systest", NULL);

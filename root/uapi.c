@@ -505,13 +505,28 @@ static int uapi_spawn(
 		/* FIXME: destroy @newpid, its space in "vm" */
 		goto fail;
 	}
-	int n_threads = 1024, utcb_size = 512;	/* FIXME: generate them */
-	L4_Word_t ua_size = 1ul << size_to_shift(utcb_size * n_threads);
-	L4_Fpage_t utcb_area = L4_Fpage((lo & ~(ua_size - 1)) - ua_size, ua_size),
-		kip_area = L4_FpageLog2(L4_Address(utcb_area) - PAGE_SIZE, PAGE_BITS);
+	int n_threads = 1024, utcb_size = 512;	/* FIXME: get from KIP etc */
+	L4_Word_t ua_size = 1ul << size_to_shift(utcb_size * n_threads),
+		resv_size = ua_size + L4_KipAreaSize(the_kip) + PAGE_SIZE,
+		resv_start;
+	if(resv_size >= lo - 0x10000) {		/* preserve low 64k */
+		/* can't fit in low space; set them up after "hi" instead. userspace
+		 * crt should initialize its sbrk after the sysinfo page.
+		 */
+		resv_start = (hi + ua_size - 1) & ~(ua_size - 1);
+		assert(resv_start > hi);
+	} else {
+		/* low space. nice! */
+		resv_start = ((lo - resv_size) & ~(ua_size - 1));
+		assert(resv_start >= 0x10000);
+		assert(resv_start + resv_size < lo);
+	}
+	L4_Fpage_t utcb_area = L4_Fpage(resv_start, ua_size),
+		kip_area = L4_Fpage(resv_start + ua_size, L4_KipAreaSize(the_kip));
 	printf("%s: utcb_area=%#lx:%#lx, kip_area=%#lx:%#lx\n", __func__,
 		L4_Address(utcb_area), L4_Size(utcb_area),
 		L4_Address(kip_area), L4_Size(kip_area));
+
 	/* ho ho, this is totally not atomic. doesn't matter as long as UAPI runs
 	 * single-threaded. FIXME: make add_task take a pointer instead.
 	 */
@@ -522,11 +537,13 @@ static int uapi_spawn(
 		printf("%s: add_task failed, n=%d\n", __func__, n);
 		goto fail;
 	}
-	n = __vm_set_kernel_areas(vm_tid, newpid, utcb_area, kip_area);
+	L4_Word_t resvhi;
+	n = __vm_configure(vm_tid, &resvhi, newpid, utcb_area, kip_area);
 	if(n != 0) {
 		/* FIXME: cleanup */
 		goto fail;
 	}
+	assert(resvhi < lo);
 
 	/* compose and deliver args, env */
 	L4_Word_t argpos = (hi + PAGE_SIZE - 1) & ~PAGE_MASK;
@@ -605,6 +622,21 @@ static int uapi_kill(int pid, int sig)
 }
 
 
+static void uapi_exit(int status)
+{
+	int pid = pidof_NP(muidl_get_sender());
+	if(IS_SYSTASK(pid)) {
+		printf("%s: not implemented for systasks (pid=%d)\n", __func__, pid);
+		/* but should it be? */
+	} else {
+		union task_all *ta = ra_id2ptr(ra_tasks, pid);
+		assert(!L4_IsNilFpage(ta->base.utcb_area));
+		destroy_task(ta);	/* TODO: leave crumbs or signal wait(2)ers */
+		muidl_raise_no_reply();
+	}
+}
+
+
 int uapi_loop(void *param_ptr)
 {
 	uapi_tid = L4_Myself();
@@ -614,6 +646,7 @@ int uapi_loop(void *param_ptr)
 		.remove_thread = &uapi_remove_thread,
 		.spawn = &uapi_spawn,
 		.kill = &uapi_kill,
+		.exit = &uapi_exit,
 	};
 	for(;;) {
 		L4_Word_t st = _muidl_root_uapi_dispatch(&vtab);

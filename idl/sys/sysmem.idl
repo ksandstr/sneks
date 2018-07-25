@@ -83,6 +83,21 @@ interface Sysmem: L4X2::FaultHandler
 		in L4X2::ThreadId task,
 		in L4X2::Fpage utcb_area, in L4X2::Fpage kip_area)
 			raises(Posix::Errno);
+
+	/* change flags for virtual memory pages in @range of @task. applies to
+	 * the caller iff @task is nil. pops EINVAL if @task maps to caller or is
+	 * otherwise invalid, if @range overlaps the KIP or UTCB area, if @or_mask
+	 * would set bits cleared by @and_mask, or if @range isn't a regular
+	 * flexpage. rights of @range are ignored.
+	 *
+	 * the flags for @or_mask and @and_mask are defined in <sneks/mm.h>. this
+	 * operation will never bring a non-resident page back in; callers can
+	 * instead unmap the page, apply flags, and re-fault.
+	 */
+	void alter_flags(
+		in L4X2::ThreadId task, in L4X2::Fpage range,
+		in L4X2::word or_mask, in L4X2::word and_mask)
+			raises(Posix::Errno);
 };
 
 

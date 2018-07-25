@@ -91,7 +91,7 @@ struct vp {
  */
 struct vm_space
 {
-	L4_Fpage_t kip_area, utcb_area;
+	L4_Fpage_t kip_area, utcb_area, sysinfo_area;
 	struct htable pages;	/* vp by int_hash(->vaddr & ~PAGE_MASK) */
 	struct rb_root maps;	/* lazy_mmap per range of addr and length */
 };
@@ -353,7 +353,9 @@ static int vm_fork(uint16_t srcpid, uint16_t destpid)
 }
 
 
-static int vm_set_kernel_areas(uint16_t pid, L4_Fpage_t utcb, L4_Fpage_t kip)
+static int vm_configure(
+	L4_Word_t *last_resv_p,
+	uint16_t pid, L4_Fpage_t utcb, L4_Fpage_t kip)
 {
 	if(pid > SNEKS_MAX_PID) return -EINVAL;
 	struct vm_space *sp = ra_id2ptr(vm_space_ra, pid);
@@ -362,12 +364,15 @@ static int vm_set_kernel_areas(uint16_t pid, L4_Fpage_t utcb, L4_Fpage_t kip)
 		/* TODO: should be "illegal state" */
 		return -EINVAL;
 	}
-
+	if(L4_Address(kip) != L4_Address(utcb) + L4_Size(utcb)) return -EINVAL;
 	/* FIXME: check for kip, utcb overlap with maps, pop errors if they do. */
 
 	sp->kip_area = kip;
 	sp->utcb_area = utcb;
+	sp->sysinfo_area = L4_FpageLog2(
+		L4_Address(kip) + L4_Size(kip), PAGE_BITS);
 
+	*last_resv_p = L4_Address(sp->sysinfo_area) + L4_Size(sp->sysinfo_area) - 1;
 	return 0;
 }
 
@@ -485,9 +490,13 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 		L4_Fpage_t map_page = L4_FpageLog2(
 			old->status << PAGE_BITS, PAGE_BITS);
 		L4_Set_Rights(&map_page, VP_RIGHTS(old) & fault_rwx);
-		*map_out = L4_MapItem(map_page, faddr & ~PAGE_MASK);
-		e_end(eck);
-		return;
+		*map_out = L4_MapItem(map_page, faddr_page);
+		goto done;
+	} else if(unlikely(ADDR_IN_FPAGE(sp->sysinfo_area, faddr))) {
+		L4_Fpage_t p = L4_FpageLog2((uintptr_t)the_sip, PAGE_BITS);
+		L4_Set_Rights(&p, L4_Readable);
+		*map_out = L4_MapItem(p, faddr_page);
+		goto done;
 	}
 
 	/* TODO: check program break (quickly) */
@@ -559,6 +568,7 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 	L4_Set_Rights(&map_page, (mm->flags >> 16) & 7);
 	*map_out = L4_MapItem(map_page, faddr & ~PAGE_MASK);
 
+done:
 	e_end(eck);
 	return;
 
@@ -614,7 +624,7 @@ int main(int argc, char *argv[])
 		/* Sneks::VM */
 		.mmap = &vm_mmap,
 		.fork = &vm_fork,
-		.set_kernel_areas = &vm_set_kernel_areas,
+		.configure = &vm_configure,
 		.upload_page = &vm_upload_page,
 		.breath_of_life = &vm_breath_of_life,
 

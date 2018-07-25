@@ -76,6 +76,7 @@ struct l_page
 	 * memory page.
 	 */
 	L4_Word_t p_addr;
+	L4_Word_t flags;	/* see SMATTR_* in <sneks/mm.h> */
 };
 
 
@@ -486,7 +487,16 @@ static int replace_pages(void)
 	for(int i=0; i < n_seen; i++) {
 		if(L4_Rights(unmaps[i]) != 0) ps[i]->age++;
 		else if(ps[i]->age > 0) ps[i]->age >>= 1;
-		else {
+		else if((ps[i]->owner->flags & SMATTR_PIN) != 0) {
+			/* age pinned pages, but don't replace them. aging is applied
+			 * because pinned pages may become un-pinned later.
+			 */
+#ifdef DEBUG_ME_HARDER
+			printf("not replacing phys=%#lx for log=%#lx: pinned\n",
+				ps[i]->address & ~PAGE_MASK,
+				ps[i]->owner->l_addr & ~PAGE_MASK);
+#endif
+		} else {
 			/* actual replacement. */
 			struct p_page *next = list_next(&active_page_list, ps[i], link);
 			if(replace_active_page(ps[i])) {
@@ -629,6 +639,7 @@ static bool handle_pf(
 		struct p_page *phys = get_free_page();
 		lp->p_addr = phys->address;
 		lp->l_addr = faddr & ~PAGE_MASK;
+		lp->flags = 0;
 		phys->owner = lp;
 		put_lpage(task, lp);
 		list_add_tail(&active_page_list, &phys->link);
@@ -875,6 +886,7 @@ static void add_task_page(struct systask *task, struct p_page *pg)
 	struct l_page *lp = alloc_struct(l_page);
 	lp->l_addr = phys_addr;
 	lp->p_addr = phys_addr;
+	lp->flags = 0;
 	put_lpage(task, lp);
 	pg->owner = lp;
 	pg->age = 1;
@@ -1075,6 +1087,48 @@ static int impl_set_kernel_areas(
 }
 
 
+static int impl_alter_flags(
+	L4_Word_t task_raw, L4_Fpage_t range,
+	L4_Word_t or_mask, L4_Word_t and_mask)
+{
+	if((or_mask & ~and_mask) != 0) return -EINVAL;
+	if(L4_Size(range) < PAGE_BITS) return -EINVAL;
+	L4_ThreadId_t sender = muidl_get_sender(), task = { .raw = task_raw };
+	if(!L4_IsNilThread(task) && pidof_NP(sender) == pidof_NP(task)) {
+		return -EINVAL;
+	}
+	if(L4_IsNilThread(task)) task = muidl_get_sender();
+	struct systask *t = find_task(pidof_NP(task));
+	if(t == NULL) return -EINVAL;
+	if(fpage_overlap(t->utcb_area, range)
+		|| fpage_overlap(t->kip_area, range))
+	{
+		return -EINVAL;
+	}
+
+	/* bruteforce wrt the page tree. doesn't matter until it does.
+	 * (and <struct l_page> could well sit in a hash table and not rbtree with
+	 * its three-word nodes of irreplaceable memory.)
+	 */
+	for(L4_Word_t addr = L4_Address(range);
+		addr < L4_Address(range) + L4_Size(range);
+		addr += PAGE_SIZE)
+	{
+		struct l_page *lp = get_lpage(t, addr);
+		if(lp != NULL) lp->flags = (lp->flags | or_mask) & and_mask;
+		else {
+			lp = alloc_struct(l_page);
+			lp->p_addr = 0;
+			lp->l_addr = addr;
+			lp->flags = or_mask;
+			put_lpage(t, lp);
+		}
+	}
+
+	return 0;
+}
+
+
 static int impl_lookup(L4_Word_t *info_tid) {
 	*info_tid = L4_MyGlobalId().raw;
 	return 0;
@@ -1230,6 +1284,7 @@ int main(void)
 		.breath_of_life = &impl_breath_of_life,
 		.get_shape = &impl_get_shape,
 		.set_kernel_areas = &impl_set_kernel_areas,
+		.alter_flags = &impl_alter_flags,
 	};
 
 	for(;;) {

@@ -14,6 +14,9 @@
 #include "defs.h"
 
 
+const struct __sysinfo *the_sip = NULL;
+
+
 static L4_Fpage_t next_phys_page(L4_ThreadId_t root, L4_Word_t *addr_hi)
 {
 	L4_Accept(L4_UntypedWordsAcceptor);
@@ -57,9 +60,23 @@ COLD L4_Fpage_t *init_protocol(int *n_phys_p, L4_ThreadId_t *peer_tid_p)
 	/* TODO: use vmaux to deal with total_pages too large to fit a 1G dlmalloc
 	 * heap below the microkernel reservation.
 	 */
-
 	L4_LoadMR(0, 0);
 	L4_Reply(sender);
+
+	/* get the SIP. */
+	static uint8_t sip_space[PAGE_SIZE] __attribute__((aligned(PAGE_SIZE)));
+	L4_Fpage_t sip_fpage = L4_Fpage((uintptr_t)sip_space, PAGE_SIZE);
+	L4_Set_Rights(&sip_fpage, L4_Readable);
+	L4_Accept(L4_MapGrantItems(sip_fpage));
+	tag = L4_Receive(sender);
+	if(L4_IpcFailed(tag)) {
+		printf("vm: %s: can't get second init message, ec=%#lx\n",
+			__func__, L4_ErrorCode());
+		abort();
+	}
+	L4_LoadMR(0, 0);
+	L4_Reply(sender);
+	the_sip = (struct __sysinfo *)sip_space;
 
 	/* TODO: come up with a more fancy system for recording arbitrary amounts
 	 * of physical memory, such as one of thems that cares about high address

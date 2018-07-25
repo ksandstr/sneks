@@ -41,6 +41,10 @@ interface Proc
 	/* like POSIX kill(2) */
 	void kill(in long pid, in long sig)
 		raises(Posix::Errno);
+
+	/* POSIX exit(3). since there's no waitpid(2), @status goes nowhere. */
+	void exit(in long status)
+		raises(muidl::NoReply);
 };
 
 

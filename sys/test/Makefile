@@ -17,6 +17,8 @@ OUTPUTS=systest initrd_spawn_partner
 TEST_SOURCE:=$(wildcard $(CFGDIR)/sys/*/t/*.c)
 TEST_OBJS:=$(TEST_SOURCE:%.c=%.o)
 
+vpath %.idl $(CFGDIR)/idl/api $(CFGDIR)/idl/sys
+
 
 all: $(OUTPUTS)
 
@@ -38,12 +40,15 @@ systest: $(LDSCRIPT) systest.o harness.o $(TEST_OBJS) \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
-initrd_spawn_partner: static-user.ld spawn-partner.o
+initrd_spawn_partner: static-user.ld spawn-partner.o \
+		proc-client.o proc-common.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T static-user.ld \
 		$(CFGDIR)/sys/crt/crt0.o $(filter %.o,$^) $(filter %.a,$^) \
 		$(LIBS) -lsneks -ll4 -L /usr/lib32 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
+
+spawn-partner.o: spawn-partner.c proc-defs.h
 
 
 test-initrd: initrd_spawn_partner

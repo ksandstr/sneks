@@ -1,7 +1,8 @@
 
-#ifndef __SNEKS_MM_H__
-#define __SNEKS_MM_H__
+#ifndef _SNEKS_MM_H
+#define _SNEKS_MM_H
 
+#include <stdbool.h>
 #include <string.h>
 #include <ccan/minmax/minmax.h>
 #include <l4/types.h>
@@ -11,6 +12,10 @@
 #define PAGE_BITS 12
 #define PAGE_MASK ((1u << PAGE_BITS) - 1)
 #define PAGE_SIZE (PAGE_MASK + 1)
+
+
+/* memory attributes for Sysmem::alter_flags */
+#define SMATTR_PIN 1	/* disallows replacement once mapped */
 
 
 /* usage:
@@ -38,5 +43,15 @@
  */
 #define page_range_bound(start, end) ((MSB((end) - (start)) - PAGE_BITS) * 2)
 
+
+#define ADDR_IN_FPAGE(haystack, needle) \
+	fpage_overlap((haystack), L4_FpageLog2((needle), 0))
+
+
+static inline bool fpage_overlap(L4_Fpage_t a, L4_Fpage_t b)
+{
+	L4_Word_t mask = ~((1ul << max_t(int, L4_SizeLog2(a), L4_SizeLog2(b))) - 1);
+	return ((a.raw ^ b.raw) & mask) == 0;
+}
 
 #endif
