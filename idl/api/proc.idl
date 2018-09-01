@@ -30,12 +30,22 @@ interface Proc
 	 * systask such as to launch userspace helpers or /sbin/init. constructs
 	 * the argument and environment regions using @args and @envs provided;
 	 * the child process need not care whether it was loaded due to exec or
-	 * spawn.
+	 * spawn. this interface is different from, and more low-level than, the
+	 * standard posix_spawn(3); the two should not be confused.
+	 *
+	 * since muidl is broken wrt sequences of structs, we pass the fdlist
+	 * structure's components in parallel. the length of the resulting fdlist
+	 * is the length of the shortest component sequence. this kludge will go
+	 * away once muidl gets unfucked.
 	 *
 	 * return value is the new process ID.
 	 */
+	typedef sequence<L4X2::ThreadId, 1024> fd_servs;
+	typedef sequence<L4X2::word, 1024> fd_cookies;
+	typedef sequence<long, 1024> fd_fds;
 	unsigned short spawn(
-		in pathbuf filename, in argbuf args, in argbuf envs)
+		in pathbuf filename, in argbuf args, in argbuf envs,
+		in fd_servs servs, in fd_cookies cookies, in fd_fds fds)
 			raises(Posix::Errno);
 
 	/* like POSIX kill(2) */

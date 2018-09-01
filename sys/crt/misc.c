@@ -69,7 +69,9 @@ int spawn_NP(const char *filename, char *const argv[], char *const envp[])
 {
 	char *args = p_to_argbuf(argv), *envs = p_to_argbuf(envp);
 	uint16_t pid = 0;
-	int n = __proc_spawn(get_uapi_tid(), &pid, filename, args, envs);
+	/* FIXME: pass stdfoo fds from somewhere... */
+	int n = __proc_spawn(get_uapi_tid(), &pid, filename, args, envs,
+		NULL, 0, NULL, 0, NULL, 0);
 	free(args);
 	free(envs);
 	if(n != 0) {

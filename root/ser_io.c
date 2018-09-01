@@ -1,7 +1,7 @@
 
 /* serial I/O functions for debug and test output. these walk all over the
- * first PC COM port, which has the effect of setting it up properly for the
- * userspace testbench.
+ * first PC COM port, and so should be removed when actual drivers for serial
+ * TTYs show up.
  */
 
 #include <stdio.h>
@@ -23,10 +23,10 @@ static bool com_is_fast(int base)
 }
 
 
-/* rudimentary serial port output via µiX */
+/* rudimentary serial port output from µiX */
 #define COM_PORT 0x3f8
 
-static void computchar(unsigned char ch)
+void computchar(unsigned char ch)
 {
 	static bool first = true;
 	if(unlikely(first)) {

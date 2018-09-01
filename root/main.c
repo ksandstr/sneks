@@ -1,6 +1,7 @@
 
 #define SNEKS_KMSG_IMPL_SOURCE
 #define ROOTSERV_IMPL_SOURCE
+#define BOOTCON_IMPL_SOURCE
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +17,7 @@
 #include <ccan/compiler/compiler.h>
 #include <ccan/likely/likely.h>
 #include <ccan/htable/htable.h>
+#include <ccan/hash/hash.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/str/str.h>
 
@@ -39,7 +41,9 @@
 #include "muidl.h"
 #include "sysmem-defs.h"
 #include "kmsg-defs.h"
+#include "proc-defs.h"
 #include "rootserv-defs.h"
+#include "bootcon-defs.h"
 #include "defs.h"
 
 
@@ -48,6 +52,12 @@
 
 struct sysmem_page {
 	_Atomic L4_Word_t address;
+};
+
+
+/* string pair given as argument to the root task module. hashed by ->key. */
+struct root_arg {
+	const char *key, *value;
 };
 
 
@@ -69,6 +79,17 @@ static size_t hash_sysmem_page(const void *key, void *priv) {
 static bool sysmem_page_cmp(const void *cand, void *key) {
 	const struct sysmem_page *p = cand;
 	return p->address == *(L4_Word_t *)key;
+}
+
+
+static size_t hash_arg(const void *key, void *priv) {
+	const struct root_arg *p = key;
+	return hash_string(p->key);
+}
+
+static bool arg_cmp(const void *cand, void *key) {
+	const struct root_arg *p = cand;
+	return streq(p->key, key);
 }
 
 
@@ -296,14 +317,23 @@ static L4_BootRec_t *find_boot_module(
 		}
 
 		char *cmdline = L4_Module_Cmdline(rec);
-		const char *slash = strrchr(cmdline, '/');
+		const char *slash = strrchr(cmdline, '/'),
+			*space = strchr(cmdline, ' ');
 		if(slash != NULL && memcmp(slash + 1, name, name_len) == 0) {
 			found = true;
-			cmdline_rest = strchr(slash, ' ');
+			cmdline_rest = space;
 			break;
 		} else if(slash == NULL && streq(cmdline, name)) {
 			found = true;
-			cmdline_rest = NULL;
+			cmdline_rest = space;
+			break;
+		} else if(space != NULL
+			&& space - cmdline >= name_len
+			&& memcmp(cmdline, name,
+				min_t(int, name_len, space - cmdline)) == 0)
+		{
+			found = true;
+			cmdline_rest = space;
 			break;
 		}
 	}
@@ -601,7 +631,7 @@ static void *make_argpage(const char *name, char **argv, va_list more_args)
 /* return value is a malloc'd NULL-terminated array of pointers into @str,
  * which will have nul bytes dropped into the correct places.
  */
-static char **break_argument_list(char *str)
+static char **break_argument_list(char *str, const char *delims)
 {
 	if(str == NULL) {
 		char **end = malloc(sizeof(char *));
@@ -609,10 +639,10 @@ static char **break_argument_list(char *str)
 		return end;
 	}
 
+	if(delims == NULL) delims = " \t\n\r";
 	int len = strlen(str), nargs = 0;
 	char *args[len / 2 + 1], *cur = str;
 	while(cur < str + len) {
-		const char *delims = " \t\n\r";
 		char *brk = strpbrk(cur, delims);
 		if(brk == cur) {
 			/* skip doubles, triples, etc. */
@@ -644,7 +674,7 @@ static L4_ThreadId_t spawn_systask(const char *name, ...)
 	char *rest = NULL;
 	L4_BootRec_t *mod = find_boot_module(kip, name, &rest);
 	printf("name=`%s', mod=%p, rest=`%s'\n", name, mod, rest);
-	char **args = break_argument_list(rest);
+	char **args = break_argument_list(rest, NULL);
 
 	L4_Word_t start_addr = L4_Module_Start(mod),
 		mod_size = L4_Module_Size(mod);
@@ -1182,6 +1212,132 @@ static void rs_panic(const char *str) {
 }
 
 
+static void parse_initrd_args(struct htable *dest)
+{
+	/* find the initrd module. (the root module is loaded by the microkernel
+	 * and so doesn't carry any parameters, so we use initrd instead.)
+	 */
+	char *rest = NULL;
+	L4_BootRec_t *initrd = find_boot_module(the_kip, "initrd.img", &rest);
+	if(initrd == NULL) {
+		printf("WARNING: %s: can't find initrd.img!\n", __func__);
+		return;
+	}
+
+	char **args = break_argument_list(rest, NULL);
+	for(int i=0; args[i] != NULL; i++) {
+		struct root_arg *arg = malloc(sizeof *arg + strlen(args[i]) + 1);
+		char *eq = strchr(args[i], '=');
+		if(eq == NULL) arg->value = NULL;
+		else {
+			*eq = '\0';
+			arg->value = strdup(&eq[1]);
+		}
+		arg->key = strdup(args[i]);
+		printf("KERNEL ARG: `%s' -> `%s'\n", arg->key, arg->value);
+		bool ok = htable_add(dest, hash_string(arg->key), arg);
+		if(!ok) panic("htable_add failed in parse_initrd_args");
+	}
+
+	free(args);
+	free(rest);
+}
+
+
+static int bootcon_write(
+	int32_t cookie, const uint8_t *buf, unsigned buf_len)
+{
+	extern void computchar(unsigned char ch);
+	for(unsigned i=0; i < buf_len; i++) computchar(buf[i]);
+	return buf_len;
+}
+
+
+static int bootcon_thread_fn(void *param_ptr)
+{
+	// struct htable *root_args = param_ptr;
+	/* FIXME: make malloc threadsafe and remove this sleep so the dispatch
+	 * function can safely enter malloc.
+	 */
+	L4_Sleep(L4_TimePeriod(20 * 1000));
+
+	static const struct boot_con_vtable vtab = {
+		.write = &bootcon_write,
+	};
+	for(;;) {
+		L4_Word_t status = _muidl_boot_con_dispatch(&vtab);
+		if(status == MUIDL_UNKNOWN_LABEL) {
+			L4_MsgTag_t tag = muidl_get_tag();
+			printf("bootcon: unknown message label=%#lx, u=%lu, t=%lu\n",
+				L4_Label(tag), L4_UntypedWords(tag), L4_TypedWords(tag));
+		} else if(status != 0 && !MUIDL_IS_L4_ERROR(status)) {
+			printf("bootcon: dispatch status %#lx (last tag %#lx)\n",
+				status, muidl_get_tag().raw);
+		}
+	}
+
+	return 0;
+}
+
+
+static L4_ThreadId_t console_init(struct htable *root_args)
+{
+	thrd_t con_thrd;
+	int n = thrd_create(&con_thrd, &bootcon_thread_fn, root_args);
+	return n != thrd_success ? L4_nilthread
+		: L4_GlobalIdOf(thrd_tidof_NP(con_thrd));
+}
+
+
+/* gets a zero-or-one argument and returns it, or NULL if there wasn't one.
+ * (zero-or-more will wait until the structures accommodate it.)
+ */
+static const char *get_root_arg(struct htable *root_args, const char *key)
+{
+	struct root_arg *arg = htable_get(root_args,
+		hash_string(key), &arg_cmp, key);
+	return arg != NULL ? arg->value : NULL;
+}
+
+
+static int launch_init(
+	uint16_t *init_pid_p,
+	struct htable *root_args, L4_ThreadId_t console)
+{
+	const char *init = get_root_arg(root_args, "init");
+	if(init == NULL) panic("no init specified! can't boot like this.");
+
+	printf("running init=`%s'\n", init);
+	char *copy = strdup(init), *argbuf = NULL;
+	for(int i=0; copy[i] != '\0'; i++) {
+		if(copy[i] != ';') continue;
+		if(argbuf == NULL) {
+			copy[i] = '\0';
+			argbuf = &copy[i + 1];
+		} else {
+			copy[i] = 0x1e;	/* see RECSEP */
+		}
+	}
+	if(argbuf == NULL) argbuf = "";
+	L4_Word_t servs[3], cookies[3];
+	int32_t fds[3];
+	for(int i=0; i < 3; i++) {
+		fds[i] = i;
+		if(i == 0) {
+			servs[i] = L4_nilthread.raw;
+			cookies[i] = 0;
+		} else {
+			servs[i] = console.raw;
+			cookies[i] = 0xbadcafe0;
+		}
+	}
+	int n = __proc_spawn(uapi_tid, init_pid_p, copy,
+		argbuf, "", servs, 3, cookies, 3, fds, 3);
+	free(copy);
+	return n;
+}
+
+
 static bool is_good_utcb(void *ptr)
 {
 	const L4_ThreadId_t dump_tid = L4_GlobalId(1000, 7);
@@ -1233,6 +1389,8 @@ int main(void)
 	L4_ThreadId_t sm_pager = L4_nilthread;
 	sysmem_tid = start_sysmem(&sm_pager, &sm_utcb, &sm_kip);
 	move_to_sysmem(sm_pager);
+	struct htable root_args = HTABLE_INITIALIZER(root_args, &hash_arg, NULL);
+	parse_initrd_args(&root_args);
 
 	uapi_init();
 	L4_Fpage_t root_kip = L4_FpageLog2((L4_Word_t)the_kip,
@@ -1249,6 +1407,7 @@ int main(void)
 		abort();
 	}
 	rt_thrd_tests();
+	L4_ThreadId_t con_tid = console_init(&root_args);
 
 	/* configure sysinfo. */
 	thrd_t kmsg;
@@ -1319,19 +1478,41 @@ int main(void)
 		.memory.biggest_page_log2 = PAGE_BITS,
 	};
 
-	/* run systest if present. */
-	L4_ThreadId_t systest_tid = spawn_systask("systest", NULL);
-	if(!L4_IsNilThread(systest_tid)) {
-		/* wait until it's been removed. */
-		L4_MsgTag_t tag;
-		do {
-			L4_Accept(L4_UntypedWordsAcceptor);
-			tag = L4_Receive(systest_tid);
-		} while(L4_IpcSucceeded(tag));
-		if(L4_ErrorCode() != 5) {
-			printf("systest exit ipc failed, ec=%lu\n", L4_ErrorCode());
-			abort();
+	/* run specified boot module as a systask and wait for it to complete, as
+	 * determined by its main thread becoming unavailable.
+	 */
+	/* TODO: remove this feature when systests aren't enabled using a
+	 * compiletime switch.
+	 */
+	/* TODO: run multiway modules as well; one after another. */
+	const char *waitmod = get_root_arg(&root_args, "waitmod");
+	if(waitmod != NULL) {
+		L4_ThreadId_t wm_tid = spawn_systask(waitmod, NULL);
+		if(!L4_IsNilThread(wm_tid)) {
+			/* wait until it's been removed, indicating completion. */
+			L4_MsgTag_t tag;
+			do {
+				L4_Accept(L4_UntypedWordsAcceptor);
+				tag = L4_Receive(wm_tid);
+			} while(L4_IpcSucceeded(tag));
+			if(L4_ErrorCode() != 5) {
+				printf("systest exit ipc failed, ec=%lu\n", L4_ErrorCode());
+				abort();
+			}
 		}
+	}
+
+	/* launch init.
+	 * TODO: when init exits, reboot or shutdown according to its exit code
+	 * (or some such).
+	 */
+	uint16_t init_pid;
+	n = launch_init(&init_pid, &root_args, con_tid);
+	if(n != 0) {
+		printf("FAIL: can't launch init, n=%d\n", n);
+		panic("this means your system is heavily broken!");
+	} else if(init_pid != 1) {
+		panic("init's pid isn't 1? what in tarnation");
 	}
 
 	printf("*** root entering service mode\n");

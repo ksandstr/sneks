@@ -1,15 +1,27 @@
 #!/usr/bin/perl
 use Modern::Perl '2015';
+use Getopt::Long;
 
 # script that, given a test name, finds the corresponding test ID for use with
 # the "runonly" testbench syntax.
 
-die "gotta have a parameter!" unless @ARGV;
+my $test_user = 0;
+my $test_system = 0;
+GetOptions("user" => \$test_user, "system" => \$test_system)
+	or die "malformed command-line arguments";
+
+die "must specify exactly one of --user or --system"
+	unless $test_user xor $test_system;
+
 -f 'run.sh' || die "not in the right directory";
+die "gotta have a parameter!" unless @ARGV;
+
+my $opts_name = $test_user ? "UTEST_OPTS" : "SYSTEST_OPTS";
 
 my @matched;
 $SIG{PIPE} = sub { };		# and smoke it
-$ENV{SNEKS_OPTS} = "--describe";
+$ENV{opts_name} = "--describe";
+$ENV{SYSTEST} = 1 if $test_system;
 open(DESCRIBE, "./run.sh -display none 2>&1 |")
 	|| die "can't open pipe from run.sh!";
 while(<DESCRIBE>) {
@@ -41,7 +53,8 @@ close DESCRIBE;
 
 # final output.
 if(@matched) {
-	print "command: stuff/run-only.pl " . join(' ', @matched) . "\n";
+	my $side = $test_user ? "--user" : "--system";
+	print "command: stuff/run-only.pl $side " . join(' ', @matched) . "\n";
 } else {
 	print "no matches.\n";
 }

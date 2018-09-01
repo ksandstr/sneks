@@ -1,0 +1,11 @@
+
+/* implementation spec for root's initial console. not for consumption outside
+ * root/. will be replaced once actual ttyS0 etc. terminal selection stuff is
+ * available.
+ */
+
+#include <api/io.idl>
+
+interface BootCon: Sneks::IO {
+	/* nothing here but us chickens */
+};

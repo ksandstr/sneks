@@ -5,17 +5,21 @@ include config.mk
 .PHONY: all clean distclean check qcheck
 
 
-# NOTE: the sys/test line should be last!
+# NOTE: the sys/test line should be last non-userspace thing!
 all: tags
 	+@make -C lib all
 	+@make -C root all
 	+@make -C sys all
 	+@make -C sys/test all
+	+@make -C user/crt all
+	+@make -C user/test all
 	+@make initrd.img
 
 
 clean:
 	@rm -f *.o initrd.img $(CLEAN_PATS)
+	+@make -C user/crt clean
+	+@make -C user/test clean
 	+@make -C sys clean
 	+@make -C root clean
 	+@make -C lib clean
@@ -24,18 +28,26 @@ clean:
 distclean: clean
 	@rm -f tags
 	@rm -rf .deps
+	+@make -C user/test distclean
+	+@make -C user/crt distclean
 	+@make -C sys distclean
 	+@make -C root distclean
 	+@make -C lib distclean
 	@find . -name ".deps" -type d -print|xargs rm -rf
 
 
+# originally qcheck would skip framework selftests, but the name has stuck for
+# running all tests which are relevant rather than the whole shebang. if,
+# sometime in the future, scripting becomes clever enough to only execute tests
+# that've been rebuilt between last run and now, qcheck may do that instead.
 qcheck: check
 
 
 check: all
 	@echo "-- system tests..."
-	@$(CFGDIR)/../mung/user/testbench/report.pl
+	@SYSTEST=1 $(MUNG_DIR)/user/testbench/report.pl
+	@echo "-- userspace tests..."
+	@$(MUNG_DIR)/user/testbench/report.pl
 	@echo "-- all tests completed!"
 
 

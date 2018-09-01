@@ -87,13 +87,14 @@ struct vp {
 
 
 /* address space. PID implied. valid when ->kip_area.raw != 0. uninitialized
- * when L4_IsNilFpace(->utcb_area).
+ * when L4_IsNilFpage(->utcb_area).
  */
 struct vm_space
 {
 	L4_Fpage_t kip_area, utcb_area, sysinfo_area;
 	struct htable pages;	/* vp by int_hash(->vaddr & ~PAGE_MASK) */
 	struct rb_root maps;	/* lazy_mmap per range of addr and length */
+	L4_Word_t brk;			/* top of non-mmap heap */
 };
 
 
@@ -314,6 +315,41 @@ static int vm_mmap(
 }
 
 
+static int vm_brk(L4_Word_t addr)
+{
+	int sender_pid = pidof_NP(muidl_get_sender());
+	if(unlikely(sender_pid >= SNEKS_MAX_PID)) return -EINVAL;
+
+	printf("%s: sender_pid=%d, addr=%#lx\n", __func__, sender_pid, addr);
+	struct vm_space *sp = ra_id2ptr(vm_space_ra, sender_pid);
+	assert(!L4_IsNilFpage(sp->utcb_area));
+
+	/* FIXME: pop an error if @addr is past the end of userspace virtual
+	 * memory range.
+	 */
+
+	if(addr < sp->brk) {
+		/* TODO: find and release pages that aren't associated with
+		 * a lazy_mmap.
+		 */
+	}
+
+	sp->brk = addr | PAGE_MASK;	/* end of data segment (inclusive) */
+
+	return 0;
+}
+
+
+static void space_ctor(struct vm_space *dest)
+{
+	dest->kip_area.raw = ~0ul;
+	dest->utcb_area = L4_Nilpage;
+	htable_init(&dest->pages, &hash_vp_fn, NULL);
+	dest->maps = RB_ROOT;
+	dest->brk = 0;
+}
+
+
 static int vm_fork(uint16_t srcpid, uint16_t destpid)
 {
 	if(srcpid > SNEKS_MAX_PID || destpid > SNEKS_MAX_PID) return -EINVAL;
@@ -337,10 +373,7 @@ static int vm_fork(uint16_t srcpid, uint16_t destpid)
 	struct vm_space *dest = ra_alloc(vm_space_ra,
 		destpid > 0 ? destpid : -1);
 	if(dest == NULL) return -EEXIST;
-	dest->kip_area.raw = ~0ul;
-	dest->utcb_area = L4_Nilpage;
-	htable_init(&dest->pages, &hash_vp_fn, NULL);
-	dest->maps = RB_ROOT;
+	space_ctor(dest);
 
 	if(src != NULL) {
 		/* FIXME: actually fork @src's stuff over. */
@@ -468,7 +501,7 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 		return;
 	}
 
-	//printf("%s: pid=%d, faddr=%#lx, fip=%#lx\n", __func__, pid, faddr, fip);
+	printf("%s: pid=%d, faddr=%#lx, fip=%#lx\n", __func__, pid, faddr, fip);
 
 	int eck = e_begin();
 
@@ -478,7 +511,7 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 	struct vp *old = htable_get(&sp->pages, hash,
 		&cmp_vp_to_addr, &faddr_page);
 	if(old != NULL && (VP_RIGHTS(old) & fault_rwx) != fault_rwx) {
-		printf("%s: segv (access mode %#x, old page had %#x)\n", __func__,
+		printf("%s: segv (access=%#x, had=%#x)\n", __func__,
 			fault_rwx, VP_RIGHTS(old));
 		goto segv;
 	} else if(old != NULL) {
@@ -499,23 +532,35 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 		goto done;
 	}
 
-	/* TODO: check program break (quickly) */
-
+	/* TODO: change vm_brk() to allocate virtual memory but not physical
+	 * memory, and fill those in as faults are served at the cost of a hash
+	 * table lookup. currently this crawls over a red-black tree which is
+	 * just about worst performance in a post-Meltdown world.
+	 */
+	int rights;
 	struct lazy_mmap *mm = find_lazy_mmap(sp, faddr);
-	if(unlikely(mm == NULL)) {
+	if(mm == NULL && faddr <= sp->brk) {
+		printf("faddr=%#lx, sp->brk=%#lx -> new anon memory!\n",
+			faddr, sp->brk);
+		rights = L4_FullyAccessible;
+		goto new_anon;
+	} else if(mm == NULL) {
 		printf("%s: segv (unmapped)\n", __func__);
 		goto segv;
-	}
-	assert(faddr >= mm->addr && faddr < mm->addr + mm->length);
-	int mm_rwx = (mm->flags >> 16) & 7;
-	if(unlikely((fault_rwx & mm_rwx) != fault_rwx)) {
-		printf("%s: segv (access mode, mmap)\n", __func__);
-		goto segv;
+	} else {
+		assert(faddr >= mm->addr && faddr < mm->addr + mm->length);
+		rights = (mm->flags >> 16) & 7;
+		if(unlikely((fault_rwx & rights) != fault_rwx)) {
+			printf("%s: segv (access mode, mmap)\n", __func__);
+			goto segv;
+		}
 	}
 
 	uint8_t *page;
 	if((mm->flags & MAP_ANONYMOUS) != 0) {
-		struct pl *link = get_free_pl();
+		struct pl *link;
+new_anon:
+		link = get_free_pl();
 		page = (uint8_t *)((uintptr_t)link->page_num << PAGE_BITS);
 		memset(page, '\0', PAGE_SIZE);
 		push_page(&page_active_list, link);
@@ -554,7 +599,7 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 		/* FIXME */
 		abort();
 	}
-	vp->status = faddr_page | mm_rwx;
+	vp->status = faddr_page | rights;
 	vp->age = 1;
 	vp->status = (L4_Word_t)page >> PAGE_BITS;
 	bool ok = htable_add(&sp->pages, hash_vp_fn(vp, NULL), vp);
@@ -565,7 +610,7 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 	}
 
 	L4_Fpage_t map_page = L4_FpageLog2((L4_Word_t)page, PAGE_BITS);
-	L4_Set_Rights(&map_page, (mm->flags >> 16) & 7);
+	L4_Set_Rights(&map_page, rights);
 	*map_out = L4_MapItem(map_page, faddr & ~PAGE_MASK);
 
 done:
@@ -574,6 +619,8 @@ done:
 
 segv:
 	/* pop segfault and don't reply. */
+	printf("%s: segfault in pid=%d at faddr=%#lx fip=%#lx\n",
+		__func__, pid, faddr, fip);
 	n = __proc_kill(__uapi_tid, pid, SIGSEGV);
 	if(n != 0) {
 		printf("%s: Proc::kill() failed, n=%d\n", __func__, n);
@@ -627,6 +674,7 @@ int main(int argc, char *argv[])
 		.configure = &vm_configure,
 		.upload_page = &vm_upload_page,
 		.breath_of_life = &vm_breath_of_life,
+		.brk = &vm_brk,
 
 		/* L4X2::FaultHandler */
 		.handle_fault = &vm_pf,

@@ -1,0 +1,31 @@
+
+#ifndef __API_IO_IDL__
+#define __API_IO_IDL__
+
+#include <muidl.idl>
+#include <l4x2.idl>
+#include <posixlike.idl>
+
+
+module Sneks {
+
+/* input/output services, i.e. character and block device providers. */
+[StubPrefix(__io), IfaceLabel(0xe803)]
+interface IO
+{
+	/* TODO: get these from posixlike.idl */
+	typedef unsigned long size_t;
+	typedef unsigned long off_t;
+	typedef unsigned short pid_t;
+
+	/* this is the weak I/O interface where data is copied through the
+	 * microkernel. so the transfer size can be fairly small.
+	 */
+	typedef sequence<octet, 65536> ioseg;
+	unsigned short write(in long fd, in ioseg buf)
+		raises(Posix::Errno);
+};
+
+};
+
+#endif

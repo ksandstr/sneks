@@ -40,10 +40,13 @@ systest: $(LDSCRIPT) systest.o harness.o $(TEST_OBJS) \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
-initrd_spawn_partner: static-user.ld spawn-partner.o \
+# note that the initrd spawn partner is not linked into the main userspace
+# library, since it might not be built at this point yet.
+initrd_spawn_partner: $(CFGDIR)/user/crt/static.ld spawn-partner.o \
 		proc-client.o proc-common.o
 	@echo "  LD $@"
-	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T static-user.ld \
+	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 \
+		-T $(CFGDIR)/user/crt/static.ld \
 		$(CFGDIR)/sys/crt/crt0.o $(filter %.o,$^) $(filter %.a,$^) \
 		$(LIBS) -lsneks -ll4 -L /usr/lib32 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)

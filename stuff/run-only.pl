@@ -1,15 +1,22 @@
 #!/usr/bin/perl
-use Modern::Perl;
+use Modern::Perl '2015';
 use Getopt::Long;
 
 # script that, given a sequence of pairs of test name and optional iteration
-# spec, runs the corresponding tests using the "runonly" testbench syntax. an
-# absence of an iteration spec is the same as a "*".
+# spec, runs the corresponding tests using the "runonly" syntax. an absence of
+# an iteration spec is the same as a "*".
 
 my $verbose = 0;
 my $debug = 0;
-GetOptions("verbose" => \$verbose, "debug" => \$debug)
+my $test_user = 0;
+my $test_system = 0;
+GetOptions(
+		"verbose" => \$verbose, "debug" => \$debug,
+		"user" => \$test_user, "system" => \$test_system)
 	or die "malformed command-line arguments";
+
+die "must specify exactly one of --user or --system"
+	unless $test_user xor $test_system;
 
 -f 'run.sh' || die "not in the right directory";
 die "this script's not very useful without at least one parameter."
@@ -64,6 +71,14 @@ if($debug) {
 	}
 }
 
-$ENV{SNEKS_OPTS} = "--run-only " . join('+', map { combine_spec($_) } @tests);
-print STDERR "opts is: $ENV{SNEKS_OPTS}\n" if $verbose;
+my $envvar;
+if($test_user) {
+	die unless $test_user;
+	$envvar = "UTEST_OPTS";
+} else {
+	die unless $test_system;
+	$envvar = "SYSTEST_OPTS";
+}
+$ENV{$envvar} = "--run-only " . join('+', map { combine_spec($_) } @tests);
+print STDERR "$envvar <- $ENV{$envvar}\n" if $verbose;
 exec "./run.sh -display none 2>&1";

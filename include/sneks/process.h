@@ -32,6 +32,32 @@
 #define SNEKS_PID_T_MASK 0x30000
 #define SNEKS_PID_T_SHIFT 3
 
+
+/* for passing file descriptors through spawn and exec: the first fdlist
+ * item's address is given in the startup routine's stack pointer, or 0 if
+ * there are none. in any given fd list, ->fd appears in descending order, so
+ * that the extent of the file descriptor table can be determined by reading
+ * the first fdlist item; and no ->fd may appear twice.
+ *
+ * this should be defined in IDL so that Proc::spawn could accept a sequence
+ * thereof, but since LLVM is a bit fucky wrt sizeof on struct types (i can't
+ * pull a targetref from anywhere!), it's here instead.
+ */
+struct sneks_fdlist
+{
+	unsigned short next; /* # of bytes from start to next item, or 0 to end */
+	unsigned short fd;
+	L4_ThreadId_t serv;
+	L4_Word_t cookie;
+} __attribute__((packed));
+
+
+static inline struct sneks_fdlist *sneks_fdlist_next(
+	struct sneks_fdlist *cur)
+{
+	return (void *)cur + cur->next;
+}
+
 #endif
 
 

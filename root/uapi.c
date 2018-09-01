@@ -24,10 +24,11 @@
 #include <sneks/process.h>
 
 #include "muidl.h"
-#include "root-uapi-defs.h"
 #include "vm-defs.h"
 #include "fs-defs.h"
 #include "info-defs.h"
+#include "proc-defs.h"
+#include "root-uapi-defs.h"
 #include "elf.h"
 #include "defs.h"
 
@@ -476,9 +477,55 @@ static int desep(char *dst, const char *src)
 }
 
 
+static int cmp_fdlist_by_fd_desc(const void *ap, const void *bp) {
+	const struct sneks_fdlist *a = ap, *b = bp;
+	return (long)b->fd - (long)a->fd;
+}
+
+
+static int make_fdlist_page(
+	void **ptr, int *n_pages_p,
+	const L4_Word_t *fd_servs, unsigned fd_servs_len,
+	const L4_Word_t *fd_cookies, unsigned fd_cookies_len,
+	const int32_t *fd_fds, unsigned fd_fds_len)
+{
+	int n_fds = min(min(fd_fds_len, fd_cookies_len), fd_servs_len);
+	if(n_fds == 0) {
+		*ptr = NULL;
+		*n_pages_p = 0;
+		return 0;
+	}
+	struct sneks_fdlist *list;
+	size_t alloc = (n_fds * sizeof *list + PAGE_SIZE - 1) & ~PAGE_MASK;
+	list = aligned_alloc(PAGE_SIZE, alloc);
+	if(list == NULL) return -ENOMEM;
+	memset(list + n_fds, '\0', alloc - n_fds * sizeof *list);
+	for(int i=0; i < n_fds; i++) {
+		list[i] = (struct sneks_fdlist){
+			.next = sizeof *list, .fd = fd_fds[i],
+			.cookie = fd_cookies[i],
+			.serv.raw = fd_servs[i],
+		};
+	}
+	qsort(list, n_fds, sizeof *list, &cmp_fdlist_by_fd_desc);
+	for(int i=1; i < n_fds; i++) {
+		if(list[i - 1].fd == list[i].fd) {
+			free(list);
+			return -EINVAL;
+		}
+	}
+	*ptr = list;
+	*n_pages_p = alloc / PAGE_SIZE;
+	return 0;
+}
+
+
 static int uapi_spawn(
 	const char *filename,
-	const char *argbuf, const char *envbuf)
+	const char *argbuf, const char *envbuf,
+	const L4_Word_t *fd_servs, unsigned fd_servs_len,
+	const L4_Word_t *fd_cookies, unsigned fd_cookies_len,
+	const int32_t *fd_fds, unsigned fd_fds_len)
 {
 	printf("%s: entered! filename=`%s'\n", __func__, filename);
 	assert(!L4_IsNilThread(vm_tid));
@@ -561,6 +608,27 @@ static int uapi_spawn(
 	}
 	free(argtmp);
 
+	/* also the fdlist. */
+	L4_Word_t fdlist_start = 0;
+	void *fd_pages;
+	int n_fdlist_pages;
+	n = make_fdlist_page(&fd_pages, &n_fdlist_pages,
+		fd_servs, fd_servs_len, fd_cookies, fd_cookies_len,
+		fd_fds, fd_fds_len);
+	if(n != 0) goto fail;	/* FIXME: cleanup */
+	if(n_fdlist_pages > 0) {
+		fdlist_start = argpos;
+		for(int i=0; i < n_fdlist_pages; i++, argpos += PAGE_SIZE) {
+			n = __vm_upload_page(vm_tid, newpid, argpos,
+				fd_pages + i * PAGE_SIZE, PAGE_SIZE);
+			if(n != 0) {
+				/* FIXME: cleanup */
+				goto fail;
+			}
+		}
+	}
+	free(fd_pages);
+
 	/* create first thread and address space. */
 	void *utcb_loc;
 	L4_ThreadId_t first_tid = allocate_thread(newpid, &utcb_loc);
@@ -583,7 +651,8 @@ static int uapi_spawn(
 
 	/* send it. */
 	L4_Word_t status;
-	n = __vm_breath_of_life(vm_tid, &status, first_tid.raw, 0, start_addr);
+	n = __vm_breath_of_life(vm_tid, &status, first_tid.raw,
+		fdlist_start, start_addr);
 	if(n < 0) {
 		printf("%s: VM::breath_of_life() failed, n=%d\n", __func__, n);
 		/* FIXME: cleanup */

@@ -62,22 +62,25 @@ struct test_info
 };
 
 #define START_TEST(NAME) \
-	static void NAME (int); \
+	static void TEST_ ## NAME (int); \
 	static const struct test_info NAME ## _info = { \
-		.test_fn = &NAME, .name = #NAME, \
+		.test_fn = &TEST_ ## NAME, .name = #NAME, \
 	}; \
-	static void NAME (int _i) {
+	static void TEST_ ## NAME (int _i) {
 #define START_LOOP_TEST(NAME, VAR, LOW, HIGH) \
-	static void NAME (int); \
+	static void LOOP_TEST_ ## NAME (int); \
 	static const struct test_info NAME ## _info = { \
-		.test_fn = &NAME, .name = #NAME, \
+		.test_fn = &LOOP_TEST_ ## NAME, .name = #NAME, \
 		.iter_low = (LOW), .iter_high = (HIGH), \
 	}; \
-	static void NAME (int _i) { \
+	static void LOOP_TEST_ ## NAME (int _i) { \
 		int VAR = _i;
 #define END_TEST }
 
-/* brave new world of linker magic test specs */
+
+/* brave new world of linker magic test specs. these ones work for systests
+ * only, and those have to be in a C source file in a t/ path.
+ */
 
 struct systest_spec {
 	const char *path;
@@ -100,9 +103,28 @@ struct systest {
 };
 
 
+/* (this should be in sys/test/defs.h or some such.) */
 extern void run_all_systests(void);
 extern void run_systest_by_spec(char **specs, size_t n_specs);
 extern void describe_all_systests(void);
+
+
+/* these work for userspace tests. they're just like the ones for systests,
+ * but without the "systest" nomenclature. this turns a class of obscure
+ * malfunction into linker errors, which is nice.
+ */
+
+struct utest_spec {
+	const char *path;
+	const struct test_info *test;
+};
+AUTODATA_TYPE(all_utest_specs, struct utest_spec);
+
+#define DECLARE_TEST(path_, test_) \
+	static const struct utest_spec _UT_ ##test_ = { \
+		.path = (path_), .test = &(test_## _info), \
+	}; \
+	AUTODATA(all_utest_specs, &_UT_ ##test_);
 
 
 /* fail() inherited from the libtap imitation */

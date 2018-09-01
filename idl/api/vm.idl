@@ -73,6 +73,10 @@ interface VM
 		out L4X2::word rc,
 		in L4X2::ThreadId target,
 		in L4X2::word sp, in L4X2::word ip);
+
+	/* as brk(2). */
+	void brk(in L4X2::word addr)
+		raises(Posix::Errno);
 };
 
 };
