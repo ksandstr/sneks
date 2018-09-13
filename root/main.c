@@ -7,7 +7,6 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <stdatomic.h>
 #include <stdarg.h>
 #include <string.h>
 #include <threads.h>
@@ -23,6 +22,7 @@
 
 #include <l4/types.h>
 #include <l4/thread.h>
+#include <l4/schedule.h>
 #include <l4/space.h>
 #include <l4/ipc.h>
 #include <l4/kip.h>
@@ -51,7 +51,7 @@
 
 
 struct sysmem_page {
-	_Atomic L4_Word_t address;
+	L4_Word_t address;
 };
 
 
@@ -119,22 +119,15 @@ static int sysmem_pager_fn(void *param_ptr)
 				if(p != NULL) {
 #if 0
 					L4_Word_t access = tag.X.label & L4_FullyAccessible;
-					printf("%s: pf addr=%#lx, ip=%#lx, %c%c%c\n",
-						__func__, raw_addr, fip,
+					printf("sysmem pf addr=%#lx, ip=%#lx, %c%c%c\n",
+						raw_addr, fip,
 						(access & L4_Readable) ? 'r' : '-',
 						(access & L4_Writable) ? 'w' : '-',
 						(access & L4_eXecutable) ? 'x' : '-');
 #endif
 					L4_Fpage_t map = L4_FpageLog2(p->address, PAGE_BITS);
 					L4_Set_Rights(&map, L4_FullyAccessible);
-					L4_Word_t old = atomic_exchange(&p->address, 0);
-					if(old != 0) {
-						htable_del(pages, word_hash(faddr), p);
-						free(p);
-						assert(htable_get(pages, word_hash(faddr),
-							&sysmem_page_cmp, &faddr) == NULL);
-					}
-					L4_GrantItem_t gi = L4_GrantItem(map, faddr);
+					L4_MapItem_t gi = L4_MapItem(map, faddr);
 					L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
 					L4_LoadMRs(1, 2, gi.raw);
 				} else if(faddr == 0) {
@@ -164,7 +157,7 @@ static void add_sysmem_pages(struct htable *ht, L4_Word_t start, L4_Word_t end)
 {
 	for(L4_Word_t addr = start; addr < end; addr += PAGE_SIZE) {
 		struct sysmem_page *p = malloc(sizeof *p);
-		atomic_store(&p->address, addr);
+		p->address = addr;
 		htable_add(ht, word_hash(p->address), p);
 	}
 }
@@ -355,11 +348,10 @@ static L4_ThreadId_t start_sysmem(
 		abort();
 	}
 
-	/* `pages' is accessed from within sysmem_pager_fn() and this function.
-	 * however, since the former only does so in response to pagefault, and
-	 * pagefaults only occur after we've started the pager's client process,
-	 * we can without risk add things to `pages' while setting the client
-	 * process up. sysmem_pager_fn() takes ownership of `pages' eventually.
+	/* `pages' is accessed from within sysmem_pager_fn() and this function. by
+	 * setting the pager to run at a lower priority, we ensure that it never
+	 * preempts the launching thread, making the hash table mostly safe.
+	 * (knocks on wood.)
 	 */
 	struct htable *pages = malloc(sizeof *pages);
 	htable_init(pages, &hash_sysmem_page, NULL);
@@ -371,6 +363,8 @@ static L4_ThreadId_t start_sysmem(
 		abort();
 	}
 	*pager_p = thrd_tidof_NP(pg);
+	int rc = L4_Set_Priority(*pager_p, 1);	/* very very low indeed. */
+	if(rc == 0) panic("couldn't set sysmem pager priority!");
 
 	/* parse and load the ELF32 binary. */
 	const Elf32_Ehdr *ee = (void *)start_addr;
@@ -455,14 +449,11 @@ static L4_ThreadId_t start_sysmem(
 		p != NULL;
 		p = htable_next(pages, &it))
 	{
-		L4_Word_t addr = atomic_load(&p->address);
-		if(addr == 0) continue;
-
-		send_phys_to_sysmem(sysmem_tid, false, L4_FpageLog2(addr, PAGE_BITS));
-		if(atomic_exchange(&p->address, 0) != 0) {
-			htable_delval(pages, &it);
-			free(p);
-		}
+		assert(p->address != 0);
+		send_phys_to_sysmem(sysmem_tid, false,
+			L4_FpageLog2(p->address, PAGE_BITS));
+		htable_delval(pages, &it);
+		free(p);
 	}
 	assert(pages->elems == 0);
 	htable_clear(pages);
