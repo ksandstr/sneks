@@ -105,7 +105,7 @@ static char **unpack_argpage(
 	if(PAGE_SIZE - (buflen & PAGE_MASK) > n_alloc * sizeof(char *) + 8) {
 		strv = (char **)((base + buflen + 7) & ~7);
 	} else {
-		strv = malloc(n_strs * sizeof *strv);
+		strv = malloc(n_alloc * sizeof *strv);
 		if(strv == NULL) abort();
 	}
 	char *str = (char *)base;
