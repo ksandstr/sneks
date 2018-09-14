@@ -33,7 +33,7 @@ extern struct __sneks_file *__files;
 
 
 struct sneks_fdlist;
-extern void __file_init(const struct sneks_fdlist *fdlist);
+extern void __file_init(struct sneks_fdlist *fdlist);
 
 
 #endif
