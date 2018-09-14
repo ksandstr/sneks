@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <unistd.h>
 #include <assert.h>
 #include <errno.h>
@@ -12,6 +13,7 @@
 #include <l4/kdebug.h>
 
 #include <sneks/mm.h>
+#include <sneks/process.h>
 #include <sneks/sysinfo.h>
 
 #include "private.h"
@@ -73,6 +75,49 @@ long sysconf(int name)
 }
 
 
+static size_t nstrlen(int *count_p, const char *base)
+{
+	int count = 0;
+	const char *s = base;
+	while(*s != '\0') {
+		count++;
+		s += strlen(s) + 1;
+	}
+	if(count_p != NULL) *count_p = count;
+	return s - base + 1;
+}
+
+
+static uintptr_t fdlist_last(uintptr_t fdlistptr)
+{
+	if(fdlistptr == 0) return 0;
+	struct sneks_fdlist *list = (void *)fdlistptr;
+	while(list->next != 0) list = sneks_fdlist_next(list);
+	return (uintptr_t)&list[1];
+}
+
+
+static char **unpack_argpage(
+	L4_Word_t base, int buflen, int n_strs, bool terminate)
+{
+	char **strv;
+	int n_alloc = terminate ? n_strs + 1 : n_strs;
+	if(PAGE_SIZE - (buflen & PAGE_MASK) > n_alloc * sizeof(char *) + 8) {
+		strv = (char **)((base + buflen + 7) & ~7);
+	} else {
+		strv = malloc(n_strs * sizeof *strv);
+		if(strv == NULL) abort();
+	}
+	char *str = (char *)base;
+	for(int i=0; *str != '\0'; str += strlen(str) + 1, i++) {
+		assert(i <= n_strs);
+		strv[i] = str;
+	}
+	if(terminate) strv[n_strs] = NULL;
+	return strv;
+}
+
+
 int __crt1_entry(uintptr_t fdlistptr)
 {
 	__the_kip = L4_GetKernelInterface();
@@ -80,19 +125,31 @@ int __crt1_entry(uintptr_t fdlistptr)
 
 	extern char _end;
 	L4_Word_t argpos = ((L4_Word_t)&_end + PAGE_SIZE - 1) & ~PAGE_MASK;
-	/* TODO: gee, it'd sure be nice to have realloc and such here for programs
-	 * that're given a gopping enormous number of arguments. such as those
-	 * non-primordial-goo ones, over there just past the horizon.
+
+	/* the way that argument passing works at the moment is silly: UAPI puts a
+	 * flattened array of argv[] on the page after &_end, and then the same
+	 * for envp[] on the page after that array ends. fdlists go after that.
+	 *
+	 * to parse this, all userspace programs must start by parsing through all
+	 * three buffers and then choosing the page after the last of these ends
+	 * for the very first program break. this is fucktarded, and UAPI should
+	 * be changed to pass a pointer to a <struct sneks_arghdr> or some such
+	 * where fdlistptr goes right now; uapi_spawn() crawls over its parameters
+	 * to produce the silly version already, so it's also a performance insult.
+	 *
+	 * TODO: replace all of this with something reasonable, i.e. doing all of
+	 * this work in UAPI already.
 	 */
-	char *argv[12], *arg = (char *)argpos;
-	int n_args = 0;
-	while(*arg != '\0' && n_args < ARRAY_SIZE(argv)) {
-		argv[n_args++] = arg;
-		arg += strlen(arg) + 1;
-	}
-	/* we don't care about envbuf for now, as there are no tests for that
-	 * anyway.
-	 */
+
+	L4_Word_t args_base = argpos;
+	int n_args, argbuflen = nstrlen(&n_args, (char *)args_base);
+	L4_Word_t envs_base = (argpos + argbuflen + PAGE_SIZE - 1) & ~PAGE_MASK;
+	int n_envs, envbuflen = nstrlen(&n_envs, (char *)envs_base);
+	// argpos = (argpos + envbuflen + PAGE_SIZE - 1) & ~PAGE_MASK;
+	L4_Word_t fdlist_end = fdlist_last(fdlistptr);
+	brk((void *)max((envs_base + PAGE_SIZE - 1) & ~PAGE_MASK,
+		(fdlist_end + PAGE_SIZE - 1) & ~PAGE_MASK));
+	/* right. malloc is now good. */
 
 	__file_init((void *)fdlistptr);
 	/* printf() works after this line only. otherwise, use
@@ -100,6 +157,7 @@ int __crt1_entry(uintptr_t fdlistptr)
 	 */
 
 	extern int main(int argc, char *argv[], char *envp[]);
-	char *envs = NULL;
-	return main(n_args, argv, &envs);
+	return main(n_args,
+		unpack_argpage(args_base, argbuflen, n_args, false),
+		unpack_argpage(envs_base, envbuflen, n_envs, true));
 }

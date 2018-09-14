@@ -14,26 +14,17 @@
 static uintptr_t current_brk = 0, heap_bottom = 0;
 
 
-void *sbrk(intptr_t increment)
+int brk(void *addr)
 {
-	if(current_brk == 0) {
-		extern char _end;
-		current_brk = ((L4_Word_t)&_end + PAGE_MASK) & ~PAGE_MASK;
+	uintptr_t old_brk = current_brk;
+	current_brk = (uintptr_t)addr;
+	if(heap_bottom == 0 || heap_bottom > current_brk) {
 		heap_bottom = current_brk;
-		assert(current_brk != 0);
 	}
 
-	void *ret = (void *)current_brk;
-	if(increment > 0) {
-		current_brk = (current_brk + increment + PAGE_MASK) & ~PAGE_MASK;
-	} else if(increment < 0) {
-		increment = (-increment + PAGE_MASK) & ~PAGE_MASK;
-		current_brk -= increment;
-	}
-	if(increment != 0) {
-		if(current_brk < heap_bottom) current_brk = heap_bottom;
-		/* FIXME: our pager might not be vm. get vm's thread ID from the
-		 * SIP instead.
+	if(current_brk != old_brk) {
+		/* FIXME: our pager might not be vm. get vm's thread ID from the SIP
+		 * instead.
 		 */
 		int n = __vm_brk(L4_Pager(), current_brk);
 		if(n != 0) {
@@ -43,5 +34,24 @@ void *sbrk(intptr_t increment)
 		}
 	}
 
+	return 0;
+}
+
+
+void *sbrk(intptr_t increment)
+{
+	if(increment == 0) return (void *)current_brk;
+	assert(current_brk > 0);
+
+	void *ret = (void *)current_brk;
+	uintptr_t new_brk;
+	if(increment > 0) {
+		new_brk = (current_brk + increment + PAGE_MASK) & ~PAGE_MASK;
+	} else {
+		assert(increment < 0);
+		increment = (-increment + PAGE_MASK) & ~PAGE_MASK;
+		new_brk = current_brk - increment;
+	}
+	if(brk((void *)new_brk) != 0) ret = (void *)-1;
 	return ret;
 }

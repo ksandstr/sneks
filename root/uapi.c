@@ -595,10 +595,10 @@ static int uapi_spawn(
 	/* compose and deliver args, env */
 	L4_Word_t argpos = (hi + PAGE_SIZE - 1) & ~PAGE_MASK;
 	const char *bufs[] = { argbuf, envbuf };
-	char *argtmp = malloc(max(strlen(argbuf), strlen(envbuf)) + 8);
+	void *argtmp = malloc(max(strlen(argbuf), strlen(envbuf)) + 8);
 	for(int i=0; i < ARRAY_SIZE(bufs); i++) {
 		int len = desep(argtmp, bufs[i]);
-		n = __vm_upload_page(vm_tid, newpid, argpos, (uint8_t *)argtmp, len);
+		n = __vm_upload_page(vm_tid, newpid, argpos, argtmp, len);
 		if(n != 0) {
 			free(argtmp);
 			/* FIXME: cleanup */

@@ -32,7 +32,7 @@ COLD void __file_init(const struct sneks_fdlist *fdlist)
 		struct __sneks_file *f = &__files[fdlist->fd];
 		f->service = fdlist->serv;
 		f->cookie = fdlist->cookie;
-		fdlist = (void *)fdlist + fdlist->next;
+		fdlist = sneks_fdlist_next(fdlist);
 	}
 
 	/* TODO: chuck @fdlist, or arrange caller to do so */
