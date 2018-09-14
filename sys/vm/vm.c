@@ -77,7 +77,12 @@ struct pl {
  * its high bit should always be clear. there will be other formats for
  * swapspace slots, references to pagecache items, copy on write, and so on.
  * this arrangement allows for as many as 2^31 physical pages in vm, or 8 TiB
- * worth.
+ * worth. if ->status is 0, anonymous memory has not yet been attached to this
+ * page by the fault handler.
+ *
+ * flags are assigned in ->vaddr's low 12 bits as follows:
+ *   - 2..0 are a mask of L4_Readable, L4_Writable, and L4_eXecutable.
+ *   - bits 11..3 are not used and should be left clear.
  */
 struct vp {
 	uintptr_t vaddr;	/* vaddr in 31..12, flags in 11..0 */
@@ -332,9 +337,29 @@ static int vm_brk(L4_Word_t addr)
 		/* TODO: find and release pages that aren't associated with
 		 * a lazy_mmap.
 		 */
+	} else if(addr > sp->brk && sp->brk != 0) {
+		/* allocate virtual memory for the new range. */
+		assert((sp->brk & PAGE_MASK) == 0);
+		for(L4_Word_t a = sp->brk; a < addr; a += PAGE_SIZE) {
+			size_t hash = int_hash(a);
+			struct vp *v = htable_get(&sp->pages, hash, &cmp_vp_to_addr, &a);
+			if(v != NULL) continue;
+			v = malloc(sizeof *v);
+			if(unlikely(v == NULL)) {
+				/* FIXME: roll back and error out */
+				abort();
+			}
+			*v = (struct vp){ .vaddr = a, .age = 1, .status = 0 };
+			assert(hash_vp_fn(v, NULL) == hash);
+			bool ok = htable_add(&sp->pages, hash, v);
+			if(unlikely(!ok)) {
+				/* FIXME. see above */
+				abort();
+			}
+		}
 	}
 
-	sp->brk = addr | PAGE_MASK;	/* end of data segment (inclusive) */
+	sp->brk = addr & ~PAGE_MASK;	/* end of data segment (exclusive) */
 
 	return 0;
 }
@@ -505,21 +530,28 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 
 	int eck = e_begin();
 
+	L4_Fpage_t map_page;
 	const int fault_rwx = L4_Label(muidl_get_tag()) & 7;
 	L4_Word_t faddr_page = faddr & ~PAGE_MASK;
 	size_t hash = int_hash(faddr_page);
 	struct vp *old = htable_get(&sp->pages, hash,
 		&cmp_vp_to_addr, &faddr_page);
-	if(old != NULL && (VP_RIGHTS(old) & fault_rwx) != fault_rwx) {
+	if(old != NULL && old->status == 0) {
+		/* lazy brk fastpath. */
+		struct pl *link = get_free_pl();
+		void *page = (void *)((uintptr_t)link->page_num << PAGE_BITS);
+		memset(page, '\0', PAGE_SIZE);
+		map_page = L4_FpageLog2((L4_Word_t)page, PAGE_BITS);
+		L4_Set_Rights(&map_page, L4_FullyAccessible);
+		push_page(&page_active_list, link);
+		e_free(link);
+		goto reply;
+	} else if(old != NULL && (VP_RIGHTS(old) & fault_rwx) != fault_rwx) {
 		printf("%s: segv (access=%#x, had=%#x)\n", __func__,
 			fault_rwx, VP_RIGHTS(old));
 		goto segv;
 	} else if(old != NULL) {
 		/* quick remap or expand. */
-#if 0
-		printf("%s: remap of %#lx\n", __func__,
-			(L4_Word_t)old->status << PAGE_BITS);
-#endif
 		L4_Fpage_t map_page = L4_FpageLog2(
 			old->status << PAGE_BITS, PAGE_BITS);
 		L4_Set_Rights(&map_page, VP_RIGHTS(old) & fault_rwx);
@@ -532,19 +564,9 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 		goto done;
 	}
 
-	/* TODO: change vm_brk() to allocate virtual memory but not physical
-	 * memory, and fill those in as faults are served at the cost of a hash
-	 * table lookup. currently this crawls over a red-black tree which is
-	 * just about worst performance in a post-Meltdown world.
-	 */
 	int rights;
 	struct lazy_mmap *mm = find_lazy_mmap(sp, faddr);
-	if(mm == NULL && faddr <= sp->brk) {
-		printf("faddr=%#lx, sp->brk=%#lx -> new anon memory!\n",
-			faddr, sp->brk);
-		rights = L4_FullyAccessible;
-		goto new_anon;
-	} else if(mm == NULL) {
+	if(mm == NULL) {
 		printf("%s: segv (unmapped)\n", __func__);
 		goto segv;
 	} else {
@@ -559,7 +581,6 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 	uint8_t *page;
 	if((mm->flags & MAP_ANONYMOUS) != 0) {
 		struct pl *link;
-new_anon:
 		link = get_free_pl();
 		page = (uint8_t *)((uintptr_t)link->page_num << PAGE_BITS);
 		memset(page, '\0', PAGE_SIZE);
@@ -609,8 +630,9 @@ new_anon:
 		abort();
 	}
 
-	L4_Fpage_t map_page = L4_FpageLog2((L4_Word_t)page, PAGE_BITS);
+	map_page = L4_FpageLog2((L4_Word_t)page, PAGE_BITS);
 	L4_Set_Rights(&map_page, rights);
+reply:
 	*map_out = L4_MapItem(map_page, faddr & ~PAGE_MASK);
 
 done:
