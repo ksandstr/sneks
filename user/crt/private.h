@@ -7,6 +7,9 @@
 #define _SNEKS_USER_CRT_PRIVATE_H
 
 #include <l4/types.h>
+#include <l4/kip.h>
+
+#include <sneks/sysinfo.h>
 
 
 /* invalid when .service is nil. */
@@ -19,6 +22,10 @@ struct __sneks_file {
 #define IS_FD_VALID(fd) !L4_IsNilThread(__files[(fd)].service)
 #define FD_SERVICE(fd) __files[(fd)].service
 #define FD_COOKIE(fd) __files[(fd)].cookie
+
+
+extern L4_KernelInterfacePage_t *__the_kip;
+extern struct __sysinfo *__the_sysinfo;
 
 
 /* what file descriptors index into. */

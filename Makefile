@@ -5,13 +5,14 @@ include config.mk
 .PHONY: all clean distclean check qcheck
 
 
-# NOTE: the sys/test line should be last non-userspace thing!
+# TODO: replace user/test etc. with just a make -C user all, making user/crt
+# the first subdir of that.
 all: tags
 	+@make -C lib all
 	+@make -C root all
 	+@make -C sys all
-	+@make -C sys/test all
 	+@make -C user/crt all
+	+@make -C sys/test all
 	+@make -C user/test all
 	+@make initrd.img
 

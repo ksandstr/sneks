@@ -1,4 +1,5 @@
 
+#include <stdio.h>
 #include <stdlib.h>
 
 #include <l4/types.h>
@@ -8,6 +9,7 @@
 #include <sneks/process.h>
 
 #include "proc-defs.h"
+#include "private.h"
 
 
 int getpid(void) {
@@ -18,11 +20,13 @@ int getpid(void) {
 
 void exit(int status)
 {
-	/* TODO: call Proc::exit instead, once the service is known (per
-	 * sysinfopage)
-	 */
+	int n = __proc_exit(__the_sysinfo->api.proc, status);
+	fprintf(stderr, "Proc::exit returned n=%d\n", n);
+	/* the alternative. */
 	for(;;) {
 		asm volatile ("int $69");	/* the sex number */
+		L4_Set_ExceptionHandler(L4_nilthread);
+		asm volatile ("int $96");	/* the weird sex number */
 		L4_Sleep(L4_Never);
 	}
 }
