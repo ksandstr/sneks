@@ -1,6 +1,8 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
 
 #include <l4/types.h>
 #include <l4/thread.h>
@@ -36,4 +38,10 @@ int atexit(void (*fn)(void))
 {
 	/* failure: implementation missing (oopsie) */
 	return -1;
+}
+
+
+pid_t wait(int *status_p)
+{
+	return (pid_t)-1;
 }
