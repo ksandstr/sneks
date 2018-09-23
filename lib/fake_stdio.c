@@ -8,6 +8,13 @@
 #include <assert.h>
 
 
+struct __stdio_file {
+	int foo;
+};
+
+extern void con_putstr(const char *string);
+
+
 static FILE stdout_file, stderr_file;
 
 FILE *stdout = &stdout_file, *stderr = &stderr_file;
