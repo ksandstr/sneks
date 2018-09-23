@@ -36,6 +36,7 @@ distclean:
 # IDL header dependencies (which should really get figured out automagically;
 # c'est la guerre.)
 process.o: process.c proc-defs.h
+fork.o: fork.c proc-defs.h
 heap.o: heap.c vm-defs.h
 stdio.o: stdio.c io-defs.h
 
