@@ -12,7 +12,6 @@ START_LOOP_TEST(fork_basic, iter, 0, 1)
 	const bool active_exit = (iter & 1) != 0;
 	diag("active_exit=%s", btos(active_exit));
 	plan_tests(3);
-	todo_start("WIP");
 
 	L4_ThreadId_t parent = L4_Myself();
 	int child = fork();
