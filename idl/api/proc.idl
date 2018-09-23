@@ -50,11 +50,33 @@ interface Proc
 
 	/* like POSIX kill(2) */
 	void kill(in long pid, in long sig)
-		raises(Posix::Errno);
+		raises(muidl::NoReply, Posix::Errno);
 
 	/* POSIX exit(3). since there's no waitpid(2), @status goes nowhere. */
 	void exit(in long status)
 		raises(muidl::NoReply);
+
+	/* like Linux waitid(2), but contents of siginfo_t are passed explicitly.
+	 * siginfo_t fields that Linux defines but which aren't specified in the
+	 * waitid(2) manpage aren't supported. values of idtype and the si_*
+	 * return values are defined in <sneks/process.h>.
+	 */
+	void wait(
+		[MR(1)] out long si_pid, [MR(2)] out long si_uid,
+		[MR(3)] out long si_signo, [MR(4)] out long si_status,
+		[MR(5)] out long si_code,
+		in long idtype, in long id, in long options)
+			raises(muidl::NoReply, Posix::Errno);
+
+	/* like POSIX fork(2), but leaves userspace I/O resources up to the
+	 * caller. launches a thread in the destination address space according to
+	 * @sp and @ip and delivers its global ID in @tid, or raises Posix::Errno
+	 * like fork(2) would.
+	 */
+	void fork(
+		out L4X2::ThreadId tid,
+		in L4X2::word sp, in L4X2::word ip)
+			raises(Posix::Errno);
 };
 
 

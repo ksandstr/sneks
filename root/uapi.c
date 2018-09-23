@@ -767,6 +767,21 @@ static void uapi_exit(int status)
 }
 
 
+static int uapi_wait(
+	int32_t *si_pid_p, int32_t *si_uid_p, int32_t *si_signo_p,
+	int32_t *si_status_p, int32_t *si_code_p,
+	int32_t idtype, int32_t id, int32_t options)
+{
+	return -ENOSYS;
+}
+
+
+static int uapi_fork(L4_Word_t *tid_raw_p, L4_Word_t sp, L4_Word_t ip)
+{
+	return -ENOSYS;
+}
+
+
 int uapi_loop(void *param_ptr)
 {
 	uapi_tid = L4_Myself();
@@ -777,6 +792,8 @@ int uapi_loop(void *param_ptr)
 		.spawn = &uapi_spawn,
 		.kill = &uapi_kill,
 		.exit = &uapi_exit,
+		.wait = &uapi_wait,
+		.fork = &uapi_fork,
 	};
 	for(;;) {
 		L4_Word_t st = _muidl_root_uapi_dispatch(&vtab);
