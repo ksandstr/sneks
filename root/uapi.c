@@ -35,6 +35,7 @@
 
 #define MAX_PID 0xffff
 #define IS_SYSTASK(pid) ((pid) >= SNEKS_MIN_SYSID)
+#define NUM_SYSTASK_IDS (1 << 14)	/* fewer than 16k */
 
 #define TNOS_PER_BITMAP (1 << 16)
 
@@ -112,7 +113,11 @@ static void free_threadno(L4_ThreadId_t tid)
 static struct process *get_process(int pid)
 {
 	if(pid <= 0 || pid > SNEKS_MAX_PID) return NULL;
-	struct process *p = ra_id2ptr_safe(ra_process, pid);
+	/* no need to use the _safe variant since the rangealloc is backed by
+	 * virtual memory, which initializes such that p->task.utcb_area will be
+	 * L4_Nilpage for PIDs landing on unallocated pages.
+	 */
+	struct process *p = ra_id2ptr(ra_process, pid);
 	if(p == NULL || L4_IsNilFpage(p->task.utcb_area)) return NULL;
 	return p;
 }
@@ -120,8 +125,10 @@ static struct process *get_process(int pid)
 
 static struct systask *get_systask(int pid)
 {
-	if(pid < SNEKS_MIN_SYSID || pid > 65535) return NULL;
-	struct systask *st = ra_id2ptr_safe(ra_systask, pid - SNEKS_MIN_SYSID);
+	int stid = pid - SNEKS_MIN_SYSID;
+	if(stid < 0 || stid >= NUM_SYSTASK_IDS) return NULL;
+	/* see comment about safety in get_process() */
+	struct systask *st = ra_id2ptr(ra_systask, stid);
 	if(st == NULL || L4_IsNilFpage(st->task.utcb_area)) return NULL;
 	return st;
 }
@@ -778,7 +785,63 @@ static int uapi_wait(
 
 static int uapi_fork(L4_Word_t *tid_raw_p, L4_Word_t sp, L4_Word_t ip)
 {
-	return -ENOSYS;
+	int pid = pidof_NP(muidl_get_sender());
+	if(IS_SYSTASK(pid)) return -EINVAL;	/* fuck off! */
+
+	struct process *src = get_process(pid);
+	assert(src != NULL);	/* per control of PID assignment */
+
+	int newpid;
+	struct process *dst = alloc_process(&newpid);
+	if(dst == NULL) return -EAGAIN;
+	assert(newpid > 0);
+	assert(!IS_SYSTASK(newpid));
+
+	darray_init(dst->task.threads);
+	dst->task.utcb_area = src->task.utcb_area;
+	dst->task.kip_area = src->task.kip_area;
+	dst->task.utcb_free = alloc_utcb_bitmap(dst->task.utcb_area);
+	if(dst->task.utcb_free == NULL) {
+		/* FIXME: cleanup */
+		return -ENOMEM;
+	}
+
+	int n = __vm_fork(vm_tid, pid, newpid);
+	if(n != 0) {
+		/* FIXME: cleanup */
+		if(n > 0) return -EIO; else return n;
+	}
+	void *utcb_loc;
+	L4_ThreadId_t start_tid = allocate_thread(newpid, &utcb_loc);
+	if(L4_IsNilThread(start_tid)) {
+		/* FIXME: shouldn't happen */
+		printf("can't allocate_thread() on fresh space?\n");
+		abort();
+	}
+	n = make_space(start_tid, dst->task.kip_area, dst->task.utcb_area);
+	if(n != 0) {
+		/* FIXME: cleanup */
+		printf("can't make space in fork?\n");
+		abort();
+	}
+	L4_Word_t res = L4_ThreadControl(start_tid, start_tid, L4_Myself(),
+		vm_tid, utcb_loc);
+	if(res != 1) {
+		/* FIXME: cleanup */
+		printf("%s: ThreadControl failed, ec=%lu\n", __func__,
+			L4_ErrorCode());
+		abort();
+	}
+	n = __vm_breath_of_life(vm_tid, &res, start_tid.raw, sp, ip);
+	if(n != 0 || res != 0) {
+		/* FIXME: cleanup */
+		printf("%s: VM::breath_of_life failed, n=%d, res=%lu\n", __func__,
+			n, res);
+		abort();
+	}
+
+	*tid_raw_p = start_tid.raw;
+	return newpid;
 }
 
 
@@ -815,7 +878,7 @@ COLD void uapi_init(void)
 {
 	utcb_size_log2 = size_to_shift(L4_UtcbSize(the_kip));
 	assert(1 << utcb_size_log2 >= L4_UtcbSize(the_kip));
-	ra_systask = RA_NEW(struct systask, 1 << 14);	/* fewer than 16k */
+	ra_systask = RA_NEW(struct systask, NUM_SYSTASK_IDS);
 	ra_process = RA_NEW(struct process, 1 << 15);
 	ra_disable_id_0(ra_process);	/* there's no PID 0. */
 
