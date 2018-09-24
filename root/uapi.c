@@ -16,10 +16,13 @@
 #include <ccan/bitmap/bitmap.h>
 #include <ccan/minmax/minmax.h>
 #include <ccan/array_size/array_size.h>
+#include <ccan/list/list.h>
 
 #include <l4/types.h>
+#include <l4/ipc.h>
 #include <l4/thread.h>
 #include <ukernel/rangealloc.h>
+#include <sneks/hash.h>
 #include <sneks/mm.h>
 #include <sneks/process.h>
 
@@ -39,6 +42,9 @@
 
 #define TNOS_PER_BITMAP (1 << 16)
 
+/* flags in <struct process> */
+#define PF_WAIT_ANY 1	/* sleeping in passive waitid(P_ANY, ...) */
+
 
 typedef darray(L4_ThreadId_t) tidlist;
 
@@ -48,8 +54,8 @@ typedef darray(L4_ThreadId_t) tidlist;
  */
 struct task_common {
 	L4_Fpage_t kip_area, utcb_area;
-	tidlist threads;
 	bitmap *utcb_free;
+	tidlist threads;	/* .size == 0 indicates zombie */
 };
 
 
@@ -57,7 +63,15 @@ struct task_common {
 struct process
 {
 	struct task_common task;
-	/* TODO: add bits for wait(2) lists, parent PID, uid, gid, etc. */
+
+	unsigned flags;	/* mishmash of PF_* */
+	int ppid;		/* parent's PID */
+	L4_ThreadId_t wait_tid;	/* waiting TID on parent */
+	/* waitid() output values */
+	short signo, status;
+	int code;
+	struct list_node dead_link;	/* in parent's dead_list */
+	struct list_head dead_list;	/* zombie children via ->dead_link */
 };
 
 
@@ -69,6 +83,9 @@ struct systask
 	struct task_common task;
 	/* (systask scheduling things would go here eventually) */
 };
+
+
+static size_t hash_waitany_tid(const void *ptr, void *priv);
 
 
 static struct rangealloc *ra_process = NULL, *ra_systask = NULL;
@@ -83,6 +100,20 @@ static int tno_free_counts[4];
 
 /* PID allocator, backed by rangealloc. */
 static _Atomic int next_user_pid = 1;
+
+/* processes that have PF_WAIT_ALL set will have at least one thread in
+ * waitany_hash, and ones where the bit is clear have none. its members are
+ * L4_ThreadId_t cast to <void *> and hashed by their process IDs.
+ */
+static struct htable waitany_hash = HTABLE_INITIALIZER(
+	waitany_hash, &hash_waitany_tid, NULL);
+
+
+
+static size_t hash_waitany_tid(const void *ptr, void *priv) {
+	L4_ThreadId_t t = { .raw = (L4_Word_t)ptr };
+	return int_hash(pidof_NP(t));
+}
 
 
 void lock_uapi(void)
@@ -178,8 +209,9 @@ static void task_common_dtor(struct task_common *task)
 		}
 		free_threadno(tid);
 	}
-	darray_free(task->threads);
-	free(task->utcb_free);
+	/* idempotent memory release */
+	darray_free(task->threads); darray_init(task->threads);
+	free(task->utcb_free); task->utcb_free = NULL;
 	task->utcb_area = L4_Nilpage;
 }
 
@@ -216,6 +248,33 @@ int add_systask(int pid, L4_Fpage_t kip, L4_Fpage_t utcb)
 	}
 
 	return ra_ptr2id(ra_systask, st) + SNEKS_MIN_SYSID;
+}
+
+
+static void tid_remove_fast(tidlist *tids, int ix)
+{
+	if(ix < tids->size - 1) tids->item[ix] = tids->item[tids->size - 1];
+	if(--tids->size < tids->alloc / 2) {
+		darray_realloc(*tids, tids->alloc / 2);
+	}
+}
+
+
+static bool tidlist_remove_from(tidlist *tids, L4_ThreadId_t tid)
+{
+	tid = L4_GlobalIdOf(tid);
+	int found = -1;
+	for(size_t i=0; i < tids->size; i++) {
+		if(tids->item[i].raw == tid.raw) {
+			found = i;
+			break;
+		}
+	}
+	if(found < 0) return false;
+	else {
+		tid_remove_fast(tids, found);
+		return true;
+	}
 }
 
 
@@ -268,39 +327,11 @@ L4_ThreadId_t allocate_thread(int pid, void **utcb_loc_p)
 }
 
 
-static void tid_remove_fast(tidlist *tids, int ix)
-{
-	if(ix < tids->size - 1) tids->item[ix] = tids->item[tids->size - 1];
-	if(--tids->size < tids->alloc / 2) {
-		darray_realloc(*tids, tids->alloc / 2);
-	}
-}
-
-
-static bool tidlist_remove_from(tidlist *tids, L4_ThreadId_t tid)
-{
-	tid = L4_GlobalIdOf(tid);
-	int found = -1;
-	for(size_t i=0; i < tids->size; i++) {
-		if(tids->item[i].raw == tid.raw) {
-			found = i;
-			break;
-		}
-	}
-	if(found < 0) return false;
-	else {
-		tid_remove_fast(tids, found);
-		return true;
-	}
-}
-
-
 /* for rolling back allocate_thread() when make_space() fails. */
 static void free_thread(
 	struct task_common *task,
 	L4_ThreadId_t tid, void *utcb_loc)
 {
-	free_threadno(tid);
 	L4_Word_t pos = (L4_Word_t)utcb_loc - L4_Address(task->utcb_area),
 		slot = pos >> utcb_size_log2;
 	assert((L4_Word_t)utcb_loc >= L4_Address(task->utcb_area)
@@ -314,7 +345,73 @@ static void free_thread(
 static void destroy_process(struct process *p)
 {
 	task_common_dtor(&p->task);
+	/* TODO: various other final process destruction things, such as
+	 * reparenting of children to PID1 and what-not.
+	 */
 	ra_free(ra_process, p);
+}
+
+
+/* TODO: make the code, signo, status triple parameters to this function,
+ * since all callsites set those anyway.
+ */
+static void zombify(struct process *p)
+{
+	task_common_dtor(&p->task);
+
+	struct process *parent = get_process(p->ppid);
+	assert(parent != NULL);		/* FIXME: handle death of init */
+
+	L4_ThreadId_t waiter = L4_nilthread;
+	if(!L4_IsNilThread(p->wait_tid)) waiter = p->wait_tid;
+	else if((parent->flags & PF_WAIT_ANY) != 0) {
+		size_t hash = int_hash(p->ppid);
+		struct htable_iter it;
+		bool more = false;
+		for(void *cur = htable_firstval(&waitany_hash, &it, hash);
+			cur != NULL;
+			cur = htable_nextval(&waitany_hash, &it, hash))
+		{
+			L4_ThreadId_t cand = { .raw = (L4_Word_t)cur };
+			assert(!L4_IsNilThread(cand));
+			if(pidof_NP(cand) == p->ppid) {
+				if(L4_IsNilThread(waiter)) {
+					waiter = cand;
+					htable_delval(&waitany_hash, &it);
+				} else {
+					more = true;
+					break;
+				}
+			}
+		}
+		if(!more) {
+			parent->flags &= ~PF_WAIT_ANY;
+			/* TODO: under !NDEBUG, check that there truly aren't any more. */
+		}
+	}
+
+	if(!L4_IsNilThread(waiter)) {
+		/* send reply for Proc::wait. */
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 5 }.raw);
+		L4_LoadMR(1, ra_ptr2id(ra_process, p));
+		L4_LoadMR(2, 0);	/* FIXME: use ta->u.uid or some such */
+		L4_LoadMR(3, p->signo);
+		L4_LoadMR(4, p->status);
+		L4_LoadMR(5, p->code);
+		L4_MsgTag_t tag = L4_Reply(waiter);
+		if(L4_IpcSucceeded(tag)) {
+			printf("%s: active exit signaled to %lu:%lu\n",
+				__func__, L4_ThreadNo(waiter), L4_Version(waiter));
+			destroy_process(p);
+			return;
+		} else {
+			printf("%s: signaling of active exit failed, ec=%lu\n",
+				__func__, L4_ErrorCode());
+		}
+	}
+
+	/* add a reapable zombie. */
+	list_add_tail(&parent->dead_list, &p->dead_link);
 }
 
 
@@ -505,6 +602,13 @@ end:
 }
 
 
+static void process_ctor(struct process *p)
+{
+	list_head_init(&p->dead_list);
+	p->wait_tid = L4_nilthread;
+}
+
+
 /* gets next userspace PID in the correct Unix fashion. allocates memory when
  * successful, or returns NULL.
  */
@@ -523,6 +627,7 @@ static struct process *alloc_process(int *pid_p)
 		if(p != NULL) {
 			assert(ra_ptr2id(ra_process, p) == maybe);
 			*pid_p = maybe;
+			process_ctor(p);
 			return p;
 		}
 	}
@@ -752,8 +857,13 @@ static int uapi_kill(int pid, int sig)
 	if(p == NULL) return -ESRCH;
 
 	/* TODO: consider signal delivery someday */
-	printf("%s: destroying process.\n", __func__);
-	destroy_process(p);
+
+	/* death. */
+	p->signo = sig;
+	p->status = 0;
+	p->code = 0;
+	if(pidof_NP(muidl_get_sender()) == pid) muidl_raise_no_reply();
+	zombify(p);
 
 	return 0;
 }
@@ -768,7 +878,8 @@ static void uapi_exit(int status)
 	} else {
 		struct process *p = get_process(pid);
 		assert(p != NULL);
-		destroy_process(p);	/* TODO: leave crumbs or signal wait(2)ers */
+		p->code = status; p->signo = 0; p->status = 0;
+		zombify(p);
 		muidl_raise_no_reply();
 	}
 }
@@ -779,6 +890,78 @@ static int uapi_wait(
 	int32_t *si_status_p, int32_t *si_code_p,
 	int32_t idtype, int32_t id, int32_t options)
 {
+	int caller = pidof_NP(muidl_get_sender());
+	if(IS_SYSTASK(caller)) return -EINVAL;	/* maybe one day? */
+
+	struct process *self = get_process(caller), *dead = NULL, *live = NULL;
+	switch(idtype) {
+		case P_PID:
+			dead = get_process(id);
+			if(dead == NULL || dead->ppid != caller) return -ECHILD;
+			if(dead->task.threads.size > 0) { live = dead; dead = NULL; }
+			break;
+
+		case P_ANY:
+			dead = list_top(&self->dead_list, struct process, dead_link);
+			assert(dead == NULL || dead->ppid == caller);
+			break;
+
+		default:
+		case P_PGID:
+			printf("%s: unsupported idtype=%d\n", __func__, idtype);
+			return -EINVAL;	/* TODO */
+	}
+	if(dead != NULL) {
+		assert(live == NULL);
+		printf("%s: active reap of dead=%p\n", __func__, dead);
+		list_del_from(&self->dead_list, &dead->dead_link);
+		*si_pid_p = ra_ptr2id(ra_process, dead);
+		*si_uid_p = 0;	/* FIXME: dead->uid or something */
+		*si_signo_p = dead->signo;
+		*si_status_p = dead->status;
+		*si_code_p = dead->code;
+		destroy_process(dead);
+		return 0;
+	} else if(live != NULL) {
+		assert(dead == NULL);
+		if((options & WNOHANG) != 0) goto nohang;
+		printf("%s: passive wait on live=%p\n", __func__, live);
+		/* FIXME: this breaks when multiple threads on the parent process wait
+		 * on `live' at the same time, because all will sleep but just one
+		 * wakes up.
+		 */
+		live->wait_tid = muidl_get_sender();
+		muidl_raise_no_reply();
+		return 0;
+	} else if((options & WNOHANG) == 0) {
+		assert(idtype == P_ANY);
+		/* TODO: this may fail in htable_add(), but the wait(2) family doesn't
+		 * allow for -ENOMEM return value. in practice it's very unlikely to
+		 * do so since 32-bit L4.X2 permits up to 256k threads which would
+		 * consume up to 3 meg of RAM during the final resize. so it's this,
+		 * or allocating a list link for every thread that might ever call
+		 * wait(2); that may yet come to be if it turns out that threads
+		 * require more tracking than just the identifier.
+		 */
+		self->flags |= PF_WAIT_ANY;
+		L4_ThreadId_t caller = muidl_get_sender();
+		bool ok = htable_add(&waitany_hash, int_hash(pidof_NP(caller)),
+			(void *)caller.raw);
+		if(!ok) {
+			/* FIXME: proper handling, though failure is very unlikely. */
+			printf("%s: htable_add failed\n", __func__);
+			abort();
+		}
+		muidl_raise_no_reply();
+		return 0;
+	} else {
+nohang:
+		/* don't hang. */
+		*si_pid_p = 0; *si_uid_p = 0;
+		*si_signo_p = 0; *si_status_p = 0; *si_code_p = 0;
+		return 0;
+	}
+
 	return -ENOSYS;
 }
 
@@ -805,6 +988,7 @@ static int uapi_fork(L4_Word_t *tid_raw_p, L4_Word_t sp, L4_Word_t ip)
 		/* FIXME: cleanup */
 		return -ENOMEM;
 	}
+	dst->ppid = pid;
 
 	int n = __vm_fork(vm_tid, pid, newpid);
 	if(n != 0) {
