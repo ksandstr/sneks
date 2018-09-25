@@ -79,6 +79,6 @@ if($test_user) {
 	die unless $test_system;
 	$envvar = "SYSTEST_OPTS";
 }
-$ENV{$envvar} = "--run-only " . join('+', map { combine_spec($_) } @tests);
+$ENV{$envvar} = "--run-only=" . join('+', map { combine_spec($_) } @tests);
 print STDERR "$envvar <- $ENV{$envvar}\n" if $verbose;
 exec "./run.sh -display none 2>&1";

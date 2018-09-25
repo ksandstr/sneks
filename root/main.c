@@ -1296,20 +1296,22 @@ static int launch_init(
 	struct htable *root_args, L4_ThreadId_t console)
 {
 	const char *init = get_root_arg(root_args, "init");
-	if(init == NULL) panic("no init specified! can't boot like this.");
+	if(init == NULL || init[0] == '\0') {
+		panic("no init specified! can't boot like this.");
+	}
 
 	printf("running init=`%s'\n", init);
-	char *copy = strdup(init), *argbuf = NULL;
+	char *semi = strchr(init, ';');
+	int proglen = semi == NULL ? strlen(init) : semi - init;
+	char prog[proglen + 1];
+	memcpy(prog, init, proglen);
+	prog[proglen] = '\0';
+
+	char *copy = strdup(init);
 	for(int i=0; copy[i] != '\0'; i++) {
-		if(copy[i] != ';') continue;
-		if(argbuf == NULL) {
-			copy[i] = '\0';
-			argbuf = &copy[i + 1];
-		} else {
-			copy[i] = 0x1e;	/* see RECSEP */
-		}
+		if(copy[i] == ';') copy[i] = 0x1e;	/* see RECSEP */
 	}
-	if(argbuf == NULL) argbuf = "";
+
 	L4_Word_t servs[3], cookies[3];
 	int32_t fds[3];
 	for(int i=0; i < 3; i++) {
@@ -1322,8 +1324,9 @@ static int launch_init(
 			cookies[i] = 0xbadcafe0;
 		}
 	}
-	int n = __proc_spawn(uapi_tid, init_pid_p, copy,
-		argbuf, "", servs, 3, cookies, 3, fds, 3);
+	/* init starts out with an empty environment. so sad. */
+	int n = __proc_spawn(uapi_tid, init_pid_p, prog,
+		copy, "", servs, 3, cookies, 3, fds, 3);
 	free(copy);
 	return n;
 }
