@@ -41,32 +41,36 @@
 
 typedef darray(L4_ThreadId_t) tidlist;
 
-struct task_base
-{
+
+/* common portion for the L4.X2 address space configuration and thread
+ * management.
+ */
+struct task_common {
 	L4_Fpage_t kip_area, utcb_area;
 	tidlist threads;
 	bitmap *utcb_free;
 };
 
 
-struct u_task {
-	struct task_base t;
+/* userspace processes. allocated in ra_process. */
+struct process
+{
+	struct task_common task;
+	/* TODO: add bits for wait(2) lists, parent PID, uid, gid, etc. */
 };
 
 
-struct systask {
-	struct task_base t;
+/* system tasks. allocated in ra_systask. note that ra_systask's id=0 is
+ * available and maps to SNEKS_MIN_SYSID + 0.
+ */
+struct systask
+{
+	struct task_common task;
+	/* (systask scheduling things would go here eventually) */
 };
 
 
-union task_all {
-	struct task_base base;
-	struct u_task u;
-	struct systask sys;
-};
-
-
-static struct rangealloc *ra_tasks = NULL;
+static struct rangealloc *ra_process = NULL, *ra_systask = NULL;
 static int utcb_size_log2;
 L4_ThreadId_t uapi_tid;
 
@@ -96,29 +100,115 @@ void unlock_uapi(void)
 }
 
 
-int add_task(int pid, L4_Fpage_t kip, L4_Fpage_t utcb)
+static void free_threadno(L4_ThreadId_t tid)
 {
-	if(pid <= 0 || pid >= MAX_PID) return -EINVAL;
+	int map = L4_ThreadNo(tid) >> 16, bit = L4_ThreadNo(tid) & 0xffff;
+	bitmap_set_bit(tno_free_maps[map], bit);
+	tno_free_counts[map]++;
+	assert(tno_free_counts[map] <= TNOS_PER_BITMAP);
+}
 
-	union task_all *ta = ra_alloc(ra_tasks, pid);
-	if(ta == NULL) return -EEXIST;
 
-	ta->base.kip_area = kip;
-	ta->base.utcb_area = utcb;
-	darray_init(ta->base.threads);
-	ta->base.utcb_free = bitmap_alloc1(
+static struct process *get_process(int pid)
+{
+	if(pid <= 0 || pid > SNEKS_MAX_PID) return NULL;
+	struct process *p = ra_id2ptr_safe(ra_process, pid);
+	if(p == NULL || L4_IsNilFpage(p->task.utcb_area)) return NULL;
+	return p;
+}
+
+
+static struct systask *get_systask(int pid)
+{
+	if(pid < SNEKS_MIN_SYSID || pid > 65535) return NULL;
+	struct systask *st = ra_id2ptr_safe(ra_systask, pid - SNEKS_MIN_SYSID);
+	if(st == NULL || L4_IsNilFpage(st->task.utcb_area)) return NULL;
+	return st;
+}
+
+
+static struct task_common *get_task(int pid)
+{
+	if(IS_SYSTASK(pid)) {
+		struct systask *st = get_systask(pid);
+		if(st != NULL) return &st->task;
+	} else {
+		struct process *p = get_process(pid);
+		if(p != NULL) return &p->task;
+	}
+	return NULL;
+}
+
+
+static bool task_common_ctor(
+	struct task_common *task,
+	L4_Fpage_t kip, L4_Fpage_t utcb)
+{
+	task->utcb_area = L4_Nilpage;
+	task->utcb_free = bitmap_alloc1(
 		1 << (L4_SizeLog2(utcb) - utcb_size_log2));
-	if(pid == SNEKS_MIN_SYSID) {
-		/* roottask initialization. */
-		darray_push(ta->base.threads, L4_MyGlobalId());
-		bitmap_clear_bit(ta->base.utcb_free, 0);
-	} else if(pid > SNEKS_MIN_SYSID && pid == pidof_NP(L4_Pager())) {
-		/* sysmem init. */
-		darray_push(ta->base.threads, L4_Pager());
-		bitmap_clear_bit(ta->base.utcb_free, 0);
+	if(task->utcb_free == NULL) return false;
+	task->kip_area = kip;
+	task->utcb_area = utcb;
+	darray_init(task->threads);
+	return true;
+}
+
+
+/* destroys threads, releases tno bitmap slots, clears the tidlist, tosses
+ * associated memory, and invalidates the structure.
+ */
+static void task_common_dtor(struct task_common *task)
+{
+	for(int i=0; i < task->threads.size; i++) {
+		L4_ThreadId_t tid = task->threads.item[i];
+		L4_Word_t res = L4_ThreadControl(tid, L4_nilthread, L4_nilthread,
+			L4_nilthread, (void *)-1);
+		if(res != 1) {
+			printf("%s: ThreadControl failed, ec=%lu\n", __func__,
+				L4_ErrorCode());
+			abort();	/* fix whatever caused this */
+		}
+		free_threadno(tid);
+	}
+	darray_free(task->threads);
+	free(task->utcb_free);
+	task->utcb_area = L4_Nilpage;
+}
+
+
+int add_systask(int pid, L4_Fpage_t kip, L4_Fpage_t utcb)
+{
+	if(pid >= 0 && pid < SNEKS_MIN_SYSID) return -EINVAL;
+
+	struct systask *st = ra_alloc(ra_systask,
+		pid < 0 ? -1 : pid - SNEKS_MIN_SYSID);
+	if(st == NULL) return pid < 0 ? -ENOMEM : -EEXIST;
+
+	if(!task_common_ctor(&st->task, kip, utcb)) {
+		ra_free(ra_systask, st);
+		return -ENOMEM;
 	}
 
-	return 0;
+	if(pid == SNEKS_MIN_SYSID) {
+		static bool done = false;
+		assert(!done);
+		done = true;
+
+		/* roottask initialization. */
+		darray_push(st->task.threads, L4_MyGlobalId());
+		bitmap_clear_bit(st->task.utcb_free, 0);
+	} else if(pid == pidof_NP(L4_Pager())) {
+		static bool done = false;
+		assert(!done);
+		done = true;
+
+		/* sysmem init. */
+		darray_push(st->task.threads, L4_Pager());
+		bitmap_clear_bit(st->task.utcb_free, 0);
+	}
+
+	return ra_ptr2id(ra_systask, st) + SNEKS_MIN_SYSID;
 }
 
 
@@ -132,6 +222,9 @@ L4_ThreadId_t allocate_thread(int pid, void **utcb_loc_p)
 		printf("uapi: no thread#s left!\n");
 		return L4_nilthread;
 	}
+
+	struct task_common *task = get_task(pid);
+	if(task == NULL) return L4_nilthread;
 
 	/* TODO: get better bounds for both calls to bitmap_ffs(). */
 	int bit = bitmap_ffs(tno_free_maps[map], 0, TNOS_PER_BITMAP);
@@ -149,11 +242,8 @@ L4_ThreadId_t allocate_thread(int pid, void **utcb_loc_p)
 #endif
 	assert(pidof_NP(tid) == pid);
 
-	union task_all *ta = ra_id2ptr(ra_tasks, pid);
-	assert(!L4_IsNilFpage(ta->base.utcb_area));
-
-	int n_slots = 1 << (L4_SizeLog2(ta->base.utcb_area) - utcb_size_log2),
-		utcb_slot = bitmap_ffs(ta->base.utcb_free, 0, n_slots);
+	int n_slots = 1 << (L4_SizeLog2(task->utcb_area) - utcb_size_log2),
+		utcb_slot = bitmap_ffs(task->utcb_free, 0, n_slots);
 	if(utcb_slot == n_slots) {
 #if 0
 		printf("%s: no more utcb slots (area=%#lx:%#lx)\n", __func__,
@@ -162,21 +252,12 @@ L4_ThreadId_t allocate_thread(int pid, void **utcb_loc_p)
 		bitmap_set_bit(tno_free_maps[map], bit);
 		return L4_nilthread;
 	}
-	bitmap_clear_bit(ta->base.utcb_free, utcb_slot);
-	darray_push(ta->base.threads, tid);
+	bitmap_clear_bit(task->utcb_free, utcb_slot);
+	darray_push(task->threads, tid);
 
-	*utcb_loc_p = (void *)(L4_Address(ta->base.utcb_area)
+	*utcb_loc_p = (void *)(L4_Address(task->utcb_area)
 		+ (utcb_slot << utcb_size_log2));
 	return tid;
-}
-
-
-static void free_threadno(L4_ThreadId_t tid)
-{
-	int map = L4_ThreadNo(tid) >> 16, bit = L4_ThreadNo(tid) & 0xffff;
-	bitmap_set_bit(tno_free_maps[map], bit);
-	tno_free_counts[map]++;
-	assert(tno_free_counts[map] <= TNOS_PER_BITMAP);
 }
 
 
@@ -207,55 +288,26 @@ static bool tidlist_remove_from(tidlist *tids, L4_ThreadId_t tid)
 }
 
 
-static void destroy_task(union task_all *ta)
+/* for rolling back allocate_thread() when make_space() fails. */
+static void free_thread(
+	struct task_common *task,
+	L4_ThreadId_t tid, void *utcb_loc)
 {
-	for(int i=0; i < ta->base.threads.size; i++) {
-		L4_ThreadId_t tid = ta->base.threads.item[i];
-		L4_Word_t res = L4_ThreadControl(tid, L4_nilthread, L4_nilthread,
-			L4_nilthread, (void *)-1);
-		if(res != 1) {
-			printf("%s: ThreadControl failed, ec=%lu\n", __func__,
-				L4_ErrorCode());
-			abort();	/* fix whatever caused this */
-		}
-		free_threadno(tid);
-	}
-	darray_free(ta->base.threads);
-	free(ta->base.utcb_free);
-	ta->base.utcb_area = L4_Nilpage;
-	ra_free(ra_tasks, ta);
-}
-
-
-static bool task_remove_thread(
-	union task_all *ta, L4_ThreadId_t tid, void *utcb_loc)
-{
-	tid = L4_GlobalIdOf(tid);
-	if(!tidlist_remove_from(&ta->base.threads, tid)) return false;
-
 	free_threadno(tid);
-	assert((L4_Word_t)utcb_loc >= L4_Address(ta->base.utcb_area));
-	L4_Word_t pos = (L4_Word_t)utcb_loc - L4_Address(ta->base.utcb_area);
-	assert(pos < L4_Size(ta->base.utcb_area));
-	int u_slot = pos >> utcb_size_log2;
-	assert(!bitmap_test_bit(ta->base.utcb_free, u_slot));
-	bitmap_set_bit(ta->base.utcb_free, u_slot);
-
-	return true;
+	L4_Word_t pos = (L4_Word_t)utcb_loc - L4_Address(task->utcb_area),
+		slot = pos >> utcb_size_log2;
+	assert((L4_Word_t)utcb_loc >= L4_Address(task->utcb_area)
+		&& pos < L4_Size(task->utcb_area));
+	assert(!bitmap_test_bit(task->utcb_free, slot));
+	bitmap_set_bit(task->utcb_free, slot);
+	tidlist_remove_from(&task->threads, tid);
 }
 
 
-void free_thread(L4_ThreadId_t tid, void *utcb_loc)
+static void destroy_process(struct process *p)
 {
-	assert(L4_IsGlobalId(tid));
-	int pid = pidof_NP(tid);
-	assert(pid > 0);
-	union task_all *ta = ra_id2ptr(ra_tasks, pid);
-	assert(!L4_IsNilFpage(ta->base.utcb_area));
-	if(!task_remove_thread(ta, tid, utcb_loc)) {
-		printf("%s: tid=%#lx not present in pid=%d\n", __func__, tid.raw, pid);
-		abort();
-	}
+	task_common_dtor(&p->task);
+	ra_free(ra_process, p);
 }
 
 
@@ -286,10 +338,10 @@ static int uapi_create_thread(L4_Word_t *tid_ptr)
 	int pid = pidof_NP(sender);
 	if(pid == 0) return -EINVAL;
 
-	union task_all *ta = ra_id2ptr(ra_tasks, pid);
-	if(L4_IsNilFpage(ta->base.utcb_area)) return -EINVAL;
+	struct task_common *ta = get_task(pid);
+	if(ta == NULL) return -EINVAL;
 
-	bool first_thread = ta->base.threads.size == 0;
+	bool first_thread = ta->threads.size == 0;
 	void *utcb_loc;
 	L4_ThreadId_t tid = allocate_thread(pid, &utcb_loc);
 	if(L4_IsNilThread(tid)) {
@@ -300,18 +352,15 @@ static int uapi_create_thread(L4_Word_t *tid_ptr)
 	if(first_thread) {
 		/* lazy-init a new address space. */
 		printf("make_space(%lu:%lu, ...)\n", L4_ThreadNo(tid), L4_Version(tid));
-		int n = make_space(tid, ta->base.kip_area, ta->base.utcb_area);
+		int n = make_space(tid, ta->kip_area, ta->utcb_area);
 		if(n < 0) {
-			/* FIXME: free_thread() will kill the task here, because its
-			 * thread count drops to zero. probably this is not what's wanted.
-			 */
-			free_thread(tid, utcb_loc);
+			free_thread(ta, tid, utcb_loc);
 			return n;
 		}
 	}
 
 	/* TODO: use vm_tid for non-systask paging. */
-	L4_ThreadId_t space = ta->base.threads.item[0],
+	L4_ThreadId_t space = ta->threads.item[0],
 		pager = IS_SYSTASK(pid) ? L4_Pager() : L4_nilthread;
 	L4_Word_t res = L4_ThreadControl(tid, space, L4_Myself(), pager, utcb_loc);
 	if(res != 1) {
@@ -336,9 +385,19 @@ static int uapi_remove_thread(L4_Word_t raw_tid, L4_Word_t utcb_addr)
 	bool is_self = L4_SameThreads(tid, sender);
 	int pid = pidof_NP(L4_GlobalIdOf(sender));
 	if(pid <= 0) return -EINVAL;
-	union task_all *ta = ra_id2ptr(ra_tasks, pid);
-	if(L4_IsNilFpage(ta->base.utcb_area)) return -EINVAL;
-	if(!task_remove_thread(ta, tid, (void *)utcb_addr)) return -EINVAL;
+	struct task_common *ta = get_task(pid);
+	if(ta == NULL) return -EINVAL;
+
+	if(!tidlist_remove_from(&ta->threads, tid)) return -EINVAL;
+
+	void *utcb_loc = (void *)utcb_addr;
+	free_threadno(tid);
+	assert((L4_Word_t)utcb_loc >= L4_Address(ta->utcb_area));
+	L4_Word_t pos = (L4_Word_t)utcb_loc - L4_Address(ta->utcb_area);
+	assert(pos < L4_Size(ta->utcb_area));
+	int u_slot = pos >> utcb_size_log2;
+	assert(!bitmap_test_bit(ta->utcb_free, u_slot));
+	bitmap_set_bit(ta->utcb_free, u_slot);
 
 	L4_Word_t res = L4_ThreadControl(tid, L4_nilthread, L4_nilthread,
 		L4_nilthread, (void *)-1);
@@ -347,7 +406,7 @@ static int uapi_remove_thread(L4_Word_t raw_tid, L4_Word_t utcb_addr)
 		abort();
 	}
 
-	if(ta->base.threads.size == 0) {
+	if(ta->threads.size == 0) {
 		printf("uapi: would delete pid=%d!\n", pid);
 		/* TODO: zombify or wait(2) `pid'. */
 	}
@@ -439,10 +498,10 @@ end:
 }
 
 
-/* allocates the task memory for its return value when successful. caller
- * should do the inelegant needful.
+/* gets next userspace PID in the correct Unix fashion. allocates memory when
+ * successful, or returns NULL.
  */
-static int get_new_pid(void)
+static struct process *alloc_process(int *pid_p)
 {
 	for(int iter=0; iter < SNEKS_MAX_PID; iter++) {
 		int maybe = atomic_fetch_add_explicit(
@@ -453,13 +512,20 @@ static int get_new_pid(void)
 			assert(yes || maybe <= SNEKS_MAX_PID);
 			if(yes) maybe = 1;
 		}
-		void *taptr = ra_alloc(ra_tasks, maybe);
-		if(taptr != NULL) {
-			assert(ra_ptr2id(ra_tasks, taptr) == maybe);
-			return maybe;
+		struct process *p = ra_alloc(ra_process, maybe);
+		if(p != NULL) {
+			assert(ra_ptr2id(ra_process, p) == maybe);
+			*pid_p = maybe;
+			return p;
 		}
 	}
-	return -ENOMEM;
+	return NULL;
+}
+
+
+/* release with free(). */
+static inline bitmap *alloc_utcb_bitmap(L4_Fpage_t utcb_area) {
+	return bitmap_alloc1(1 << (L4_SizeLog2(utcb_area) - utcb_size_log2));
 }
 
 
@@ -530,26 +596,22 @@ static int uapi_spawn(
 	printf("%s: entered! filename=`%s'\n", __func__, filename);
 	assert(!L4_IsNilThread(vm_tid));
 
-	/* this is a bit weird. add_task() doesn't work well for us because it
-	 * asks for kip and utcb up front, but we need its return value for
-	 * map_elf_image(), which returns values used to define kip and utcb
-	 * areas. entirely different for actual fork though, and that's the main
-	 * use case, so instead we'll do this.
-	 */
-	int newpid = get_new_pid();
-	if(newpid < 0) return newpid;
-	assert(newpid > 0);
+	int newpid;
+	struct process *p = alloc_process(&newpid);
+	if(p == NULL) return -ENOMEM;
+	assert(newpid > 0 && newpid <= SNEKS_MAX_PID);
 
 	int n = __vm_fork(vm_tid, 0, newpid);
 	if(n != 0) {
-		/* FIXME: ra_free(ra_tasks, ra_id2ptr(ra_tasks, newpid)); */
+		p->task.utcb_area = L4_Nilpage;
+		ra_free(ra_process, p);
 		goto fail;
 	}
 
 	L4_Word_t lo = ~0ul, hi = 0, start_addr = ~0ul;
 	n = map_elf_image(newpid, filename, &lo, &hi, &start_addr);
 	if(n != 0) {
-		/* FIXME: destroy @newpid, its space in "vm" */
+		/* FIXME: destroy `p', its space on vm */
 		goto fail;
 	}
 	int n_threads = 1024, utcb_size = 512;	/* FIXME: get from KIP etc */
@@ -568,24 +630,24 @@ static int uapi_spawn(
 		assert(resv_start >= 0x10000);
 		assert(resv_start + resv_size < lo);
 	}
-	L4_Fpage_t utcb_area = L4_Fpage(resv_start, ua_size),
-		kip_area = L4_Fpage(resv_start + ua_size, L4_KipAreaSize(the_kip));
+	p->task.utcb_area = L4_Fpage(resv_start, ua_size);
+	p->task.kip_area = L4_Fpage(resv_start + ua_size,
+		L4_KipAreaSize(the_kip));
 	printf("%s: utcb_area=%#lx:%#lx, kip_area=%#lx:%#lx\n", __func__,
-		L4_Address(utcb_area), L4_Size(utcb_area),
-		L4_Address(kip_area), L4_Size(kip_area));
-
-	/* ho ho, this is totally not atomic. doesn't matter as long as UAPI runs
-	 * single-threaded. FIXME: make add_task take a pointer instead.
-	 */
-	ra_free(ra_tasks, ra_id2ptr(ra_tasks, newpid));
-	n = add_task(newpid, kip_area, utcb_area);
-	if(n != 0) {
+		L4_Address(p->task.utcb_area), L4_Size(p->task.utcb_area),
+		L4_Address(p->task.kip_area), L4_Size(p->task.kip_area));
+	darray_init(p->task.threads);
+	p->task.utcb_free = alloc_utcb_bitmap(p->task.utcb_area);
+	if(p->task.utcb_free == NULL) {
 		/* FIXME: cleanup */
-		printf("%s: add_task failed, n=%d\n", __func__, n);
+		printf("%s: can't allocate utcb bitmap\n", __func__);
+		n = -ENOMEM;
 		goto fail;
 	}
+
 	L4_Word_t resvhi;
-	n = __vm_configure(vm_tid, &resvhi, newpid, utcb_area, kip_area);
+	n = __vm_configure(vm_tid, &resvhi, newpid, p->task.utcb_area,
+		p->task.kip_area);
 	if(n != 0) {
 		/* FIXME: cleanup */
 		goto fail;
@@ -636,7 +698,7 @@ static int uapi_spawn(
 		printf("%s: allocate_thread() failed!\n", __func__);
 		abort();	/* FIXME: cleanup and return error */
 	}
-	n = make_space(first_tid, kip_area, utcb_area);
+	n = make_space(first_tid, p->task.kip_area, p->task.utcb_area);
 	if(n < 0) {
 		printf("%s: make_space() failed, n=%d\n", __func__, n);
 		/* FIXME: cleanup */
@@ -679,13 +741,12 @@ static int uapi_kill(int pid, int sig)
 	if(sig != SIGSEGV) return -EINVAL;
 	if(!IS_SYSTASK(pidof_NP(muidl_get_sender()))) return -EPERM;
 
-	if(pid <= 0 || pid > SNEKS_MAX_PID) return -ESRCH;
-	union task_all *ta = ra_id2ptr(ra_tasks, pid);
-	if(L4_IsNilFpage(ta->base.utcb_area)) return -ESRCH;
+	struct process *p = get_process(pid);
+	if(p == NULL) return -ESRCH;
 
 	/* TODO: consider signal delivery someday */
-	printf("%s: destroying task.\n", __func__);
-	destroy_task(ta);
+	printf("%s: destroying process.\n", __func__);
+	destroy_process(p);
 
 	return 0;
 }
@@ -698,9 +759,9 @@ static void uapi_exit(int status)
 		printf("%s: not implemented for systasks (pid=%d)\n", __func__, pid);
 		/* but should it be? */
 	} else {
-		union task_all *ta = ra_id2ptr(ra_tasks, pid);
-		assert(!L4_IsNilFpage(ta->base.utcb_area));
-		destroy_task(ta);	/* TODO: leave crumbs or signal wait(2)ers */
+		struct process *p = get_process(pid);
+		assert(p != NULL);
+		destroy_process(p);	/* TODO: leave crumbs or signal wait(2)ers */
 		muidl_raise_no_reply();
 	}
 }
@@ -737,8 +798,9 @@ COLD void uapi_init(void)
 {
 	utcb_size_log2 = size_to_shift(L4_UtcbSize(the_kip));
 	assert(1 << utcb_size_log2 >= L4_UtcbSize(the_kip));
-	ra_tasks = RA_NEW(union task_all, 1 << 16);
-	ra_disable_id_0(ra_tasks);
+	ra_systask = RA_NEW(struct systask, 1 << 14);	/* fewer than 16k */
+	ra_process = RA_NEW(struct process, 1 << 15);
+	ra_disable_id_0(ra_process);	/* there's no PID 0. */
 
 	for(int i=0; i < 4; i++) {
 		tno_free_maps[i] = bitmap_alloc1(TNOS_PER_BITMAP);

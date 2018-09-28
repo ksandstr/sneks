@@ -192,13 +192,18 @@ void send_phys_to_sysmem(L4_ThreadId_t sysmem_tid, bool self, L4_Fpage_t pg)
 }
 
 
-static L4_ThreadId_t new_task(L4_Fpage_t kip_area, L4_Fpage_t utcb_area)
+/* build a systask with the given shape, and construct an address space etc.
+ * for it. returns the first thread's ID, which will be awaiting a
+ * breath-of-life from its pager.
+ */
+static L4_ThreadId_t create_systask(L4_Fpage_t kip_area, L4_Fpage_t utcb_area)
 {
 	/* first is root, then sysmem. others after that. */
 	static int task_offset = SNEKS_MIN_SYSID + 2;
 
 	lock_uapi();
-	int pid = task_offset++, n = add_task(pid, kip_area, utcb_area);
+	int pid = task_offset++, n = add_systask(pid, kip_area, utcb_area);
+	assert(n < 0 || n == pid);
 	if(n < 0) {
 		printf("%s: add_task failed, n=%d\n", __func__, n);
 		abort();
@@ -707,7 +712,7 @@ static L4_ThreadId_t spawn_systask(const char *name, ...)
 
 	assert(!L4_IsNilThread(uapi_tid));
 	/* create the task w/ all of that shit & what-not. */
-	L4_ThreadId_t new_tid = new_task(kip_area, utcb_area);
+	L4_ThreadId_t new_tid = create_systask(kip_area, utcb_area);
 
 	/* copy each page to a vmem buffer, then send_virt it over to the new
 	 * process at the correct address.
@@ -1332,7 +1337,7 @@ static int launch_init(
 }
 
 
-static bool is_good_utcb(void *ptr)
+static COLD bool is_good_utcb(void *ptr)
 {
 	const L4_ThreadId_t dump_tid = L4_GlobalId(1000, 7);
 	L4_Word_t res = L4_ThreadControl(dump_tid, L4_Myself(),
@@ -1354,7 +1359,7 @@ static bool is_good_utcb(void *ptr)
 }
 
 
-static L4_Fpage_t probe_root_utcb_area(void)
+static COLD L4_Fpage_t probe_root_utcb_area(void)
 {
 	int u_align = 1 << L4_UtcbAlignmentLog2(the_kip),
 		u_size = L4_UtcbSize(the_kip);
@@ -1368,6 +1373,25 @@ static L4_Fpage_t probe_root_utcb_area(void)
 	if(is_good_utcb((void *)(bad - u_size))) good = bad;
 
 	return L4_Fpage(base, good - base);
+}
+
+
+static COLD void configure_uapi(L4_Fpage_t sm_kip, L4_Fpage_t sm_utcb)
+{
+	int n = add_systask(SNEKS_MIN_SYSID,
+		L4_FpageLog2((L4_Word_t)the_kip, L4_KipAreaSizeLog2(the_kip)),
+		probe_root_utcb_area());
+	assert(n < 0 || n == SNEKS_MIN_SYSID);
+	if(n < 0) {
+		printf("add_systask() for root failed, n=%d\n", n);
+		abort();
+	}
+	n = add_systask(pidof_NP(sysmem_tid), sm_kip, sm_utcb);
+	assert(n < 0 || n == pidof_NP(sysmem_tid));
+	if(n < 0) {
+		printf("add_systask() for sysmem failed, n=%d\n", n);
+		abort();
+	}
 }
 
 
@@ -1387,25 +1411,13 @@ int main(void)
 	parse_initrd_args(&root_args);
 
 	uapi_init();
-	L4_Fpage_t root_kip = L4_FpageLog2((L4_Word_t)the_kip,
-			L4_KipAreaSizeLog2(the_kip)),
-		root_utcb = probe_root_utcb_area();
-	int n = add_task(SNEKS_MIN_SYSID, root_kip, root_utcb);
-	if(n < 0) {
-		printf("can't create root task, n=%d\n", n);
-		abort();
-	}
-	n = add_task(pidof_NP(sysmem_tid), sm_kip, sm_utcb);
-	if(n < 0) {
-		printf("can't create sysmem task, n=%d\n", n);
-		abort();
-	}
+	configure_uapi(sm_kip, sm_utcb);
 	rt_thrd_tests();
 	L4_ThreadId_t con_tid = console_init(&root_args);
 
 	/* configure sysinfo. */
 	thrd_t kmsg;
-	n = thrd_create(&kmsg, &kmsg_impl_fn, NULL);
+	int n = thrd_create(&kmsg, &kmsg_impl_fn, NULL);
 	if(n != thrd_success) {
 		printf("can't start kmsg!\n");
 		abort();

@@ -42,9 +42,20 @@ extern L4_ThreadId_t thrd_tidof_NP(thrd_t t);
 extern L4_ThreadId_t uapi_tid;
 extern L4_ThreadId_t vm_tid;
 
-extern int add_task(int pid, L4_Fpage_t kip_area, L4_Fpage_t utcb_area);
+/* adds tracking structures for systasks as they're either registered (as for
+ * root and sysmem) or spawned (for filesystems, drivers, and so forth; after
+ * UAPI has been launched). creates nothing in the microkernel or sysmem.
+ * return value is negative errno on failure, @pid if >= SNEKS_MIN_SYSID, or a
+ * freshly-allocated systask PID when @pid < 0.
+ *
+ * contains some special behaviour for root and sysmem bring-up, respectively.
+ * when @pid is the minimal sysid, the caller thread is added to the created
+ * task's thread list. if @pid is the same as the current thread's pager's
+ * PID, the pager is added to the created task's thread list.
+ */
+extern int add_systask(int pid, L4_Fpage_t kip_area, L4_Fpage_t utcb_area);
+
 extern L4_ThreadId_t allocate_thread(int pid, void **utcb_loc_p);
-extern void free_thread(L4_ThreadId_t tid, void *utcb_loc);
 extern void lock_uapi(void);
 extern void unlock_uapi(void);
 
