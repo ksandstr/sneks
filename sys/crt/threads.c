@@ -243,7 +243,7 @@ void thrd_exit(int res)
 		lock_tss();
 		size_t lim = min(tss_meta.size, data->size);
 		tss_dtor_t dtors[lim];
-		memcpy(dtors, tss_meta.item, lim);
+		memcpy(dtors, tss_meta.item, lim * sizeof *tss_meta.item);
 		unlock_tss();
 		for(size_t i=0; i < lim; i++) {
 			if(data->item[i] != NULL && dtors[i] != NULL) {
