@@ -21,7 +21,6 @@
 START_TEST(init_cnd)
 {
 	plan_tests(2);
-	todo_start("stubs only, no brakes, final destination");
 
 	mtx_t *m = malloc(sizeof *m);
 	mtx_init(m, mtx_plain);
@@ -70,7 +69,6 @@ static int sleep_on_it(void *param_ptr)
 START_TEST(signal)
 {
 	plan_tests(4);
-	todo_start("WIP");
 
 	struct sleep_pair *p = malloc(sizeof *p);
 	p->parent = L4_Myself();
@@ -118,7 +116,6 @@ START_TEST(broadcast)
 	diag("n_threads=%d", n_threads);
 
 	plan_tests(4);
-	todo_start("WIP");
 
 	thrd_t ts[n_threads];
 	struct sleep_pair *ps[n_threads];
