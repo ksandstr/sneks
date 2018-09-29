@@ -48,9 +48,9 @@ static int cmp_systest_ptr(const void *ap, const void *bp)
 
 	int diff = b->pri - a->pri;	/* priority desc */
 	if(diff != 0) return diff;
-	diff = strcmp(a->group, b->group);	/* group asc */
-	if(diff != 0) return diff;
 	diff = strcmp(a->prefix, b->prefix);	/* prefix asc */
+	if(diff != 0) return diff;
+	diff = strcmp(a->group, b->group);	/* group asc */
 	if(diff != 0) return diff;
 	diff = strcmp(a->name, b->name);		/* name asc */
 	if(diff != 0) return diff;
