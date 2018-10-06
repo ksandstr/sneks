@@ -723,6 +723,13 @@ static void abend_helper_thread(void)
 
 static COLD void start_abend_helper(void)
 {
+/* disabled for being fundamentally unworkable. should be replaced with
+ * explicit creation of helper threads by root during sysmem initialization,
+ * rather than this circular dependency shite.
+ *
+ * FIXME: do so, fool
+ */
+#if 0
 	L4_ThreadId_t uapi_tid = { .raw = uapi_info.service };
 	assert(!L4_IsNilThread(uapi_tid));
 
@@ -760,6 +767,7 @@ static COLD void start_abend_helper(void)
 	struct p_page *stkpage = get_free_page();
 	L4_Start_SpIp(abend_helper_tid, stkpage->address + PAGE_SIZE - 16,
 		(L4_Word_t)&abend_helper_thread);
+#endif
 }
 
 
