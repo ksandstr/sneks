@@ -16,6 +16,7 @@
 #include <ccan/minmax/minmax.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/likely/likely.h>
+#include <ccan/container_of/container_of.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -409,6 +410,28 @@ static int vm_brk(L4_Word_t addr)
 }
 
 
+/* copy lazy_mmaps. */
+static int fork_maps(struct vm_space *src, struct vm_space *dest)
+{
+	for(struct rb_node *cur = __rb_first(&src->maps);
+		cur != NULL;
+		cur = __rb_next(cur))
+	{
+		struct lazy_mmap *orig = container_of(cur, struct lazy_mmap, rb),
+			*copy = malloc(sizeof *copy);
+		if(copy == NULL) {
+			/* FIXME: cleanup! */
+			return -ENOMEM;
+		}
+		*copy = *orig;
+		/* FIXME: duplicate file descriptors etc. */
+		void *dupe = insert_lazy_mmap(dest, copy);
+		assert(dupe == NULL);
+	}
+	return 0;
+}
+
+
 static int fork_pages(struct vm_space *src, struct vm_space *dest)
 {
 	/* NOTE: we could malloc src->pages.elems instances of <struct vp> to
@@ -538,9 +561,9 @@ static int vm_fork(uint16_t srcpid, uint16_t destpid)
 		dest->utcb_area = src->utcb_area;
 		dest->sysinfo_area = src->sysinfo_area;
 		dest->brk = src->brk;
-		/* TODO: copy @src->maps */
 		dest->maps = RB_ROOT;
-		int n = fork_pages(src, dest);
+		int n = fork_maps(src, dest);
+		if(n == 0) n = fork_pages(src, dest);
 		if(n < 0) {
 			/* FIXME: cleanup */
 			return n;
