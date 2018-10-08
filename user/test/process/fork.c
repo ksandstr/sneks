@@ -1,6 +1,9 @@
 
 #include <stdlib.h>
 #include <unistd.h>
+#include <errno.h>
+#include <assert.h>
+#include <sys/wait.h>
 #include <l4/types.h>
 #include <l4/ipc.h>
 
@@ -40,5 +43,40 @@ START_LOOP_TEST(fork_basic, iter, 0, 1)
 }
 END_TEST
 
-
 DECLARE_TEST("process:fork", fork_basic);
+
+
+/* tests that it's possible to fork a bunch of times concurrently, without
+ * crashing the system.
+ */
+START_LOOP_TEST(fork_wide, iter, 0, 1)
+{
+	const int n_children = (iter & 1) != 0 ? 64 : 8;
+	diag("n_children=%d", n_children);
+	plan_tests(3);
+
+	int children[n_children], n_started = 0;
+	for(int i=0; i < n_children; i++) {
+		children[i] = fork();
+		if(children[i] > 0) n_started++;
+		else {
+			assert(children[i] == 0);
+			exit(0);
+		}
+	}
+	if(!ok1(n_started == n_children)) {
+		diag("n_started=%d", n_started);
+	}
+
+	int n_waited = 0, n;
+	do {
+		int st;
+		n = wait(&st);
+		if(n > 0) n_waited++;
+	} while(n > 0);
+	if(!ok1(n < 0 && errno == ECHILD)) diag("n=%d, errno=%d", n, errno);
+	if(!ok1(n_waited == n_children)) diag("n_waited=%d", n_waited);
+}
+END_TEST
+
+DECLARE_TEST("process:fork", fork_wide);
