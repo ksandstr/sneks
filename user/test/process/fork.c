@@ -80,3 +80,33 @@ START_LOOP_TEST(fork_wide, iter, 0, 1)
 END_TEST
 
 DECLARE_TEST("process:fork", fork_wide);
+
+
+/* tests recursive forking. */
+START_LOOP_TEST(fork_deep, iter, 0, 1)
+{
+	const int depth = (iter & 1) == 0 ? 2 : 20;
+	plan_tests(2);
+
+	int child, level = 0;
+	while(level <= depth) {
+		child = fork();
+		if(child > 0) break;
+		level++;
+	}
+	if(child == 0) {
+		diag("deepest child pid=%d exiting", getpid());
+		exit(0);
+	}
+	int st, pid = wait(&st);
+	if(level > 0) {
+		diag("level=%d, child=%d, self=%d", level, child, getpid());
+		exit(pid == child && WIFEXITED(st) && WEXITSTATUS(st) == 0 ? 0 : 1);
+	}
+
+	ok1(pid == child);
+	ok1(WIFEXITED(st) && WEXITSTATUS(st) == 0);
+}
+END_TEST
+
+DECLARE_TEST("process:fork", fork_deep);
