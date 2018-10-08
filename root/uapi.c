@@ -86,6 +86,7 @@ struct systask
 
 
 static size_t hash_waitany_tid(const void *ptr, void *priv);
+static size_t hash_ppid(const void *ptr, void *priv);
 
 
 static struct rangealloc *ra_process = NULL, *ra_systask = NULL;
@@ -101,6 +102,10 @@ static int tno_free_counts[4];
 /* PID allocator, backed by rangealloc. */
 static _Atomic int next_user_pid = 1;
 
+/* pid-to-children multimap. used to return -ECHILD in waitid(P_ANY, ...). */
+static struct htable pid_to_child_hash = HTABLE_INITIALIZER(
+	pid_to_child_hash, &hash_ppid, NULL);
+
 /* processes that have PF_WAIT_ALL set will have at least one thread in
  * waitany_hash, and ones where the bit is clear have none. its members are
  * L4_ThreadId_t cast to <void *> and hashed by their process IDs.
@@ -113,6 +118,17 @@ static struct htable waitany_hash = HTABLE_INITIALIZER(
 static size_t hash_waitany_tid(const void *ptr, void *priv) {
 	L4_ThreadId_t t = { .raw = (L4_Word_t)ptr };
 	return int_hash(pidof_NP(t));
+}
+
+
+static size_t hash_ppid(const void *ptr, void *priv) {
+	const struct process *p = ptr;
+	return int_hash(p->ppid);
+}
+
+static bool cmp_ppid_to_int(const void *cand, void *key) {
+	const struct process *p = cand;
+	return p->ppid == *(int *)key;
 }
 
 
@@ -348,6 +364,7 @@ static void destroy_process(struct process *p)
 	/* TODO: various other final process destruction things, such as
 	 * reparenting of children to PID1 and what-not.
 	 */
+	htable_del(&pid_to_child_hash, int_hash(p->ppid), p);
 	ra_free(ra_process, p);
 }
 
@@ -885,6 +902,12 @@ static void uapi_exit(int status)
 }
 
 
+static bool has_children(int pid) {
+	return htable_get(&pid_to_child_hash, int_hash(pid),
+		&cmp_ppid_to_int, &pid) != NULL;
+}
+
+
 static int uapi_wait(
 	int32_t *si_pid_p, int32_t *si_uid_p, int32_t *si_signo_p,
 	int32_t *si_status_p, int32_t *si_code_p,
@@ -903,6 +926,7 @@ static int uapi_wait(
 
 		case P_ANY:
 			dead = list_top(&self->dead_list, struct process, dead_link);
+			if(dead == NULL && !has_children(caller)) return -ECHILD;
 			assert(dead == NULL || dead->ppid == caller);
 			break;
 
@@ -989,6 +1013,11 @@ static int uapi_fork(L4_Word_t *tid_raw_p, L4_Word_t sp, L4_Word_t ip)
 		return -ENOMEM;
 	}
 	dst->ppid = pid;
+	bool ok = htable_add(&pid_to_child_hash, int_hash(pid), dst);
+	if(!ok) {
+		/* FIXME: cleanup */
+		return -ENOMEM;
+	}
 
 	int n = __vm_fork(vm_tid, pid, newpid);
 	if(n != 0) {
