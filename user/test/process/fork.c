@@ -1,5 +1,6 @@
 
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <errno.h>
 #include <assert.h>
@@ -110,3 +111,20 @@ START_LOOP_TEST(fork_deep, iter, 0, 1)
 END_TEST
 
 DECLARE_TEST("process:fork", fork_deep);
+
+
+/* access memory that wasn't mapped into the parent. this should pop a failure
+ * in vm that only forks pages but not the maps they came from.
+ */
+START_TEST(access_mmap_memory)
+{
+	plan_tests(1);
+
+	static char block[16 * 1024];
+	memset(block, 0, sizeof block);
+
+	pass("didn't segfault");
+}
+END_TEST
+
+DECLARE_TEST("process:fork", access_mmap_memory);
