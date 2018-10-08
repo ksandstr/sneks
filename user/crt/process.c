@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <errno.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 
@@ -84,7 +85,8 @@ int waitid(idtype_t idtype, id_t id, siginfo_t *si, int options)
 		&si->si_status, &si->si_code,
 		idtype, id, options);
 	if(n != 0) {
-		/* FIXME: translate errno */
+		/* FIXME: respond to interrupted IPC etc. by retrying or some such */
+		errno = n < 0 ? -n : EIO;
 		return -1;
 	}
 	return 0;

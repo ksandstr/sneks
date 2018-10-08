@@ -11,7 +11,6 @@
 START_TEST(empty_wait)
 {
 	plan_tests(2);
-	todo_start("WIP");
 
 	int st, pid = wait(&st);
 	ok1(pid == -1);
