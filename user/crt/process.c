@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+#include <assert.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 
@@ -54,21 +55,35 @@ pid_t waitpid(pid_t pid, int *wstatus, int options)
 	int n = waitid(pid == -1 ? P_ANY : P_PID, pid, &si, options);
 	if(n != 0) return n;
 	if(wstatus != NULL) {
-		/* FIXME: get macros. for now it's just low bit for exit/not, rest is
-		 * status or signal number. add asserts after each to confirm that
-		 * translation is correct.
-		 */
 		switch(si.si_code) {
-			case CLD_EXITED: *wstatus = si.si_status << 1 | 1; break;
-			case CLD_KILLED: *wstatus = si.si_status << 2; break;
-			case CLD_DUMPED: *wstatus = si.si_status << 2 | 2; break;
+			case CLD_EXITED:
+				*wstatus = si.si_status << 1 | 1;
+				assert(WIFEXITED(*wstatus));
+				assert(WEXITSTATUS(*wstatus) == si.si_status);
+				assert(!WIFSIGNALED(*wstatus));
+				assert(!WCOREDUMP(*wstatus));
+				break;
+			case CLD_KILLED:
+				*wstatus = si.si_signo << 2;
+				assert(WIFSIGNALED(*wstatus));
+				assert(WTERMSIG(*wstatus) == si.si_signo);
+				assert(!WIFEXITED(*wstatus));
+				assert(!WCOREDUMP(*wstatus));
+				break;
+			case CLD_DUMPED:
+				*wstatus = si.si_status << 2 | 2;
+				assert(WCOREDUMP(*wstatus));
+				assert(!WIFSIGNALED(*wstatus));
+				break;
 			case CLD_STOPPED:
 			case CLD_TRAPPED:
 			case CLD_CONTINUED:
 				fprintf(stderr, "%s: no support for stopped/trapped/continued\n",
 					__func__);
 				abort();
-			default: return -1;	/* FIXME: remove this stuff */
+			default:
+				*wstatus = 0;
+				break;	/* what what */
 		}
 	}
 
