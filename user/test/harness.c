@@ -482,11 +482,15 @@ void run_test_by_spec(char **specs, size_t n_specs)
 		htable_add(&by_id, hash_string(sts[i]->id), sts[i]);
 	}
 
+	void *talctx = talloc_new(NULL);
 	const char *pfx = NULL, *grp = NULL;
 	for(size_t i=0; i < n_specs; i++) {
-		char *spec = strdup(specs[i]);
+		char *spec = talloc_strdup(talctx, specs[i]);
 
-		/* FIXME: add fancy ranges and so forth. for now we'll ignore them. */
+		/* these ranges could be fancier, i.e. 1-3,7,9-12 and such, but for
+		 * now we'll parse just a single iteration number, an asterisk, or no
+		 * separator at all.
+		 */
 		char *colon = strrchr(spec, ':');
 		if(colon != NULL) *colon = '\0';
 
@@ -494,16 +498,24 @@ void run_test_by_spec(char **specs, size_t n_specs)
 			&cmp_str_to_utest_id, spec);
 		if(t == NULL) {
 			printf("*** unknown test ID `%s'!\n", spec);
-		} else {
-			bool ch = announce(&pfx, &grp, t);
-			for(int iter = t->low; iter <= t->high; iter++) run(t, iter, ch);
+			continue;
 		}
-		free(spec);
+
+		int lo = t->low, hi = t->high;
+		if(colon != NULL && colon[1] >= '0' && colon[1] <= '9') {
+			char *end = NULL;
+			int sole_iter = strtol(colon + 1, &end, 10);
+			if(*end == '\0') lo = hi = sole_iter;
+		}
+
+		bool ch = announce(&pfx, &grp, t);
+		for(int iter = lo; iter <= hi; iter++) run(t, iter, ch);
 	}
 	announce(&pfx, &grp, NULL);
 	run(NULL, -1, true);
 
 	htable_clear(&by_id);
+	talloc_free(talctx);
 }
 
 
