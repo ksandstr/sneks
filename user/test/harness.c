@@ -1,12 +1,16 @@
 
 /* mostly copypasta'd from sys/test/harness.c, with userspace particulars
- * mixed in. later on this'll have forking and checked fixtures and what-not,
- * but for now it's a systest facsimile.
+ * mixed in. later on this'll have Check-style fixtures and what-not, and the
+ * compatible bits should be deduplicated w/ systest's copy, but for now it is
+ * what it is.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <errno.h>
 #include <ctype.h>
 #include <assert.h>
 #include <threads.h>
@@ -412,11 +416,11 @@ static bool announce(
 static void run(const struct utest *t, int iter, bool redo_fixtures)
 {
 	if(redo_fixtures) {
-		/* TODO: stop previous persistent fixtures here. */
+		/* TODO: stop previous unchecked fixtures here. */
 	}
 	if(t == NULL) return;
 	if(redo_fixtures) {
-		/* TODO: start incoming persistent fixtures here. */
+		/* TODO: start incoming unchecked fixtures here. */
 	}
 
 	if(t->low < t->high) {
@@ -424,16 +428,21 @@ static void run(const struct utest *t, int iter, bool redo_fixtures)
 	} else {
 		printf("*** begin test `%s'\n", t->name);
 	}
-	/* TODO: start per-test fixtures */
-
-	tap_reset();
-	/* TODO: run tests in a thread for each to permit abnormal exits, segfault
-	 * catching, enforce maximum test walltime, and so forth.
-	 */
-	bool failed = false;
-	(*t->fn)(iter);
-	int rc = exit_status();
-	/* TODO: stop per-test fixtures */
+	int child = fork();
+	if(child == 0) {
+		/* TODO: setup checked fixtures */
+		tap_reset();
+		(*t->fn)(iter);
+		/* TODO: teardown checked fixtures */
+		exit(exit_status());
+	}
+	int st, pid = waitpid(child, &st, 0);
+	if(pid < 0) {
+		printf("*** waitpid failed, errno=%d\n", errno);
+		abort();
+	}
+	bool failed = !WIFEXITED(st);
+	int rc = WIFEXITED(st) ? WEXITSTATUS(st) : WTERMSIG(st);
 	if(failed) {
 		printf("*** test `%s' failed, rc %d\n", t->name, rc);
 	} else {
