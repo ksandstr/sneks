@@ -417,13 +417,16 @@ static void zombify(struct process *p)
 		L4_LoadMR(5, p->code);
 		L4_MsgTag_t tag = L4_Reply(waiter);
 		if(L4_IpcSucceeded(tag)) {
-			printf("%s: active exit signaled to %lu:%lu\n",
-				__func__, L4_ThreadNo(waiter), L4_Version(waiter));
 			destroy_process(p);
 			return;
 		} else {
 			printf("%s: signaling of active exit failed, ec=%lu\n",
 				__func__, L4_ErrorCode());
+			/* FIXME: do something about it according to the error code. the
+			 * main problem is that the waiter has been dequeued and should be
+			 * put back in the queue so that it doesn't pull a long-ass beauty
+			 * sleep.
+			 */
 		}
 	}
 
@@ -876,9 +879,9 @@ static int uapi_kill(int pid, int sig)
 	/* TODO: consider signal delivery someday */
 
 	/* death. */
+	p->code = CLD_KILLED;
 	p->signo = sig;
 	p->status = 0;
-	p->code = 0;
 	if(pidof_NP(muidl_get_sender()) == pid) muidl_raise_no_reply();
 	zombify(p);
 
@@ -895,7 +898,7 @@ static void uapi_exit(int status)
 	} else {
 		struct process *p = get_process(pid);
 		assert(p != NULL);
-		p->code = status; p->signo = 0; p->status = 0;
+		p->code = CLD_EXITED; p->status = status; p->signo = 0;
 		zombify(p);
 		muidl_raise_no_reply();
 	}
@@ -937,7 +940,6 @@ static int uapi_wait(
 	}
 	if(dead != NULL) {
 		assert(live == NULL);
-		printf("%s: active reap of dead=%p\n", __func__, dead);
 		list_del_from(&self->dead_list, &dead->dead_link);
 		*si_pid_p = ra_ptr2id(ra_process, dead);
 		*si_uid_p = 0;	/* FIXME: dead->uid or something */
@@ -949,7 +951,6 @@ static int uapi_wait(
 	} else if(live != NULL) {
 		assert(dead == NULL);
 		if((options & WNOHANG) != 0) goto nohang;
-		printf("%s: passive wait on live=%p\n", __func__, live);
 		/* FIXME: this breaks when multiple threads on the parent process wait
 		 * on `live' at the same time, because all will sleep but just one
 		 * wakes up.

@@ -29,7 +29,6 @@ START_LOOP_TEST(return_value, iter, 0, 1)
 {
 	const bool active_exit = (iter & 1) != 0;
 	plan_tests(2);
-	todo_start("WIP");
 
 	bool wait_ok = true, rc_ok = true;
 	for(int i=0; i < 20; i++) {
