@@ -212,13 +212,6 @@ void exit(int status)
 }
 
 
-char *getenv(const char *name)
-{
-	/* simplest conforming implementation there is. */
-	return NULL;
-}
-
-
 /* for dlmalloc (maybe?) */
 long sysconf(int name)
 {

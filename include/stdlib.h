@@ -1,6 +1,8 @@
 
-#ifndef SEEN_FAKE_CLIB_STDLIB_H
-#define SEEN_FAKE_CLIB_STDLIB_H
+/* derived from mung fake_stdio/stdlib.h. */
+
+#ifndef _STDLIB_H
+#define _STDLIB_H
 
 #include <stddef.h>
 #include <ccan/compiler/compiler.h>
@@ -36,6 +38,10 @@ extern long long int llabs(long long int j);
 extern int atexit(void (*function)(void));
 
 extern char *getenv(const char *name);
+extern int setenv(const char *name, const char *value, int overwrite);
+extern int unsetenv(const char *name);
+extern int putenv(char *string);
+extern int clearenv(void);
 
 extern int atoi(const char *nptr);
 extern long int strtol(const char *nptr, char **endptr, int base);
