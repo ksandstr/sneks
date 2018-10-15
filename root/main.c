@@ -61,14 +61,28 @@ struct root_arg {
 };
 
 
+static size_t hash_raw_word(const void *ptr, void *priv);
+
 L4_KernelInterfacePage_t *the_kip;
 L4_ThreadId_t vm_tid = { .raw = 0 };
 
 static L4_ThreadId_t sigma0_tid, sysmem_tid;
 static int sysmem_pages = 0, sysmem_self_pages = 0;
 
+/* memory set aside for sysmem, e.g. boot modules that were copied into the
+ * dlmalloc heap before start_sysmem(). emptied and cleared in start_sysmem();
+ * members L4_Fpage_t cast to a pointer.
+ */
+static struct htable pre_sysmem_resv = HTABLE_INITIALIZER(
+	pre_sysmem_resv, &hash_raw_word, NULL);
+
 
 extern NORETURN void panic(const char *msg);
+
+
+static size_t hash_raw_word(const void *ptr, void *priv) {
+	return word_hash((L4_Word_t)ptr);
+}
 
 
 static size_t hash_sysmem_page(const void *key, void *priv) {
@@ -265,7 +279,10 @@ static L4_BootInfo_t *get_boot_info(L4_KernelInterfacePage_t *kip)
 		goto end;
 	}
 
-	/* grab boot modules from sigma0 so they don't get passed to vm. */
+	/* grab boot modules from sigma0 so they don't get passed to vm, stepped
+	 * over by sbrk(), or some other untoward outcome. changes bootmodule
+	 * start addresses to lie within the heap.
+	 */
 	bootinfo = (L4_BootInfo_t *)&bootinfo_copy[0];
 	L4_BootRec_t *rec = L4_BootInfo_FirstEntry(bootinfo);
 	for(L4_Word_t i = 0;
@@ -278,17 +295,30 @@ static L4_BootInfo_t *get_boot_info(L4_KernelInterfacePage_t *kip)
 		}
 
 		L4_Word_t base = L4_Module_Start(rec), len = L4_Module_Size(rec);
-		printf("%s: retain boot module [%#lx, %#lx)\n", __func__,
-			base, base + len);
+		size_t copylen = (len + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+		void *copy = aligned_alloc(PAGE_SIZE, copylen);
+		memset(copy, '\0', copylen);
+		printf("copy boot module [%#lx, %#lx) to %p:%#lx\n",
+			base, base + len, copy, (L4_Word_t)copylen);
 		L4_Word_t addr, sz;
-		for_page_range(base, (base + len + PAGE_MASK) & ~PAGE_MASK, addr, sz) {
+		for_page_range(base, base + copylen, addr, sz) {
 			L4_Fpage_t p = L4_Sigma0_GetPage(sigma0_tid, L4_FpageLog2(addr, sz));
 			if(L4_IsNilFpage(p)) {
 				printf("%s: couldn't get page %#lx:%#lx from s0!\n",
 					__func__, addr, 1ul << sz);
 				abort();
 			}
+			assert(copy + L4_Address(p) - base >= copy);
+			assert(copy + L4_Address(p) - base + L4_Size(p) <= copy + copylen);
+			memcpy(copy + L4_Address(p) - base, (void *)L4_Address(p), L4_Size(p));
+			bool ok = htable_add(&pre_sysmem_resv, word_hash(p.raw), (void *)p.raw);
+			if(!ok) {
+				printf("%s: failed to add to pre_sysmem_resv!\n", __func__);
+				abort();
+			}
 		}
+		((L4_Boot_Module_t *)rec)->start = (L4_Word_t)copy;
+		assert(L4_Module_Start(rec) == (L4_Word_t)copy);
 	}
 
 end:
@@ -448,8 +478,19 @@ static L4_ThreadId_t start_sysmem(
 			__func__, L4_ErrorCode());
 		abort();
 	}
+	free((void *)start_addr);	/* see get_boot_info() */
 
+	/* send the memory where boot modules were loaded. */
 	struct htable_iter it;
+	for(void *ptr = htable_first(&pre_sysmem_resv, &it);
+		ptr != NULL;
+		ptr = htable_next(&pre_sysmem_resv, &it))
+	{
+		L4_Fpage_t fp = { .raw = (L4_Word_t)ptr };
+		send_phys_to_sysmem(sysmem_tid, false, fp);
+	}
+	htable_clear(&pre_sysmem_resv);
+	/* and the memory where sysmem's own binary was loaded. */
 	for(struct sysmem_page *p = htable_first(pages, &it);
 		p != NULL;
 		p = htable_next(pages, &it))
@@ -672,8 +713,7 @@ static L4_ThreadId_t spawn_systask(const char *name, ...)
 	printf("name=`%s', mod=%p, rest=`%s'\n", name, mod, rest);
 	char **args = break_argument_list(rest, NULL);
 
-	L4_Word_t start_addr = L4_Module_Start(mod),
-		mod_size = L4_Module_Size(mod);
+	L4_Word_t start_addr = L4_Module_Start(mod);
 	const Elf32_Ehdr *ee = (void *)start_addr;
 	if(memcmp(ee->e_ident, ELFMAG, SELFMAG) != 0) {
 		printf("incorrect ELF magic in boot module `%s'\n", name);
@@ -777,19 +817,7 @@ static L4_ThreadId_t spawn_systask(const char *name, ...)
 		abort();
 	}
 
-	/* toss the module pages into sysmem as spare RAM. no need for 'em
-	 * anymore.
-	 */
-	L4_Word_t addr, sz;
-	for_page_range(start_addr, (start_addr + mod_size + PAGE_MASK) & ~PAGE_MASK,
-		addr, sz)
-	{
-		// printf("  %#lx:%#lx\n", addr, 1ul << sz);
-		L4_Fpage_t p = L4_FpageLog2(addr, sz);
-		L4_Set_Rights(&p, L4_FullyAccessible);
-		send_phys_to_sysmem(sysmem_tid, false, p);
-	}
-
+	free((void *)start_addr);	/* see get_boot_info() */
 	free(args);
 	free(rest);
 	return new_tid;
@@ -1032,15 +1060,7 @@ static L4_ThreadId_t mount_initrd(void)
 		}
 	}
 	free(copybuf);
-
-	/* chuck phys memory to sysmem. */
-	L4_Word_t addr, sz;
-	for_page_range(L4_Module_Start(img),
-		(L4_Module_Start(img) + L4_Module_Size(img) + PAGE_MASK) & ~PAGE_MASK,
-		addr, sz)
-	{
-		send_phys_to_sysmem(sysmem_tid, false, L4_FpageLog2(addr, sz));
-	}
+	free((void *)L4_Module_Start(img));	/* see get_boot_info() */
 
 	/* sync & get mount status. */
 	L4_LoadMR(0, 0);
