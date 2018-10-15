@@ -24,7 +24,7 @@
 #include "defs.h"
 
 
-#define N_PRE_HEAP 30	/* max # of fpages recorded in early sbrk() */
+#define N_PRE_HEAP 32	/* max # of fpages recorded in early sbrk() */
 
 
 static uintptr_t current_brk = 0, heap_bottom;
@@ -58,6 +58,11 @@ void *sbrk(intptr_t increment)
 				}
 				assert(L4_Address(p) == address);
 				assert(L4_SizeLog2(p) == size_log2);
+				if(pre_heap_pos == N_PRE_HEAP) {
+					printf("%s: ran out of pre-heap pages!\n", __func__);
+					abort();
+				}
+				assert(pre_heap_pos < N_PRE_HEAP);
 				pre_heap_pages[pre_heap_pos++] = p;
 			}
 		}
