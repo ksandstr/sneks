@@ -19,7 +19,6 @@ START_TEST(basic_get_set)
 {
 	const char *varname = "BASIC_TESTVARIABLE";
 	plan_tests(3);
-	todo_start("WIP");
 
 	ok1(getenv(varname) == NULL);
 	if(!ok1(setenv(varname, "TESTVALUE", 0) == 0)) {
@@ -39,7 +38,6 @@ SYSTEST("crt:env", basic_get_set);
 START_TEST(setenv_invalid_name)
 {
 	plan_tests(3);
-	todo_start("WIP");
 
 	/* invalid values for `name'. */
 	int n = setenv(NULL, "TESTVALUE", 0);
@@ -63,7 +61,6 @@ START_LOOP_TEST(setenv_overwrite, iter, 0, 1)
 	diag("overwrite=%d", overwrite);
 
 	plan_tests(5);
-	todo_start("WIP");
 
 	ok1(getenv(varname) == NULL);
 	int n = setenv(varname, "OLD", 0);
@@ -86,7 +83,6 @@ START_TEST(basic_unset)
 {
 	const char *varname = "UNSET_TESTVARIABLE";
 	plan_tests(5);
-	todo_start("WIP");
 
 	ok1(getenv(varname) == NULL);
 	int n = setenv(varname, "OLD", 0);
@@ -106,7 +102,6 @@ START_TEST(basic_clear)
 {
 	const char *var1 = "CLEAR_TEST0", *var2 = "CLEAR_TEST1";
 	plan_tests(7);
-	todo_start("WIP");
 
 	ok1(getenv(var1) == NULL);
 	ok1(getenv(var2) == NULL);
@@ -134,7 +129,6 @@ START_TEST(basic_put)
 	char *data = strdup("PUT_TESTVARIABLE=TESTVALUE");
 	assert(data != NULL);
 	plan_tests(6);
-	todo_start("WIP");
 
 	/* putenv changes the environment. */
 	ok1(getenv("PUT_TESTVARIABLE") == NULL);
@@ -172,7 +166,6 @@ START_TEST(edge_put)
 {
 	const char *prefix = "EDGE_PUT";
 	plan_tests(9);
-	todo_start("WIP");
 
 	void *talctx = talloc_new(NULL);
 	static int count = 0;
@@ -224,7 +217,6 @@ START_LOOP_TEST(overwrite_put, iter, 0, 1)
 	const bool first_put = !!(iter & 1);
 	diag("first_put=%s", btos(first_put));
 	plan_tests(7);
-	todo_start("WIP");
 
 	void *talctx = talloc_new(NULL);
 

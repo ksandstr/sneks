@@ -13,7 +13,8 @@ LIB_OBJS=bsearch.o dlmalloc.o hash.o pidof.o sort.o rbtree.o string.o \
 CRT_SRC:=$(wildcard *.c)
 CRT_ASM:=$(wildcard *-32.S)
 CRT_OBJS:=crt0.o $(IDL_OBJS) $(CRT_SRC:.c=.o) $(CRT_ASM:-32.S=.o) \
-	$(patsubst %,$(CFGDIR)/lib/%,$(LIB_OBJS))
+	$(patsubst %,$(CFGDIR)/lib/%,$(LIB_OBJS)) \
+	ccan-hash.o
 
 vpath %.idl $(CFGDIR)/idl/api
 

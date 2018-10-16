@@ -4,7 +4,7 @@ include ../config.mk
 
 
 LIB_SRC:=$(wildcard *.c)
-LIB_OBJS:=$(subst .c,.o,$(LIB_SRC))
+LIB_OBJS:=$(subst .c,.o,$(LIB_SRC)) ccan-hash.o
 
 CFLAGS:=$(CFLAGS) -D__SNEKS__=1
 
