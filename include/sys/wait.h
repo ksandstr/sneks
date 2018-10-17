@@ -20,8 +20,11 @@
 #define WIFCONTINUED(st) 0
 
 
+struct __siginfo_s;
+
+
 extern pid_t wait(int *wstatus);
 extern pid_t waitpid(pid_t pid, int *wstatus, int options);
-extern int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options);
+extern int waitid(idtype_t idtype, id_t id, struct __siginfo_s *infop, int options);
 
 #endif

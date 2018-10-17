@@ -14,10 +14,6 @@ typedef int32_t pid_t;
 
 typedef int32_t idtype_t, id_t;
 
-typedef struct {
-	int32_t si_pid, si_uid, si_signo, si_status, si_code;
-} siginfo_t;
-
 /* ... and others */
 
 #endif
