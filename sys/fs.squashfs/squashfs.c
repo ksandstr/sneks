@@ -575,18 +575,28 @@ static int squashfs_read(
 		bytes = min_t(uint32_t, count, reg->file_size - pos);
 	if(bytes == 0) goto end;
 
+#if 0
+	printf("%s: pos=%u, bytes=%u, blksizelog2=%d\n", __func__, pos, bytes,
+		(int)fs_block_size_log2);
+#endif
+
 	uint64_t block = squashfs_i(nod)->rest_start;
 	int offset = squashfs_i(nod)->offset,
-		skip = (pos >> fs_block_size_log2) - 1;
+		seek = pos >> fs_block_size_log2;
 	int64_t data_block = 0;
-	if(skip > 0) {
-		data_block = seek_block_list(&block, &offset, skip);
+	if(seek > 1) {
+		data_block = seek_block_list(&block, &offset, seek - 1);
 		if(data_block < 0) {
 			n = data_block;
 			goto end;
 		}
+		seek = 0;
 	}
 	data_block += reg->start_block;
+#if 0
+	printf("\tpre-loop data_block=%lu, block=%u, offset=%u\n",
+		(unsigned long)data_block, (unsigned)block, offset);
+#endif
 
 	while(done < bytes) {
 		uint32_t lenword;
@@ -594,14 +604,20 @@ static int squashfs_read(
 		if(n < 0) return n;
 		lenword = LE32_TO_CPU(lenword);
 		if(lenword == 0) continue;
+#if 0
+		printf("\tloop data_block=%lu, block=%u, offset=%u, seek=%d\n",
+			(unsigned long)data_block, (unsigned)block, offset, seek);
+#endif
 
-		struct blk *b = cache_get(data_block, lenword);
-		if(b == NULL) return -ENOMEM;	/* or translate an errptr */
-		int seg = min_t(int, bytes - done, b->length);
-		memcpy(&data_buf[done],
-			&b->data[pos & ((1 << fs_block_size_log2) - 1)], seg);
-		done += seg;
-		pos += seg;
+		if(seek-- <= 0) {
+			struct blk *b = cache_get(data_block, lenword);
+			if(b == NULL) return -ENOMEM;	/* or translate an errptr */
+			int seg = min_t(int, bytes - done, b->length);
+			memcpy(&data_buf[done],
+				&b->data[pos & ((1 << fs_block_size_log2) - 1)], seg);
+			done += seg;
+			pos += seg;
+		}
 		data_block += SQUASHFS_COMPRESSED_SIZE_BLOCK(lenword);
 	}
 	n = 0;
