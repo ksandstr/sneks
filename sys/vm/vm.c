@@ -28,6 +28,7 @@
 #include <sneks/rbtree.h>
 #include <sneks/process.h>
 #include <sneks/hash.h>
+#include <sneks/sysinfo.h>
 
 #include "nbsl.h"
 #include "epoch.h"
@@ -38,6 +39,11 @@
 #include "info-defs.h"
 #include "fs-defs.h"
 #include "vm-impl-defs.h"
+
+
+#ifndef TRACE_FAULTS
+#define TRACE_FAULTS 0
+#endif
 
 
 struct pl;
@@ -753,7 +759,7 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 	}
 
 	const int fault_rwx = L4_Label(muidl_get_tag()) & 7;
-#if 0
+#if TRACE_FAULTS
 	printf("%s: pid=%d, faddr=%#lx, fip=%#lx, access=%c%c%c",
 		__func__, pid, faddr, fip,
 		(fault_rwx & L4_Readable) != 0 ? 'r' : '-',
@@ -770,7 +776,9 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 		&cmp_vp_to_vaddr, &faddr_page);
 	if(old != NULL && old->status == 0) {
 		/* lazy brk fastpath. */
-		//printf("  lazy brk\n");
+#if TRACE_FAULTS
+		printf("  lazy brk\n");
+#endif
 		struct pl *link = get_free_pl();
 		void *page = (void *)((uintptr_t)link->page_num << PAGE_BITS);
 		memset(page, '\0', PAGE_SIZE);
@@ -782,29 +790,40 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 		e_free(link);
 		goto reply;
 	} else if(old != NULL && (VP_RIGHTS(old) & fault_rwx) != fault_rwx) {
-		//printf("  no access!!!\n");
+#if TRACE_FAULTS
+		printf("  no access!!!\n");
+#endif
 		printf("%s: segv (access=%#x, had=%#x)\n", __func__,
 			fault_rwx, VP_RIGHTS(old));
 		goto segv;
 	} else if(old != NULL && VP_IS_COW(old)) {
 		if((fault_rwx & L4_Writable) != 0) {
-			//printf("  copy-on-write\n");
+#if TRACE_FAULTS
+			printf("  copy-on-write\n");
+#endif
 			map_page = pf_cow(old);
 		} else {
 			/* read-only while supplies last. */
-			//printf("  read-only/shared\n");
+#if TRACE_FAULTS
+			printf("  read-only/shared\n");
+#endif
 			map_page = L4_FpageLog2(old->status << PAGE_BITS, PAGE_BITS);
 			L4_Set_Rights(&map_page, fault_rwx);
 		}
 		goto reply;
 	} else if(old != NULL) {
 		/* quick remap or expand. */
-		//printf("  remap\n");
+#if TRACE_FAULTS
+		printf("  remap\n");
+#endif
 		map_page = L4_FpageLog2(old->status << PAGE_BITS, PAGE_BITS);
 		L4_Set_Rights(&map_page, VP_RIGHTS(old));
 		goto reply;
 	} else if(unlikely(ADDR_IN_FPAGE(sp->sysinfo_area, faddr))) {
-		//printf("  sysinfopage\n");
+#if TRACE_FAULTS
+		printf("  sysinfopage\n");
+#endif
+		assert(the_sip->magic == SNEKS_SYSINFO_MAGIC);
 		map_page = L4_FpageLog2((uintptr_t)the_sip, PAGE_BITS);
 		L4_Set_Rights(&map_page, L4_Readable);
 		goto reply;
@@ -813,13 +832,17 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 	int rights;
 	struct lazy_mmap *mm = find_lazy_mmap(sp, faddr);
 	if(mm == NULL) {
-		printf("%s: segv (unmapped)\n", __func__);
+#if TRACE_FAULTS
+		printf("  segv (unmapped)\n");
+#endif
 		goto segv;
 	} else {
 		assert(faddr >= mm->addr && faddr < mm->addr + mm->length);
 		rights = (mm->flags >> 16) & 7;
 		if(unlikely((fault_rwx & rights) != fault_rwx)) {
-			printf("%s: segv (access mode, mmap)\n", __func__);
+#if TRACE_FAULTS
+			printf("  segv (access mode, mmap)\n");
+#endif
 			goto segv;
 		}
 	}
@@ -833,7 +856,9 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 
 	uint8_t *page;
 	if((mm->flags & MAP_ANONYMOUS) != 0) {
-		//printf("  anon\n");
+#if TRACE_FAULTS
+		printf("  anon\n");
+#endif
 		struct pl *link;
 		link = get_free_pl();
 		page = (uint8_t *)((uintptr_t)link->page_num << PAGE_BITS);
@@ -842,7 +867,9 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 		push_page(&page_active_list, link);
 		e_free(link);
 	} else {
-		//printf("  file\n");
+#if TRACE_FAULTS
+		printf("  file\n");
+#endif
 		struct pl *link = get_free_pl();
 		page = (uint8_t *)((uintptr_t)link->page_num << PAGE_BITS);
 		unsigned n_bytes = PAGE_SIZE;
