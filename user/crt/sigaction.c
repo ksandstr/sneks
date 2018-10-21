@@ -198,7 +198,7 @@ int sigaction(
 		n = __proc_sigset(__the_sysinfo->api.proc, &old,
 			(ign_set & bit) != 0 ? 0 : 1, 0, ~bit);
 		if(n != 0) goto sigsetfail;
-		// assert((old & bit) != 0);
+		assert((old & bit) != 0);
 		ign_set &= ~bit; dfl_set &= ~bit;
 	}
 	assert((ign_set & dfl_set) == 0);

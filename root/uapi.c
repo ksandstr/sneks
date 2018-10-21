@@ -71,6 +71,14 @@ struct process
 	short signo, status;
 	int code;
 	struct list_node dead_link;	/* in parent's dead_list */
+
+	/* signal delivery. */
+	uintptr_t sigpage_addr;
+	uint64_t ign_set, dfl_set, mask_set, pending_set;
+	L4_ThreadId_t sighelper_tid;
+	void *sighelper_utcb;
+
+	/* rarely used things later down */
 	struct list_head dead_list;	/* zombie children via ->dead_link */
 };
 
@@ -87,6 +95,8 @@ struct systask
 
 static size_t hash_waitany_tid(const void *ptr, void *priv);
 static size_t hash_ppid(const void *ptr, void *priv);
+
+static void sig_send(struct process *p, int sig); /* may raise muidl::NoReply */
 
 
 static struct rangealloc *ra_process = NULL, *ra_systask = NULL;
@@ -343,7 +353,9 @@ L4_ThreadId_t allocate_thread(int pid, void **utcb_loc_p)
 }
 
 
-/* for rolling back allocate_thread() when make_space() fails. */
+/* for rolling back allocate_thread() when make_space() fails, removing
+ * spent threadlets, and eventually for implementing Proc::remove_thread.
+ */
 static void free_thread(
 	struct task_common *task,
 	L4_ThreadId_t tid, void *utcb_loc)
@@ -378,6 +390,12 @@ static void zombify(struct process *p)
 
 	struct process *parent = get_process(p->ppid);
 	assert(parent != NULL);		/* FIXME: handle death of init */
+	/* NOTE: there's a question about whether sigchld should be sent when the
+	 * exiting child is immediately caught in a waitid(). sneks does, because
+	 * SIGCHLD handlers are supposed to use WNOHANG and deal with spurious
+	 * signals if waitid() is called from somewhere else also.
+	 */
+	sig_send(parent, SIGCHLD);
 
 	L4_ThreadId_t waiter = L4_nilthread;
 	if(!L4_IsNilThread(p->wait_tid)) waiter = p->wait_tid;
@@ -626,6 +644,12 @@ static void process_ctor(struct process *p)
 {
 	list_head_init(&p->dead_list);
 	p->wait_tid = L4_nilthread;
+	p->sigpage_addr = 0;
+	p->ign_set = 0;
+	p->dfl_set = ~(uint64_t)0;
+	p->mask_set = 0;
+	p->pending_set = 0;
+	p->sighelper_tid = L4_nilthread;
 }
 
 
@@ -865,6 +889,136 @@ fail:
 }
 
 
+static bool sig_default(struct process *p, int sig)
+{
+	switch(sig) {
+		case SIGCHLD: goto ignore;
+		case SIGSEGV: goto core;
+		default:
+			/* FIXME: add the rest and remove this */
+			printf("%s: ignoring sig=%d by default (perhaps wrongly)\n",
+				__func__, sig);
+			goto ignore;
+	}
+
+ignore:
+	assert((p->pending_set & (1ull << sig)) == 0);
+	return false;
+
+core:
+	/* death. (would also dump core.) */
+	p->code = CLD_KILLED;
+	p->signo = sig;
+	p->status = 0;
+	zombify(p);
+
+	return true;
+}
+
+
+static const uint8_t sigpage_tail_code[] = {
+/* tophalf: */
+	0xe8, 0x08, 0x00, 0x00, 0x00,	/* call d <get_vec> */
+/* 1: */
+	0xff, 0x93, 0x0c, 0x00, 0x00, 0x00,	/* call *(botvec - .)(%ebx) */
+	0xeb, 0xf8,				/* jmp 1b */
+/* get_vec: */
+	0x8b, 0x1c, 0x24,		/* movl (%esp), %ebx */
+	0xc3,					/* ret */
+/* botvec: */
+	0x00, 0x00, 0x00, 0x00,		/* (bottomhalf vector) */
+};
+
+
+static void sig_deliver(struct process *p, int sig)
+{
+	assert(sig >= 1 && sig <= 64);
+	if(!L4_IsNilThread(p->sighelper_tid)) {
+		/* TODO: launch the helper-redirecting threadlet */
+		printf("uapi: can't deliver sig=%d while delivery in progress\n", sig);
+		return;
+	}
+
+	if(!L4_IsNilThread(p->sighelper_tid)) goto add_sig;
+
+	/* create the intermediary thread. TODO: move this into a
+	 * spawn_threadlet() or some such.
+	 */
+	assert(p->task.threads.size > 0);
+	p->sighelper_tid = allocate_thread(ra_ptr2id(ra_process, p),
+		&p->sighelper_utcb);
+	if(L4_IsNilThread(p->sighelper_tid)) {
+		printf("uapi:%s: can't allocate thread ID when sig=%d\n",
+			__func__, sig);
+		return;
+	}
+	L4_ThreadId_t space = p->task.threads.item[0];
+	L4_Word_t res = L4_ThreadControl(p->sighelper_tid, space,
+		L4_Myself(), vm_tid, p->sighelper_utcb);
+	if(res != 1) {
+		printf("uapi:%s: ThreadControl failed, ec=%lu\n",
+			__func__, L4_ErrorCode());
+		abort();	/* FIXME: do something else! */
+	}
+
+	L4_Word_t ip = p->sigpage_addr + PAGE_SIZE - sizeof sigpage_tail_code,
+		sp = (ip - 64) & ~63, rc;
+	int n = __vm_breath_of_life(vm_tid, &rc, p->sighelper_tid.raw, sp, ip);
+	if(n != 0) {
+		printf("uapi:%s: VM::breath_of_life failed, n=%d\n", __func__, n);
+		abort();	/* FIXME: unfuckinate! */
+	}
+
+	/* TODO: set up something that'll catch @tid's exit, like a call to
+	 * sigset() from the threadlet, which would return 0 if the thread weren't
+	 * brutally moida'd.
+	 */
+
+add_sig:
+	p->pending_set |= (1ull << (sig - 1));
+}
+
+
+static void sig_remove_helper(struct process *p)
+{
+	L4_Word_t ret = L4_ThreadControl(p->sighelper_tid, p->sighelper_tid,
+		L4_Myself(), L4_nilthread, (void *)-1);
+	if(ret != 1) {
+		printf("uapi:%s: deleting threadctl failed, ec=%lu\n", __func__,
+			L4_ErrorCode());
+		abort();	/* FIXME: do something else instead */
+	}
+	free_thread(&p->task, p->sighelper_tid, p->sighelper_utcb);
+	free_threadno(p->sighelper_tid);
+	p->sighelper_tid = L4_nilthread;
+}
+
+
+/* TODO: add varargs for signal-specific parameters passed down to
+ * sig_deliver? though these won't be saved in the pending set unless there
+ * were fields in <struct process> for each, which seems ugly.
+ */
+static void sig_send(struct process *p, int sig)
+{
+	assert(sig >= 1 && sig <= 64);
+	uint64_t sig_bit = 1ull << (sig - 1);
+	if((p->mask_set & sig_bit) != 0) p->pending_set |= sig_bit;
+	else {
+		assert((p->pending_set & sig_bit) == 0);
+		if((p->dfl_set & sig_bit) != 0) {
+			assert((p->ign_set & sig_bit) == 0);
+			if(sig_default(p, sig)
+				&& pidof_NP(muidl_get_sender()) == ra_ptr2id(ra_process, p))
+			{
+				muidl_raise_no_reply();
+			}
+		} else if((p->ign_set & sig_bit) == 0) {
+			sig_deliver(p, sig);
+		}
+	}
+}
+
+
 static int uapi_kill(int pid, int sig)
 {
 	printf("%s: called, pid=%d, sig=%d\n", __func__, pid, sig);
@@ -875,16 +1029,7 @@ static int uapi_kill(int pid, int sig)
 
 	struct process *p = get_process(pid);
 	if(p == NULL) return -ESRCH;
-
-	/* TODO: consider signal delivery someday */
-
-	/* death. */
-	p->code = CLD_KILLED;
-	p->signo = sig;
-	p->status = 0;
-	if(pidof_NP(muidl_get_sender()) == pid) muidl_raise_no_reply();
-	zombify(p);
-
+	sig_send(p, sig);
 	return 0;
 }
 
@@ -1014,6 +1159,7 @@ static int uapi_fork(L4_Word_t *tid_raw_p, L4_Word_t sp, L4_Word_t ip)
 		return -ENOMEM;
 	}
 	dst->ppid = pid;
+	dst->sigpage_addr = src->sigpage_addr;
 	bool ok = htable_add(&pid_to_child_hash, int_hash(pid), dst);
 	if(!ok) {
 		/* FIXME: cleanup */
@@ -1067,13 +1213,68 @@ static void uapi_sigconfig(
 	memset(tail_data, '\0', 1024);
 	*tail_data_len = 1024;
 	*handler_offset_p = 1020;
+
+	int pid = pidof_NP(muidl_get_sender());
+	if(IS_SYSTASK(pid)) return;	/* nuh! */
+
+	struct process *self = get_process(pid);
+	self->sigpage_addr = sigpage_addr;
+	size_t len = sizeof sigpage_tail_code;
+	memset(tail_data, '\0', *tail_data_len - len);
+	memcpy(&tail_data[*tail_data_len - len], sigpage_tail_code, len);
+	*handler_offset_p = PAGE_SIZE - 4;
 }
 
 
 static uint64_t uapi_sigset(
 	int32_t set_name, uint64_t or_bits, uint64_t and_bits)
 {
-	return 0;
+	struct process *p = get_process(pidof_NP(muidl_get_sender()));
+	if(set_name == 3 && (p->pending_set | and_bits) == 0
+		&& !L4_IsNilThread(p->sighelper_tid)
+		&& L4_SameThreads(muidl_get_sender(), p->sighelper_tid))
+	{
+		/* terminating condition for the helper thread. */
+		sig_remove_helper(p);
+		assert(L4_IsNilThread(p->sighelper_tid));
+		muidl_raise_no_reply();
+		return 0;
+	}
+
+	uint64_t *set;
+	switch(set_name) {
+		case 0: set = &p->ign_set; break;
+		case 1: set = &p->dfl_set; break;
+		case 2: set = &p->mask_set; break;
+		case 3: set = &p->pending_set; break;
+		default:
+			fprintf(stderr, "%s: unknown set_name=%d from pid=%d\n",
+				__func__, set_name, ra_ptr2id(ra_process, p));
+			return 0;
+	}
+
+	uint64_t oldval = *set;
+	*set &= and_bits;
+	if(set != &p->pending_set) {
+		*set |= or_bits;
+		uint64_t pos_change = oldval ^ *set;
+		if(pos_change != 0) {
+			if(set == &p->ign_set) p->dfl_set &= ~pos_change;
+			else if(set == &p->dfl_set) p->ign_set &= ~pos_change;
+		}
+		assert((p->ign_set & p->dfl_set) == 0);
+	}
+	if(set == &p->mask_set) {
+		uint64_t trig = p->pending_set & ~p->mask_set;
+		if(trig != 0) p->pending_set &= ~trig;
+		while(trig != 0) {
+			int sig = ffsll(trig);
+			sig_send(p, sig);
+			trig &= ~(1ull << (sig - 1));
+		}
+	}
+
+	return oldval;
 }
 
 

@@ -32,7 +32,6 @@ START_LOOP_TEST(sigaction_basic, iter, 0, 1)
 	const bool sleep_in_recv = !!(iter & 1);
 	diag("sleep_in_recv=%s", btos(sleep_in_recv));
 	plan_tests(3);
-	todo_start("WIP");
 
 	chld_got = 0;
 	struct sigaction act = { .sa_handler = &sigchld_handler };

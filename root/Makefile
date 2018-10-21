@@ -40,7 +40,7 @@ root: root.ld crt0.o main.o runtime.o thrd.o uapi.o mm.o ser_io.o \
 main.o: main.c sysmem-defs.h kmsg-defs.h rootserv-defs.h proc-defs.h \
 	bootcon-defs.h
 thrd.o: thrd.c proc-defs.h
-uapi.o: uapi.c root-uapi-defs.h vm-defs.h fs-defs.h info-defs.h
+uapi.o: uapi.c root-uapi-defs.h proc-defs.h vm-defs.h fs-defs.h info-defs.h
 
 
 # secret nazi forest
