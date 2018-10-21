@@ -56,6 +56,7 @@ static void get_more_memory(L4_Word_t start)
 				printf("s0 GetPage failed! ec=%lu\n", L4_ErrorCode());
 				abort();
 			}
+			memset((void *)L4_Address(p), '\0', L4_Size(p));
 			if(have_sysmem) {
 				/* transfer immediately. */
 				extern L4_ThreadId_t sysmem_tid;	/* FIXME: terrible hack */
