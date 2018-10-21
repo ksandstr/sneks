@@ -40,6 +40,7 @@ process.o: process.c proc-defs.h
 fork.o: fork.c proc-defs.h
 heap.o: heap.c vm-defs.h
 stdio.o: stdio.c io-defs.h
+sigaction.o: sigaction.c proc-defs.h
 
 
 libsneks-user-crt.a: $(CRT_OBJS)

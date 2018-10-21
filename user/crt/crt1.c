@@ -23,6 +23,8 @@
 L4_KernelInterfacePage_t *__the_kip = NULL;
 struct __sysinfo *__the_sysinfo = NULL;
 
+L4_ThreadId_t __main_tid;
+
 
 void __return_from_main(int status)
 {
@@ -122,6 +124,7 @@ int __crt1_entry(uintptr_t fdlistptr)
 {
 	__the_kip = L4_GetKernelInterface();
 	__the_sysinfo = __get_sysinfo(__the_kip);
+	__main_tid = L4_MyLocalId();
 
 	extern char _end;
 	L4_Word_t argpos = ((L4_Word_t)&_end + PAGE_SIZE - 1) & ~PAGE_MASK;

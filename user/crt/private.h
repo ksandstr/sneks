@@ -27,6 +27,8 @@ struct __sneks_file {
 extern L4_KernelInterfacePage_t *__the_kip;
 extern struct __sysinfo *__the_sysinfo;
 
+extern L4_ThreadId_t __main_tid;
+
 
 /* what file descriptors index into. */
 extern struct __sneks_file *__files;
