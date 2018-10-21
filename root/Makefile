@@ -20,7 +20,7 @@ clean:
 	@rm -f *.o $(CLEAN_PATS)
 
 
-distclean:
+distclean: clean
 	@rm -rf .deps $(OUTPUTS)
 
 

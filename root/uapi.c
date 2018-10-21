@@ -1059,6 +1059,24 @@ static int uapi_fork(L4_Word_t *tid_raw_p, L4_Word_t sp, L4_Word_t ip)
 }
 
 
+static void uapi_sigconfig(
+	L4_Word_t sigpage_addr,
+	uint8_t tail_data[static 1024], unsigned *tail_data_len,
+	int32_t *handler_offset_p)
+{
+	memset(tail_data, '\0', 1024);
+	*tail_data_len = 1024;
+	*handler_offset_p = 1020;
+}
+
+
+static uint64_t uapi_sigset(
+	int32_t set_name, uint64_t or_bits, uint64_t and_bits)
+{
+	return 0;
+}
+
+
 int uapi_loop(void *param_ptr)
 {
 	uapi_tid = L4_Myself();
@@ -1071,6 +1089,8 @@ int uapi_loop(void *param_ptr)
 		.exit = &uapi_exit,
 		.wait = &uapi_wait,
 		.fork = &uapi_fork,
+		.sigconfig = &uapi_sigconfig,
+		.sigset = &uapi_sigset,
 	};
 	for(;;) {
 		L4_Word_t st = _muidl_root_uapi_dispatch(&vtab);

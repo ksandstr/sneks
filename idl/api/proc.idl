@@ -77,6 +77,45 @@ interface Proc
 		out L4X2::ThreadId tid,
 		in L4X2::word sp, in L4X2::word ip)
 			raises(Posix::Errno);
+
+	/* set up the signal delivery page for the calling process. before this
+	 * function is called from the result of execve() or spawn(), signal
+	 * response occurs according to the default disposition and so the
+	 * delivery page mechanism won't be used; this will be true until the
+	 * first Proc::setsigmask call even if the page has been defined.
+	 *
+	 * @sigpage_addr is the address of a aligned PAGE_SIZE segment reserved in
+	 * the process' heap (paged by vm) for signal delivery. @tail_data is a
+	 * buffer in the last sizeof sigpagetail bytes of that page, and
+	 * @handler_offset will indicate a position relative to @sigpage_addr
+	 * where the caller should store the address of the signal delivery bottom
+	 * half.
+	 *
+	 * there are no error returns because this function can only fail due to
+	 * string transfer timeout.
+	 */
+	typedef sequence<octet, 1024> sigpagetail;
+	void sigconfig(
+		in L4X2::word sigpage_addr,
+		out sigpagetail tail_data,
+		out long handler_offset);
+
+	/* change or query the per-process signal sets.
+	 *
+	 * @set_name is 0 for the ignore set, 1 for the default set, 2 for the
+	 * block set, and 3 for the pending set. the pending set will not be
+	 * modified by @or_bits, but @and_bits will clear it. return value is the
+	 * old mask's value. setting a bit in the default set clears the
+	 * corresponding bit in the ignore set, and vice versa. clearing a bit in
+	 * the block set which was set in the pending set will cause that signal
+	 * to fire. @and_bits is applied before @or_bits, so that it's possible to
+	 * set every bit to a given value in a single call.
+	 */
+	unsigned long long sigset(
+		in long set_name,
+		in unsigned long long or_bits,
+		in unsigned long long and_bits)
+			raises(muidl::NoReply);
 };
 
 
