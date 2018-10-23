@@ -56,5 +56,7 @@ extern int sigaction(int signum,
 
 extern sighandler_t signal(int signum, sighandler_t handler);
 
+extern int kill(int __pid, int __sig);
+
 
 #endif

@@ -18,6 +18,8 @@ extern long sysconf(int name);
 extern int brk(void *addr);
 extern void *sbrk(intptr_t increment);
 
+extern int pause(void);
+
 
 extern int close(int fd);
 extern long read(int fd, void *buf, size_t count);
