@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <sys/wait.h>
+#include <sys/types.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -73,3 +74,50 @@ START_LOOP_TEST(sigaction_basic, iter, 0, 1)
 END_TEST
 
 DECLARE_TEST("process:signal", sigaction_basic);
+
+
+
+static void ignore_signal(int signum) {
+	/* as it says on the tin */
+}
+
+
+/* start a subprocess and handshake with it only after a signal has been
+ * delivered.
+ */
+START_TEST(pause_basic)
+{
+	plan_tests(2);
+	todo_start("WIP");
+
+	int child = fork();
+	if(child == 0) {
+		struct sigaction act = { .sa_handler = &ignore_signal };
+		int n = sigaction(SIGCHLD, &act, NULL);
+		if(n != 0) {
+			diag("child's sigaction(2) failed, errno=%d", errno);
+			exit(1);
+		}
+		pause();
+		exit(0);
+	}
+
+	L4_Sleep(L4_TimePeriod(5 * 1000));	/* FIXME: use posix sleep instead */
+	int st, dead = waitpid(-1, &st, WNOHANG);
+	if(!ok(dead < 0 && errno == ECHILD, "no waitpid before signal")) {
+		diag("dead=%d, st=%d, errno=%d", dead, st, errno);
+	}
+
+	int n = kill(child, SIGCHLD);	/* FIXME: use something different */
+	if(n != 0) diag("kill(2) failed, errno=%d", errno);
+
+	L4_Sleep(L4_TimePeriod(5 * 1000));
+	dead = waitpid(-1, &st, WNOHANG);
+	if(!ok(dead == child, "waitpid succeeds after signal")) {
+		diag("dead=%d, st=%d, errno=%d", dead, st, errno);
+		/* FIXME: clean the child up with SIGKILL or something. */
+	}
+}
+END_TEST
+
+DECLARE_TEST("process:signal", pause_basic);
