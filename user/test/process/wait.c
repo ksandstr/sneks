@@ -30,7 +30,6 @@ DECLARE_TEST("process:wait", empty_wait);
 START_TEST(busy_wait)
 {
 	plan_tests(2);
-	todo_start("WIP");
 
 	int child = fork();
 	if(child == 0) {

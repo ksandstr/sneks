@@ -1074,7 +1074,11 @@ static int uapi_wait(
 
 		case P_ANY:
 			dead = list_top(&self->dead_list, struct process, dead_link);
-			if(dead == NULL && !has_children(caller)) return -ECHILD;
+			if(dead == NULL
+				&& (!has_children(caller) || (options & WNOHANG) != 0))
+			{
+				return -ECHILD;
+			}
 			assert(dead == NULL || dead->ppid == caller);
 			break;
 
