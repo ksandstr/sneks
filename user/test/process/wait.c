@@ -24,6 +24,36 @@ END_TEST
 DECLARE_TEST("process:wait", empty_wait);
 
 
+/* a call to waitpid(-1, &st, WHOHANG) should return -1 (ECHILD) when there
+ * are children but they've not entered a waitable state.
+ */
+START_TEST(busy_wait)
+{
+	plan_tests(2);
+	todo_start("WIP");
+
+	int child = fork();
+	if(child == 0) {
+		L4_Sleep(L4_TimePeriod(5 * 1000));	/* FIXME: usleep for 5ms */
+		exit(0);
+	}
+
+	int st, dead = waitpid(-1, &st, WNOHANG);
+	if(!ok(dead < 0 && errno == ECHILD, "child hasn't exited")) {
+		diag("dead=%d, st=%d, errno=%d", dead, st, errno);
+	}
+	L4_Sleep(L4_TimePeriod(10 * 1000));
+	dead = waitpid(-1, &st, WNOHANG);
+	if(!ok(dead == child, "child exited after sleep")) {
+		dead = wait(&st);
+		diag("waited on dead=%d (child=%d)", dead, child);
+	}
+}
+END_TEST
+
+DECLARE_TEST("process:wait", busy_wait);
+
+
 /* check that return values are returned correctly. */
 START_LOOP_TEST(return_value, iter, 0, 1)
 {
