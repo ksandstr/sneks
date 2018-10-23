@@ -1021,14 +1021,12 @@ static void sig_send(struct process *p, int sig)
 
 static int uapi_kill(int pid, int sig)
 {
-	printf("%s: called, pid=%d, sig=%d\n", __func__, pid, sig);
-
-	/* FIXME: all of these for things besides systask-signaled segfaults. */
-	if(sig != SIGSEGV) return -EINVAL;
-	if(!IS_SYSTASK(pidof_NP(muidl_get_sender()))) return -EPERM;
-
 	struct process *p = get_process(pid);
 	if(p == NULL) return -ESRCH;
+
+	int sender_pid = pidof_NP(muidl_get_sender());
+	if(!IS_SYSTASK(sender_pid) && p->ppid != sender_pid) return -EPERM;
+
 	sig_send(p, sig);
 	return 0;
 }

@@ -88,7 +88,6 @@ static void ignore_signal(int signum) {
 START_TEST(pause_basic)
 {
 	plan_tests(2);
-	todo_start("WIP");
 
 	int child = fork();
 	if(child == 0) {
