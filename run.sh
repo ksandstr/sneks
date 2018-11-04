@@ -24,4 +24,4 @@ if [ -n "$SYSTEST_OPTS" ] || [ -n "$SYSTEST" ]; then
 	SYSTEST_PART=",sys/test/systest $SYSTEST_OPTS"
 fi
 
-exec kvm -serial stdio -display none -no-reboot -net none -kernel $MUNG/mbiloader/mbiloader -initrd "$MUNG/ia32-kernel,$MUNG/user/sigma0,root/root,sys/sysmem/sysmem,sys/vm/vm,sys/fs.squashfs/fs.squashfs,initrd.img${INITRD_TAIL}${SYSTEST_PART}" $@
+exec qemu-system-i386 -machine accel=kvm:tcg -serial stdio -display none -no-reboot -net none -kernel $MUNG/mbiloader/mbiloader -initrd "$MUNG/ia32-kernel,$MUNG/user/sigma0,root/root,sys/sysmem/sysmem,sys/vm/vm,sys/fs.squashfs/fs.squashfs,initrd.img${INITRD_TAIL}${SYSTEST_PART}" $@
