@@ -3,7 +3,7 @@ export CFGDIR:=$(abspath ../..)
 include $(CFGDIR)/config.mk
 
 LDSCRIPT:=$(CFGDIR)/user/crt/static.ld
-LDFLAGS=-e_start -nostdlib -L $(MUNG_DIR)/user/lib/l4 \
+LDFLAGS:=$(LDFLAGS) -e_start -nostdlib -L $(MUNG_DIR)/user/lib/l4 \
 	-L $(CFGDIR)/lib -L $(CFGDIR)/user/crt
 # under -O3, GCC may produce SSE instructions in a runtime that doesn't align
 # the stack properly. FIXME: repair that, then remove -mstackrealign.
@@ -42,7 +42,7 @@ testsuite: $(LDSCRIPT) $(TESTSUITE_OBJS) $(CFGDIR)/lib/tap.o ccan-opt.a
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T $(LDSCRIPT) \
 		$(filter %.o,$^) $(filter %.a,$^) \
-		-lsneks-user-crt -ll4 -L /usr/lib32 -lm \
+		-lsneks-user-crt -ll4 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 

@@ -4,7 +4,8 @@ include $(CFGDIR)/config.mk
 
 vpath %.idl $(CFGDIR)/idl/api
 
-LDFLAGS=-e_start -N -nostdlib -L $(MUNG_DIR)/user/lib/l4 -L $(CFGDIR)/lib
+LDFLAGS:=$(LDFLAGS) -e_start -N -nostdlib -L $(MUNG_DIR)/user/lib/l4 \
+	-L $(CFGDIR)/lib
 # under -O3, GCC may produce SSE instructions in a runtime that doesn't align
 # the stack properly. FIXME: repair that, then remove -mstackrealign.
 CFLAGS:=$(subst -D__KERNEL__,,$(CFLAGS)) -mstackrealign \
@@ -33,8 +34,7 @@ root: root.ld crt0.o main.o runtime.o thrd.o uapi.o mm.o ser_io.o \
 		mung-rangealloc.o mung-slab.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T root.ld \
-		$(filter %.o,$^) $(LIBS) \
-		-lsneks -ll4 -L /usr/lib32 -lm \
+		$(filter %.o,$^) $(LIBS) -lsneks -ll4 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 main.o: main.c sysmem-defs.h kmsg-defs.h rootserv-defs.h proc-defs.h \

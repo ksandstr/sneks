@@ -16,6 +16,8 @@ CFLAGS=-O2 -Wall -march=native -std=gnu99 \
 	-Wno-frame-address \
 	#-DDEBUG_ME_HARDER #-D_L4_DEBUG_ME_HARDER #-DCCAN_LIST_DEBUG
 
+LDFLAGS=-L /usr/lib32 -L /usr/lib/i386-linux-gnu
+
 MUIDL:=$(abspath $(MUIDL_DIR)/muidl)
 MUIDLFLAGS=-I $(MUIDL_DIR)/share/idl -I $(MUNG_DIR)/idl -I $(CFGDIR)/idl
 
