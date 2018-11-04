@@ -748,7 +748,7 @@ int main(int argc, char *argv[])
 	}
 
 	/* do init protocol. */
-	const L4_Time_t timeout = L4_TimePeriod(20 * 1000);
+	const L4_Time_t timeout = L4_TimePeriod(2 * 1000 * 1000);
 	L4_Accept(L4_UntypedWordsAcceptor);
 	L4_MsgTag_t tag = L4_Receive_Timeout(boot_tid, timeout);
 	if(L4_IpcFailed(tag)) goto ipcfail;

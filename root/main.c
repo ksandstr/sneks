@@ -562,7 +562,7 @@ static void rename_forbidden_thread(
 	*(--sp) = L4_Myself().raw;
 	*(--sp) = 0xabadc0de;
 	L4_Start_SpIp(new_tid, (L4_Word_t)sp, (L4_Word_t)&pop_interrupt_to);
-	L4_MsgTag_t tag = L4_Receive_Timeout(new_tid, L4_TimePeriod(2000));
+	L4_MsgTag_t tag = L4_Receive(new_tid);
 	if(L4_IpcFailed(tag)) {
 		printf("%s: can't get exception message, ec=%lu\n",
 			__func__, L4_ErrorCode());
@@ -1015,7 +1015,10 @@ initfail:
 
 static L4_ThreadId_t mount_initrd(void)
 {
-	const L4_Time_t timeout = L4_TimePeriod(10 * 1000);
+	/* three seconds is fine. we're not riding rabbits here. (also QEMU on a
+	 * P-M needs a bit of time for vm inits and such.)
+	 */
+	const L4_Time_t timeout = L4_TimePeriod(3 * 1000 * 1000);
 
 	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
 	char *img_rest = NULL;

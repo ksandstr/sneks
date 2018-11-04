@@ -324,6 +324,7 @@ L4_ThreadId_t allocate_thread(int pid, void **utcb_loc_p)
 	/* TODO: get better bounds for both calls to bitmap_ffs(). */
 	int bit = bitmap_ffs(tno_free_maps[map], 0, TNOS_PER_BITMAP);
 	assert(bit < TNOS_PER_BITMAP);
+	assert(bitmap_test_bit(tno_free_maps[map], bit));
 	bitmap_clear_bit(tno_free_maps[map], bit);
 	assert(tno_free_counts[map] > 0);
 	tno_free_counts[map]--;
@@ -346,6 +347,7 @@ L4_ThreadId_t allocate_thread(int pid, void **utcb_loc_p)
 		printf("%s: no more utcb slots (area=%#lx:%#lx)\n", __func__,
 			L4_Address(ta->base.utcb_area), L4_Size(ta->base.utcb_area));
 #endif
+		assert(!bitmap_test_bit(tno_free_maps[map], bit));
 		bitmap_set_bit(tno_free_maps[map], bit);
 		tno_free_counts[map]++;
 		assert(tno_free_counts[map] <= TNOS_PER_BITMAP);
@@ -619,7 +621,7 @@ static int map_elf_image(
 		if(ep.p_filesz > 0) {
 			if(ep.p_offset & PAGE_MASK) {
 				printf("%s: PT_LOAD offset %#x not aligned to page\n",
-					ep.p_offset);
+					__func__, ep.p_offset);
 				n = -EINVAL;
 				goto end;
 			}
