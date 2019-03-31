@@ -96,7 +96,8 @@ struct systask
 static size_t hash_waitany_tid(const void *ptr, void *priv);
 static size_t hash_ppid(const void *ptr, void *priv);
 
-static void sig_send(struct process *p, int sig); /* may raise muidl::NoReply */
+/* may raise muidl::NoReply */
+static void sig_send(struct process *p, int sig, bool self);
 
 
 static struct rangealloc *ra_process = NULL, *ra_systask = NULL;
@@ -395,7 +396,7 @@ static void zombify(struct process *p)
 	 * SIGCHLD handlers are supposed to use WNOHANG and deal with spurious
 	 * signals if waitid() is called from somewhere else also.
 	 */
-	sig_send(parent, SIGCHLD);
+	sig_send(parent, SIGCHLD, false);
 
 	L4_ThreadId_t waiter = L4_nilthread;
 	if(!L4_IsNilThread(p->wait_tid)) waiter = p->wait_tid;
@@ -930,7 +931,7 @@ static const uint8_t sigpage_tail_code[] = {
 };
 
 
-static void sig_deliver(struct process *p, int sig)
+static void sig_deliver(struct process *p, int sig, bool self)
 {
 	assert(sig >= 1 && sig <= 64);
 	if(!L4_IsNilThread(p->sighelper_tid)) {
@@ -939,7 +940,7 @@ static void sig_deliver(struct process *p, int sig)
 		return;
 	}
 
-	if(!L4_IsNilThread(p->sighelper_tid)) goto add_sig;
+	if(!L4_IsNilThread(p->sighelper_tid) || self) goto add_sig;
 
 	/* create the intermediary thread. TODO: move this into a
 	 * spawn_threadlet() or some such.
@@ -998,7 +999,7 @@ static void sig_remove_helper(struct process *p)
  * sig_deliver? though these won't be saved in the pending set unless there
  * were fields in <struct process> for each, which seems ugly.
  */
-static void sig_send(struct process *p, int sig)
+static void sig_send(struct process *p, int sig, bool self)
 {
 	assert(sig >= 1 && sig <= 64);
 	uint64_t sig_bit = 1ull << (sig - 1);
@@ -1013,7 +1014,7 @@ static void sig_send(struct process *p, int sig)
 				muidl_raise_no_reply();
 			}
 		} else if((p->ign_set & sig_bit) == 0) {
-			sig_deliver(p, sig);
+			sig_deliver(p, sig, self);
 		}
 	}
 }
@@ -1025,9 +1026,11 @@ static int uapi_kill(int pid, int sig)
 	if(p == NULL) return -ESRCH;
 
 	int sender_pid = pidof_NP(muidl_get_sender());
-	if(!IS_SYSTASK(sender_pid) && p->ppid != sender_pid) return -EPERM;
+	if(!IS_SYSTASK(sender_pid) && p->ppid != sender_pid && pid != sender_pid) {
+		return -EPERM;
+	}
 
-	sig_send(p, sig);
+	sig_send(p, sig, pid == sender_pid);
 	return 0;
 }
 
@@ -1270,7 +1273,11 @@ static uint64_t uapi_sigset(
 		if(trig != 0) p->pending_set &= ~trig;
 		while(trig != 0) {
 			int sig = ffsll(trig);
-			sig_send(p, sig);
+			/* NOTE: this implies that unmasking a pending signal will invoke
+			 * its handler asynchronously. this is unlike what happens during
+			 * kill(getpid(), ...), which runs the handler before returning.
+			 */
+			sig_send(p, sig, false);
 			trig &= ~(1ull << (sig - 1));
 		}
 	}
