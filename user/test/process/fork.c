@@ -52,7 +52,7 @@ DECLARE_TEST("process:fork", fork_basic);
  */
 START_LOOP_TEST(fork_wide, iter, 0, 1)
 {
-	const int n_children = (iter & 1) != 0 ? 64 : 8;
+	const int n_children = (iter & 1) != 0 ? 48 : 8;
 	diag("n_children=%d", n_children);
 	plan_tests(3);
 
