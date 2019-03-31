@@ -981,8 +981,8 @@ add_sig:
 
 static void sig_remove_helper(struct process *p)
 {
-	L4_Word_t ret = L4_ThreadControl(p->sighelper_tid, p->sighelper_tid,
-		L4_Myself(), L4_nilthread, (void *)-1);
+	L4_Word_t ret = L4_ThreadControl(p->sighelper_tid, L4_nilthread,
+		L4_nilthread, L4_nilthread, (void *)-1);
 	if(ret != 1) {
 		printf("uapi:%s: deleting threadctl failed, ec=%lu\n", __func__,
 			L4_ErrorCode());
@@ -1238,7 +1238,6 @@ static uint64_t uapi_sigset(
 	{
 		/* terminating condition for the helper thread. */
 		sig_remove_helper(p);
-		assert(L4_IsNilThread(p->sighelper_tid));
 		muidl_raise_no_reply();
 		return 0;
 	}
