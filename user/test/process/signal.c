@@ -16,10 +16,12 @@
 
 
 static sig_atomic_t chld_got = 0;
+static L4_ThreadId_t chld_handler_tid;
 
 
 static void sigchld_handler(int signum)
 {
+	chld_handler_tid = L4_MyGlobalId();
 	for(;;) {
 		int st, dead = waitpid(-1, &st, WNOHANG);
 		if(dead <= 0) break;
@@ -32,9 +34,10 @@ START_LOOP_TEST(sigaction_basic, iter, 0, 1)
 {
 	const bool sleep_in_recv = !!(iter & 1);
 	diag("sleep_in_recv=%s", btos(sleep_in_recv));
-	plan_tests(3);
+	plan_tests(4);
 
 	chld_got = 0;
+	chld_handler_tid = L4_nilthread;
 	struct sigaction act = { .sa_handler = &sigchld_handler };
 	int n = sigaction(SIGCHLD, &act, NULL);
 	if(!ok(n == 0, "sigaction")) diag("errno=%d", errno);
@@ -70,6 +73,8 @@ START_LOOP_TEST(sigaction_basic, iter, 0, 1)
 		int st, dead = wait(&st);
 		diag("waited for dead=%d (child=%d)", dead, child);
 	}
+	ok(L4_SameThreads(L4_Myself(), chld_handler_tid),
+		"current thread was used");
 }
 END_TEST
 
