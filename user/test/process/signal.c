@@ -22,10 +22,10 @@
 
 
 static sig_atomic_t chld_got = 0, int_got = 0;
-static L4_ThreadId_t chld_handler_tid;
+static L4_ThreadId_t chld_handler_tid, int_handler_tid;
 
 
-static void sigchld_handler(int signum)
+static void basic_sigchld_handler(int signum)
 {
 	chld_handler_tid = L4_MyGlobalId();
 	for(;;) {
@@ -44,7 +44,7 @@ START_LOOP_TEST(sigaction_basic, iter, 0, 1)
 
 	chld_got = 0;
 	chld_handler_tid = L4_nilthread;
-	struct sigaction act = { .sa_handler = &sigchld_handler };
+	struct sigaction act = { .sa_handler = &basic_sigchld_handler };
 	int n = sigaction(SIGCHLD, &act, NULL);
 	if(!ok(n == 0, "sigaction")) diag("errno=%d", errno);
 	int child = fork();
@@ -86,6 +86,80 @@ END_TEST
 
 DECLARE_TEST("process:signal", sigaction_basic);
 
+
+
+static void recur_sigchld_handler(int signum)
+{
+	chld_handler_tid = L4_MyGlobalId();
+	kill(getpid(), SIGINT);
+	for(;;) {
+		int st, dead = waitpid(-1, &st, WNOHANG);
+		if(dead <= 0) break;
+		chld_got++;
+	}
+}
+
+
+static void recur_sigint_handler(int signum)
+{
+	int_got++;
+	int_handler_tid = L4_MyGlobalId();
+}
+
+
+/* test that other signals can be processed during the processing of a
+ * different signal. sets up for SIGCHLD like sigaction_basic, then sends
+ * SIGINT from within the signal handler.
+ *
+ * TODO: more variables:
+ *   - once kill(2) works from child to parent, add a mode where the second
+ *     signal comes from out of process instead.
+ *   - and another where it comes from a different thread.
+ */
+START_TEST(sigaction_recur)
+{
+	plan_tests(7);
+
+	chld_got = 0; int_got = 0;
+	chld_handler_tid = L4_nilthread;
+	int_handler_tid = L4_nilthread;
+	struct sigaction act = { .sa_handler = &recur_sigchld_handler };
+	int n = sigaction(SIGCHLD, &act, NULL);
+	if(!ok(n == 0, "sigaction for CHLD")) diag("errno=%d", errno);
+	act.sa_handler = &recur_sigint_handler;
+	n = sigaction(SIGINT, &act, NULL);
+	if(!ok(n == 0, "sigaction for INT")) diag("errno=%d", errno);
+	int child = fork();
+	if(child == 0) {
+		L4_Sleep(L4_TimePeriod(2 * 1000));
+		exit(0);
+	}
+	if(!ok(child > 0, "fork")) diag("errno=%d", errno);
+
+	const L4_Time_t iter_timeout = L4_TimePeriod(5 * 1000);
+	int iters = 5;
+	while(child > 0 && chld_got < 1 && --iters) {
+		L4_ThreadId_t dummy;
+		L4_MsgTag_t tag = L4_Ipc(L4_Myself(), L4_nilthread,
+			L4_Timeouts(iter_timeout, L4_ZeroTime), &dummy);
+		if(L4_IpcFailed(tag) && (L4_ErrorCode() & ~1ul) != 2) {
+			diag("sleep failed, ec=%lu (not an error)", L4_ErrorCode());
+		}
+	}
+	if(!ok(iters > 0, "signal was processed") && child > 0) {
+		int st, dead = wait(&st);
+		diag("waited for dead=%d (child=%d)", dead, child);
+	}
+
+	todo_start("broken");
+	ok1(chld_got > 0);
+	ok1(int_got > 0);
+	ok(L4_SameThreads(L4_Myself(), int_handler_tid),
+		"SIGINT handled in main thread");
+}
+END_TEST
+
+DECLARE_TEST("process:signal", sigaction_recur);
 
 
 static void ignore_signal(int signum) {
