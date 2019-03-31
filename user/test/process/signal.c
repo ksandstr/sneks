@@ -1,5 +1,11 @@
 
-/* tests on POSIX signaling: sigaction, kill, and so forth. */
+/* tests on POSIX signaling: sigaction, kill, and so forth.
+ *
+ * NOTE: most of these tests should be also compiled for the host system and
+ * executed to determine that they can return all green on a mature,
+ * well-supported platform. that'll require a L4.X2 adaptation layer for e.g.
+ * thread ID checks and L4_Sleep(), but that's simple enough.
+ */
 
 #include <stdbool.h>
 #include <signal.h>
@@ -15,7 +21,7 @@
 #include <sneks/test.h>
 
 
-static sig_atomic_t chld_got = 0;
+static sig_atomic_t chld_got = 0, int_got = 0;
 static L4_ThreadId_t chld_handler_tid;
 
 
@@ -125,3 +131,30 @@ START_TEST(pause_basic)
 END_TEST
 
 DECLARE_TEST("process:signal", pause_basic);
+
+
+
+static void ks_sigint_handler(int signum) {
+	if(signum == SIGINT) int_got++;
+}
+
+/* what it says on the tin: kill yourself to see what happens. */
+START_TEST(kill_self)
+{
+	plan_tests(3);
+
+	todo_start("unsupported all over the place");
+
+	int_got = 0;
+	struct sigaction act = { .sa_handler = &ks_sigint_handler };
+	int n = sigaction(SIGINT, &act, NULL);
+	if(!ok(n == 0, "sigaction")) diag("errno=%d", errno);
+
+	n = kill(getpid(), SIGINT);
+	if(!ok(n == 0, "kill")) diag("errno=%d", errno);
+
+	ok1(int_got > 0);
+}
+END_TEST
+
+DECLARE_TEST("process:signal", kill_self);
