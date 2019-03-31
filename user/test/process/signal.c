@@ -217,8 +217,6 @@ START_TEST(kill_self)
 {
 	plan_tests(3);
 
-	todo_start("unsupported all over the place");
-
 	int_got = 0;
 	struct sigaction act = { .sa_handler = &ks_sigint_handler };
 	int n = sigaction(SIGINT, &act, NULL);

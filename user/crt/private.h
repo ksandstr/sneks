@@ -38,4 +38,9 @@ struct sneks_fdlist;
 extern void __file_init(struct sneks_fdlist *fdlist);
 
 
+/* from sigaction.c */
+extern void __sig_bottom(void);
+extern void __attribute__((regparm(3))) __sig_invoke(int sig);
+
+
 #endif

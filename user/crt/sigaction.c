@@ -26,13 +26,14 @@ static uint64_t ign_set = 0, dfl_set = ~0ull, block_set = 0;
 static struct sigaction sig_actions[64];
 
 
-static void sig_bottom(void)
+void __sig_bottom(void)
 {
 	extern void __invoke_sig_slow(), __invoke_sig_fast();
 #if 0
 	printf("%s: called in tid=%lu:%lu!\n", __func__,
 		L4_ThreadNo(L4_MyGlobalId()), L4_Version(L4_MyGlobalId()));
 #endif
+	const bool in_main = L4_SameThreads(L4_Myself(), __main_tid);
 
 	uint64_t pending;
 	int n = __proc_sigset(__the_sysinfo->api.proc, &pending, 3, 0, 0);
@@ -56,6 +57,18 @@ static void sig_bottom(void)
 			update_block = true;
 			continue;
 		}
+
+		if(in_main) {
+			/* called in the thread that'd be exregs'd into sighandler land,
+			 * which it can't do to itself. this happens when kill(2) signals
+			 * the calling process itself; in that case kill(2) mustn't return
+			 * until the handler has run (unless blocked). fortunately
+			 * function calls are just as good.
+			 */
+			__sig_invoke(sig + 1);
+			continue;
+		}
+
 		/* H to halt the thread;
 		 * S to interrupt a send phase;
 		 * "h" to write the H flag;
@@ -156,7 +169,7 @@ static void setup_delivery_page(void)
 			__func__, handler_offset);
 		abort();
 	}
-	*((handler_bottom_fn *)(sig_delivery_page + handler_offset)) = &sig_bottom;
+	*((handler_bottom_fn *)(sig_delivery_page + handler_offset)) = &__sig_bottom;
 }
 
 
