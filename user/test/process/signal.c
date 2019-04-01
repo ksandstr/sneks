@@ -153,7 +153,6 @@ START_TEST(sigaction_recur)
 		diag("waited for dead=%d (child=%d)", dead, child);
 	}
 
-	todo_start("broken");
 	ok1(chld_got > 0);
 	ok1(int_got > 0);
 	ok(L4_SameThreads(L4_Myself(), int_handler_tid),
@@ -201,7 +200,6 @@ START_LOOP_TEST(sigaction_defer, iter, 0, 1)
 		diag("int_got=%d, int_max_depth=%d", int_got, int_max_depth);
 	}
 
-	todo_start("shouldn't work");
 	ok1(int_got == 2);
 	imply_ok1(!set_nodefer, int_max_depth == 1);
 	imply_ok1(set_nodefer, int_max_depth == 2);

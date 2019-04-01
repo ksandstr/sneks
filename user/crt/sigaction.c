@@ -22,7 +22,7 @@ typedef void (*handler_bottom_fn)(void);
 
 
 static void *sig_delivery_page = NULL;
-static uint64_t ign_set = 0, dfl_set = ~0ull, block_set = 0;
+static uint64_t ign_set = 0, dfl_set = ~0ull, block_set = 0, defer_set = 0;
 static struct sigaction sig_actions[64];
 
 
@@ -43,18 +43,14 @@ void __sig_bottom(void)
 		return;
 	}
 
-	bool update_block = false;
 	while(pending > 0) {
 		int sig = ffsll(pending) - 1;
-		assert((pending & (1ull << sig)) != 0);
-		pending &= ~(1ull << sig);
+		uint64_t bit = 1ull << sig;
+		assert((pending & bit) != 0);
+		pending &= ~bit;
 
-		/* TODO: do this for each thread once multithreading comes about.
-		 * also, move block_set into the thread control structure.
-		 */
-		if((block_set & (1ull << sig)) != 0) {
-			// printf("%s: blocked (lazy)\n", __func__);
-			update_block = true;
+		if((block_set & bit) != 0) {
+			defer_set |= bit;
 			continue;
 		}
 
@@ -126,11 +122,6 @@ void __sig_bottom(void)
 		assert((ctl_out & 0x001) != 0);	/* must have been halted. */
 	}
 
-	if(update_block) {
-		uint64_t old;
-		n = __proc_sigset(__the_sysinfo->api.proc, &old, 2, block_set, 0);
-		/* return status doesn't matter; this is an optimization anyway. */
-	}
 }
 
 
@@ -216,11 +207,7 @@ int sigaction(
 	}
 	assert((ign_set & dfl_set) == 0);
 
-	/* block all signals while we modify the handler set.
-	 *
-	 * TODO: under multithreading, take the handler set's mutex and block
-	 * signal processing for all threads over this part.
-	 */
+	/* block all signals while we modify the handler set. */
 	old = atomic_exchange_explicit(&block_set, ~0ull, memory_order_relaxed);
 	if(oldact != NULL) *oldact = sig_actions[signum - 1];
 	sig_actions[signum - 1] = *act;
@@ -244,15 +231,25 @@ void __attribute__((regparm(3))) __sig_invoke(int sig)
 {
 	struct sigaction *act = &sig_actions[sig - 1];
 
+	/* FIXME: handle these. they'll appear when a dfl/ign signal appears in a
+	 * handler's sa_mask and are raised during its execution, so they can be
+	 * hit in a test first.
+	 */
+	assert(act->sa_handler != SIG_IGN);
+	assert(act->sa_handler != SIG_DFL);
+
 	/* apply act->sa_mask, reset `masked' afterward */
 	uint64_t masked,
-		old = atomic_load_explicit(&block_set, memory_order_relaxed);
+		old = atomic_load_explicit(&block_set, memory_order_relaxed),
+		eff_mask = act->sa_mask;
+	if((act->sa_flags & SA_NODEFER) == 0) {
+		eff_mask |= 1ull << (sig - 1);
+	}
 	do {
-		masked = act->sa_mask ^ old;
+		masked = eff_mask & ~old;
 	} while(!atomic_compare_exchange_weak_explicit(&block_set, &old,
-		old | act->sa_mask, memory_order_relaxed, memory_order_relaxed));
+		old | eff_mask, memory_order_relaxed, memory_order_relaxed));
 
-	/* FIXME: unblock @sig if SA_NODEFER set */
 	if((act->sa_flags & SA_SIGINFO) != 0) {
 		/* FIXME */
 		fprintf(stderr,
@@ -265,11 +262,27 @@ void __attribute__((regparm(3))) __sig_invoke(int sig)
 	/* TODO: do something about SA_RESTART */
 	/* FIXME: restore SIG_DFL disposition if SA_RESETHAND set */
 
+	/* grab defers that occurred */
+	uint64_t defers;
+	old = atomic_load_explicit(&defer_set, memory_order_relaxed);
+	do {
+		defers = old & masked;
+	} while(defers > 0 && !atomic_compare_exchange_weak_explicit(&defer_set,
+		&old, old & ~masked, memory_order_relaxed, memory_order_relaxed));
+
+	/* unmask the previous mask */
 	old = atomic_load_explicit(&block_set, memory_order_relaxed);
 	do {
 		assert((old & masked) == masked);
 	} while(!atomic_compare_exchange_weak_explicit(&block_set, &old,
 		old & ~masked, memory_order_relaxed, memory_order_relaxed));
+
+	/* invoke deferreds. */
+	while(defers > 0) {
+		int sig = ffsll(defers) - 1;
+		defers &= ~(1ull << sig);
+		__sig_invoke(sig + 1);
+	}
 }
 
 
