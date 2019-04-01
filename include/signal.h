@@ -49,6 +49,7 @@ struct sigaction
 #define SA_NOCLDWAIT 2			/* don't create zombie on child death. */
 #define SA_SIGINFO 4			/* call sa_sigaction instead of sa_handler */
 #define SA_RESTART 0x10000000	/* restart syscall on signal return */
+#define SA_NODEFER 0x40000000	/* don't mask signal within handler */
 
 
 extern int sigaction(int signum,

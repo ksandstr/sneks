@@ -8,11 +8,13 @@
  */
 
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <signal.h>
 #include <unistd.h>
 #include <errno.h>
 #include <sys/wait.h>
 #include <sys/types.h>
+#include <ccan/minmax/minmax.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -21,7 +23,7 @@
 #include <sneks/test.h>
 
 
-static sig_atomic_t chld_got = 0, int_got = 0;
+static sig_atomic_t chld_got = 0, int_got = 0, int_max_depth = 0;
 static L4_ThreadId_t chld_handler_tid, int_handler_tid;
 
 
@@ -160,6 +162,53 @@ START_TEST(sigaction_recur)
 END_TEST
 
 DECLARE_TEST("process:signal", sigaction_recur);
+
+
+
+static void defer_sigint_handler(int signum)
+{
+	static _Atomic int depth = 0;
+
+	int new_depth = atomic_fetch_add(&depth, 1) + 1;
+	int_max_depth = max_t(int, int_max_depth, new_depth);
+	if(++int_got == 1) kill(getpid(), SIGINT);
+	atomic_fetch_sub(&depth, 1);
+}
+
+
+/* test SA_NODEFER.
+ *
+ * TODO: pop SIGINT from external sources: a child process, or a different
+ * thread.
+ */
+START_LOOP_TEST(sigaction_defer, iter, 0, 1)
+{
+	const bool set_nodefer = !!(iter & 1);
+	diag("set_nodefer=%s", btos(set_nodefer));
+	plan_tests(4);
+
+	struct sigaction act = {
+		.sa_handler = &defer_sigint_handler,
+		.sa_flags = set_nodefer ? SA_NODEFER : 0,
+	};
+	int n = sigaction(SIGINT, &act, NULL);
+	ok(n == 0, "sigaction");
+
+	int_got = 0;
+	int_max_depth = 0;
+	if(n == 0) {
+		kill(getpid(), SIGINT);
+		diag("int_got=%d, int_max_depth=%d", int_got, int_max_depth);
+	}
+
+	todo_start("shouldn't work");
+	ok1(int_got == 2);
+	imply_ok1(!set_nodefer, int_max_depth == 1);
+	imply_ok1(set_nodefer, int_max_depth == 2);
+}
+END_TEST
+
+DECLARE_TEST("process:signal", sigaction_defer);
 
 
 static void ignore_signal(int signum) {
