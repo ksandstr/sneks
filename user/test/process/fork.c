@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <assert.h>
+#include <signal.h>
 #include <sys/wait.h>
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -128,3 +129,81 @@ START_TEST(access_mmap_memory)
 END_TEST
 
 DECLARE_TEST("process:fork", access_mmap_memory);
+
+
+
+static int last_fork_child = 0;
+static bool fork_first_st_ok = true, fork_later_st_ok = true;
+
+/* forking within a signal handler is one of those ``through the looking
+ * glass'' things of POSIX.
+ *
+ * in sneks, calling fork() within a signal handler and not exiting either the
+ * child-half or parent-half will cause one of two things to happen, depending
+ * on whether the signal came from within the process or from without: a
+ * caller of raise(3) will return twice, and an external source will
+ * effectively cause the receiver to fork without warning. this is because
+ * signal invocation always happens onto a valid stack frame sequence even
+ * when signals are handled during handler execution; when that sequence is
+ * duplicated by fork(), the rest of the handler chain executes as expected
+ * down either parent, child, or both.
+ *
+ * to test this behaviour we'll do both here: fork-to-exit in response to the
+ * first 5 SIGCHLD, and fork-to-return in response to SIGINT which starts the
+ * sequence off.
+ */
+static void forking_handler(int signum)
+{
+	static int n_forks = 0;
+
+	if(signum == SIGINT) {
+		last_fork_child = fork();
+		/* invisible steering wheel! */
+	} else if(signum == SIGCHLD && n_forks++ < 5) {
+		int st, dead = waitpid(-1, &st, 0);
+		int n = fork();
+		if(n == 0) {
+			/* that them thur though */
+			exit(0);
+		} else {
+			last_fork_child = n;
+			fork_first_st_ok = fork_first_st_ok
+				&& (n_forks > 1 || WEXITSTATUS(st) != 0);
+			fork_later_st_ok = fork_later_st_ok
+				&& (n_forks == 1 || WEXITSTATUS(st) == 0);
+		}
+	}
+}
+
+
+/* what happens to naughty children who fork in a signal handler? */
+START_TEST(from_signal_handler)
+{
+	plan_tests(6);
+
+	struct sigaction act = { .sa_handler = &forking_handler };
+	sigaction(SIGCHLD, &act, NULL);
+	sigaction(SIGINT, &act, NULL);
+
+	/* start the dance */
+	int parent_pid = getpid();
+	kill(getpid(), SIGINT);
+	if(getpid() != parent_pid) {
+		exit(0xb0a7);	/* confirm second return from kill(2) */
+	}
+
+	int sigint_child = last_fork_child;
+	for(int i=0; i < 8; i++) L4_Sleep(L4_TimePeriod(2 * 1000));
+
+	/* wait for the last child */
+	int st, dead = waitpid(-1, &st, 0);
+	ok(dead > 0, "waitpid(2)");
+	ok1(dead != sigint_child);
+	ok1(dead == last_fork_child);
+	ok1(WEXITSTATUS(st) == 0);
+	ok(fork_first_st_ok, "first rc correct");
+	ok(fork_later_st_ok, "later rc correct");
+}
+END_TEST
+
+DECLARE_TEST("process:fork", from_signal_handler);
