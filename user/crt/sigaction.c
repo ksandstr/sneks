@@ -229,60 +229,62 @@ Enosys:
 /* called from siginvoke.o, which is machine code. */
 void __attribute__((regparm(3))) __sig_invoke(int sig)
 {
-	struct sigaction *act = &sig_actions[sig - 1];
-
-	/* FIXME: handle these. they'll appear when a dfl/ign signal appears in a
-	 * handler's sa_mask and are raised during its execution, so they can be
-	 * hit in a test first.
-	 */
-	assert(act->sa_handler != SIG_IGN);
-	assert(act->sa_handler != SIG_DFL);
-
-	/* apply act->sa_mask, reset `masked' afterward */
-	uint64_t masked,
-		old = atomic_load_explicit(&block_set, memory_order_relaxed),
-		eff_mask = act->sa_mask;
-	if((act->sa_flags & SA_NODEFER) == 0) {
-		eff_mask |= 1ull << (sig - 1);
-	}
+	uint64_t defers = 0;
 	do {
-		masked = eff_mask & ~old;
-	} while(!atomic_compare_exchange_weak_explicit(&block_set, &old,
-		old | eff_mask, memory_order_relaxed, memory_order_relaxed));
+		defers &= ~(1ull << (sig - 1));
+		struct sigaction *act = &sig_actions[sig - 1];
 
-	if((act->sa_flags & SA_SIGINFO) != 0) {
-		/* FIXME */
-		fprintf(stderr,
-			"%s: sig=%d specifies SA_SIGINFO, which we don't handle\n",
-			__func__, sig);
-	} else {
-		(*act->sa_handler)(sig);
-	}
+		/* FIXME: handle these. they'll appear when a dfl/ign signal appears
+		 * in a handler's sa_mask and are raised during its execution, so they
+		 * can be hit in a test first.
+		 */
+		assert(act->sa_handler != SIG_IGN);
+		assert(act->sa_handler != SIG_DFL);
 
-	/* TODO: do something about SA_RESTART */
-	/* FIXME: restore SIG_DFL disposition if SA_RESETHAND set */
+		/* apply act->sa_mask, reset `masked' afterward */
+		uint64_t masked,
+			old = atomic_load(&block_set),
+			eff_mask = act->sa_mask;
+		if((act->sa_flags & SA_NODEFER) == 0) {
+			eff_mask |= 1ull << (sig - 1);
+		}
+		do {
+			masked = eff_mask & ~old;
+		} while(!atomic_compare_exchange_weak(
+			&block_set, &old, old | eff_mask));
 
-	/* grab defers that occurred */
-	uint64_t defers;
-	old = atomic_load_explicit(&defer_set, memory_order_relaxed);
-	do {
-		defers = old & masked;
-	} while(defers > 0 && !atomic_compare_exchange_weak_explicit(&defer_set,
-		&old, old & ~masked, memory_order_relaxed, memory_order_relaxed));
+		if((act->sa_flags & SA_SIGINFO) != 0) {
+			/* FIXME */
+			fprintf(stderr,
+				"%s: sig=%d specifies SA_SIGINFO, which we don't handle\n",
+				__func__, sig);
+		} else {
+			(*act->sa_handler)(sig);
+		}
 
-	/* unmask the previous mask */
-	old = atomic_load_explicit(&block_set, memory_order_relaxed);
-	do {
-		assert((old & masked) == masked);
-	} while(!atomic_compare_exchange_weak_explicit(&block_set, &old,
-		old & ~masked, memory_order_relaxed, memory_order_relaxed));
+		/* TODO: do something about SA_RESTART */
+		/* FIXME: restore SIG_DFL disposition if SA_RESETHAND set */
 
-	/* invoke deferreds. */
-	while(defers > 0) {
-		int sig = ffsll(defers) - 1;
-		defers &= ~(1ull << sig);
-		__sig_invoke(sig + 1);
-	}
+		/* grab defers that occurred */
+		uint64_t newdefers;
+		old = atomic_load(&defer_set);
+		do {
+			newdefers = old & masked;
+		} while(newdefers > 0 &&
+			!atomic_compare_exchange_weak(&defer_set, &old, old & ~masked));
+		/* (note that the extra invocations of defers & newdefers are lost.) */
+		defers |= newdefers;
+
+		/* unmask the previous mask */
+		old = atomic_load(&block_set);
+		do {
+			assert((old & masked) == masked);
+		} while(!atomic_compare_exchange_weak(
+			&block_set, &old, old & ~masked));
+
+		/* process deferred signals in lowest-first order. */
+		if(defers > 0) sig = ffsll(defers);
+	} while(defers > 0);
 }
 
 
