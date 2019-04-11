@@ -103,7 +103,8 @@ interface Proc
 	/* change or query the per-process signal sets.
 	 *
 	 * @set_name is 0 for the ignore set, 1 for the default set, 2 for the
-	 * block set, and 3 for the pending set. the pending set will not be
+	 * block set, 3 for the pending set (per sigprocmask(2)), and 4 for the
+	 * pending set but obscured by the block set. the pending set will not be
 	 * modified by @or_bits, but @and_bits will clear it. return value is the
 	 * old mask's value. setting a bit in the default set clears the
 	 * corresponding bit in the ignore set, and vice versa. clearing a bit in

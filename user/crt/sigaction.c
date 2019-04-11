@@ -36,7 +36,7 @@ void __sig_bottom(void)
 	const bool in_main = L4_SameThreads(L4_Myself(), __main_tid);
 
 	uint64_t pending;
-	int n = __proc_sigset(__the_sysinfo->api.proc, &pending, 3, 0, 0);
+	int n = __proc_sigset(__the_sysinfo->api.proc, &pending, 4, 0, 0);
 	if(n != 0) {
 		printf("%s: Proc::sigset failed, n=%d\n", __func__, n);
 		/* spin */
@@ -121,7 +121,6 @@ void __sig_bottom(void)
 		}
 		assert((ctl_out & 0x001) != 0);	/* must have been halted. */
 	}
-
 }
 
 

@@ -1235,7 +1235,7 @@ static uint64_t uapi_sigset(
 	int32_t set_name, uint64_t or_bits, uint64_t and_bits)
 {
 	struct process *p = get_process(pidof_NP(muidl_get_sender()));
-	if(set_name == 3 && (p->pending_set | and_bits) == 0
+	if(set_name == 4 && (p->pending_set | and_bits) == 0
 		&& !L4_IsNilThread(p->sighelper_tid)
 		&& L4_SameThreads(muidl_get_sender(), p->sighelper_tid))
 	{
@@ -1246,11 +1246,17 @@ static uint64_t uapi_sigset(
 	}
 
 	uint64_t *set;
+	bool conceal = false;
 	switch(set_name) {
 		case 0: set = &p->ign_set; break;
 		case 1: set = &p->dfl_set; break;
 		case 2: set = &p->mask_set; break;
-		case 3: set = &p->pending_set; break;
+		case 4:
+			conceal = true;
+			/* FALL THRU */
+		case 3:
+			set = &p->pending_set;
+			break;
 		default:
 			fprintf(stderr, "%s: unknown set_name=%d from pid=%d\n",
 				__func__, set_name, ra_ptr2id(ra_process, p));
@@ -1258,7 +1264,12 @@ static uint64_t uapi_sigset(
 	}
 
 	uint64_t oldval = *set;
-	*set &= and_bits;
+	if(!conceal) {
+		*set &= and_bits;
+	} else {
+		oldval &= ~p->mask_set;
+		*set &= and_bits | p->mask_set;
+	}
 	if(set != &p->pending_set) {
 		*set |= or_bits;
 		uint64_t pos_change = oldval ^ *set;
@@ -1269,15 +1280,14 @@ static uint64_t uapi_sigset(
 		assert((p->ign_set & p->dfl_set) == 0);
 	}
 	if(set == &p->mask_set) {
-		uint64_t trig = p->pending_set & ~p->mask_set;
-		if(trig != 0) p->pending_set &= ~trig;
+		uint64_t trig = p->pending_set & (oldval & ~and_bits);
+		p->pending_set &= ~trig;
 		while(trig != 0) {
 			int sig = ffsll(trig);
-			/* NOTE: this implies that unmasking a pending signal will invoke
-			 * its handler asynchronously. this is unlike what happens during
-			 * kill(getpid(), ...), which runs the handler before returning.
+			/* caller invokes masked-pending handlers synchronously, as though
+			 * sent from kill(getpid(), _ <- trig).
 			 */
-			sig_send(p, sig, false);
+			sig_send(p, sig, true);
 			trig &= ~(1ull << (sig - 1));
 		}
 	}
