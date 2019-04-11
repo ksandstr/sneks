@@ -287,7 +287,6 @@ START_LOOP_TEST(procmask_and_pending_basic, iter, 0, 1)
 	const bool unmask_by_set = !!(iter & 1);
 	diag("unmask_by_set=%s", btos(unmask_by_set));
 	plan_tests(9);
-	todo_start("incomplete");
 
 	int_got = 0;
 	struct sigaction act = { .sa_handler = &ks_sigint_handler };

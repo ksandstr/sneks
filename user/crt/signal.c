@@ -54,13 +54,38 @@ int kill(int pid, int signum)
 
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset)
 {
-	errno = ENOSYS;
-	return -1;
+	uint64_t or = 0, and = ~0ull;
+	switch(how) {
+		case SIG_BLOCK: or = *set; break;
+		case SIG_UNBLOCK: and = ~*set; break;
+		case SIG_SETMASK: or = *set; and = 0; break;
+		default:
+			errno = EINVAL;
+			return -1;
+	}
+
+	sigset_t foo = 0;
+	if(oldset == NULL) oldset = &foo;
+	int n = __proc_sigset(__the_sysinfo->api.proc, oldset, 2, or, and);
+	if(n != 0) {
+		errno = n < 0 ? -n : EIO;	/* TODO: translate properly! */
+		return -1;
+	}
+
+	if(how == SIG_UNBLOCK || how == SIG_SETMASK) __sig_bottom();
+
+	return 0;
 }
 
 
 int sigpending(sigset_t *set)
 {
-	errno = ENOSYS;
-	return -1;
+	int n = __proc_sigset(__the_sysinfo->api.proc, set, 3, 0, ~0ull);
+	if(n != 0) {
+		/* TODO: translate properly */
+		errno = n > 0 ? EIO : -n;
+		return -1;
+	}
+
+	return 0;
 }
