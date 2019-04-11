@@ -50,3 +50,17 @@ int kill(int pid, int signum)
 		return -1;
 	}
 }
+
+
+int sigprocmask(int how, const sigset_t *set, sigset_t *oldset)
+{
+	errno = ENOSYS;
+	return -1;
+}
+
+
+int sigpending(sigset_t *set)
+{
+	errno = ENOSYS;
+	return -1;
+}

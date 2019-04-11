@@ -51,13 +51,30 @@ struct sigaction
 #define SA_RESTART 0x10000000	/* restart syscall on signal return */
 #define SA_NODEFER 0x40000000	/* don't mask signal within handler */
 
+/* `how' of sigprocmask(2). */
+#define SIG_BLOCK 0				/* add to block set */
+#define SIG_UNBLOCK 1			/* remove from block set & trigger pending */
+#define SIG_SETMASK 2			/* set mask & trigger pending if unblocked */
+
 
 extern int sigaction(int signum,
 	const struct sigaction *act, struct sigaction *oldact);
 
 extern sighandler_t signal(int signum, sighandler_t handler);
 
+extern int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
+extern int sigpending(sigset_t *set);
+
 extern int kill(int __pid, int __sig);
+
+
+/* sigsetops(3) */
+
+extern int sigemptyset(sigset_t *set);
+extern int sigfillset(sigset_t *set);
+extern int sigaddset(sigset_t *set, int signum);
+extern int sigdelset(sigset_t *set, int signum);
+extern int sigismember(sigset_t *set, int signum);
 
 
 #endif
