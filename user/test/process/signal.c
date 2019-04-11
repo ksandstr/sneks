@@ -254,7 +254,6 @@ END_TEST
 DECLARE_TEST("process:signal", pause_basic);
 
 
-
 static void ks_sigint_handler(int signum) {
 	if(signum == SIGINT) int_got++;
 }
@@ -277,3 +276,69 @@ START_TEST(kill_self)
 END_TEST
 
 DECLARE_TEST("process:signal", kill_self);
+
+
+/* the most basic test of sigprocmask(2) and sigpending(2): does masking
+ * SIGINT prevent its delivery? does it show up in sigpending(2)? does the
+ * signal get delivered once unmasked?
+ */
+START_LOOP_TEST(procmask_and_pending_basic, iter, 0, 1)
+{
+	const bool unmask_by_set = !!(iter & 1);
+	diag("unmask_by_set=%s", btos(unmask_by_set));
+	plan_tests(9);
+	todo_start("incomplete");
+
+	int_got = 0;
+	struct sigaction act = { .sa_handler = &ks_sigint_handler };
+	int n = sigaction(SIGINT, &act, NULL);
+	fail_unless(n == 0);
+
+	/* first, unmask SIGINT and deliver it once. */
+	sigset_t sigint_set;
+	sigemptyset(&sigint_set);
+	sigaddset(&sigint_set, SIGINT);
+	n = sigprocmask(SIG_UNBLOCK, &sigint_set, NULL);
+	if(!ok(n == 0, "unblock SIGINT")) {
+		diag("errno=%d", errno);
+	}
+	int before = int_got;
+	n = kill(getpid(), SIGINT);
+	fail_unless(n == 0);
+	ok(int_got == before + 1, "got unblocked SIGINT");
+	sigset_t pend;
+	sigemptyset(&pend);
+	n = sigpending(&pend);
+	ok(n == 0, "sigpending");
+	ok1(!sigismember(&pend, SIGINT));
+
+	/* now mask, stimulate, test, and unblock. */
+	sigset_t oldset;
+	sigemptyset(&oldset);
+	n = sigprocmask(SIG_BLOCK, &sigint_set, &oldset);
+	if(!ok(n == 0, "block SIGINT")) {
+		diag("errno=%d", errno);
+	}
+	before = int_got;
+	n = kill(getpid(), SIGINT);
+	fail_unless(n == 0);
+	ok(int_got == before, "did not get blocked SIGINT");
+
+	sigemptyset(&pend);
+	n = sigpending(&pend);
+	ok1(sigismember(&pend, SIGINT));
+
+	if(unmask_by_set) {
+		sigprocmask(SIG_SETMASK, &oldset, NULL);
+	} else {
+		sigprocmask(SIG_UNBLOCK, &sigint_set, NULL);
+	}
+	ok(int_got == before + 1, "got delayed SIGINT");
+
+	sigemptyset(&pend);
+	sigpending(&pend);
+	ok1(!sigismember(&pend, SIGINT));
+}
+END_TEST
+
+DECLARE_TEST("process:signal", procmask_and_pending_basic);
