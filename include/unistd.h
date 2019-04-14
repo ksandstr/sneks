@@ -8,6 +8,7 @@
 
 /* FIXME: get this from somewhere. also __size_t, __intptr_t */
 typedef int __pid_t;
+typedef unsigned int __useconds_t;
 
 
 extern int getpagesize(void);
@@ -35,5 +36,9 @@ enum {
 #define _SC_PAGE_SIZE _SC_PAGESIZE
 	_SC_NPROCESSORS_ONLN,
 };
+
+
+extern unsigned int sleep(unsigned int seconds);
+extern int usleep(__useconds_t usec);
 
 #endif
