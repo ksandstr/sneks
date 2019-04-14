@@ -12,7 +12,6 @@
 #include <ccan/darray/darray.h>
 
 #include <sneks/test.h>
-#include <l4/kdebug.h>
 
 #include "defs.h"
 

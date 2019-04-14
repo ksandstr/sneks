@@ -24,10 +24,6 @@
 #include <ccan/darray/darray.h>
 #include <ccan/autodata/autodata.h>
 
-#include <l4/types.h>
-#include <l4/thread.h>
-#include <l4/ipc.h>
-
 #include <sneks/test.h>
 
 #include "defs.h"

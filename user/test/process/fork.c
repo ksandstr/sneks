@@ -193,7 +193,7 @@ START_TEST(from_signal_handler)
 	}
 
 	int sigint_child = last_fork_child;
-	for(int i=0; i < 8; i++) L4_Sleep(L4_TimePeriod(2 * 1000));
+	for(int i=0; i < 8; i++) usleep(2 * 1000);
 
 	/* wait for the last child */
 	int st, dead = waitpid(-1, &st, 0);

@@ -56,7 +56,7 @@ START_LOOP_TEST(sigaction_basic, iter, 0, 1)
 		 * TODO: the no-sleep case is contained in the uninterruptible receive
 		 * case, but should be provoked explicitly as well.
 		 */
-		L4_Sleep(L4_TimePeriod(2 * 1000));
+		usleep(2 * 1000);
 		exit(0);
 	}
 	if(!ok(child > 0, "fork")) diag("errno=%d", errno);
@@ -133,7 +133,7 @@ START_TEST(sigaction_recur)
 	if(!ok(n == 0, "sigaction for INT")) diag("errno=%d", errno);
 	int child = fork();
 	if(child == 0) {
-		L4_Sleep(L4_TimePeriod(2 * 1000));
+		usleep(2 * 1000);
 		exit(0);
 	}
 	if(!ok(child > 0, "fork")) diag("errno=%d", errno);
@@ -233,7 +233,7 @@ START_TEST(pause_basic)
 		exit(0);
 	}
 
-	L4_Sleep(L4_TimePeriod(5 * 1000));	/* FIXME: use posix sleep instead */
+	usleep(5 * 1000);
 	int st, dead = waitpid(-1, &st, WNOHANG);
 	if(!ok(dead < 0 && errno == ECHILD, "no waitpid before signal")) {
 		diag("dead=%d, st=%d, errno=%d", dead, st, errno);
@@ -242,7 +242,7 @@ START_TEST(pause_basic)
 	int n = kill(child, SIGCHLD);	/* FIXME: use something different */
 	if(n != 0) diag("kill(2) failed, errno=%d", errno);
 
-	L4_Sleep(L4_TimePeriod(5 * 1000));
+	usleep(5 * 1000);
 	dead = waitpid(-1, &st, WNOHANG);
 	if(!ok(dead == child, "waitpid succeeds after signal")) {
 		diag("dead=%d, st=%d, errno=%d", dead, st, errno);

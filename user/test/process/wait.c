@@ -6,7 +6,6 @@
 #include <errno.h>
 #include <sys/wait.h>
 
-#include <l4/ipc.h>
 #include <sneks/test.h>
 
 
@@ -33,7 +32,7 @@ START_TEST(busy_wait)
 
 	int child = fork();
 	if(child == 0) {
-		L4_Sleep(L4_TimePeriod(5 * 1000));	/* FIXME: usleep for 5ms */
+		usleep(5 * 1000);
 		exit(0);
 	}
 
@@ -41,7 +40,7 @@ START_TEST(busy_wait)
 	if(!ok(dead < 0 && errno == ECHILD, "child hasn't exited")) {
 		diag("dead=%d, st=%d, errno=%d", dead, st, errno);
 	}
-	L4_Sleep(L4_TimePeriod(10 * 1000));
+	usleep(10 * 1000);
 	dead = waitpid(-1, &st, WNOHANG);
 	if(!ok(dead == child, "child exited after sleep")) {
 		dead = wait(&st);
@@ -64,10 +63,10 @@ START_LOOP_TEST(return_value, iter, 0, 1)
 		int rc = i >= 10 ? i - 20 : i;
 		int child = fork();
 		if(child == 0) {
-			if(active_exit) L4_Sleep(L4_TimePeriod(2 * 1000));
+			if(active_exit) usleep(2 * 1000);
 			exit(rc);
 		}
-		if(!active_exit) L4_Sleep(L4_TimePeriod(2 * 1000));
+		if(!active_exit) usleep(2 * 1000);
 		int st, pid = wait(&st);
 		if(pid < 0) {
 			diag("wait(2) failed, errno=%d", errno);
