@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdarg.h>
 #include <assert.h>
+#include <errno.h>
 #include <unistd.h>
 #include <errno.h>
 #include <ccan/compiler/compiler.h>
@@ -91,4 +92,78 @@ COLD void __file_init(struct sneks_fdlist *fdlist)
 	stdin = fdopen(0, "r");
 	stdout = fdopen(1, "w");
 	stderr = fdopen(2, "w");
+}
+
+
+int close(int fd)
+{
+	errno = ENOSYS;
+	return -1;
+}
+
+
+int pipe(int pipefd[2]) {
+	return pipe2(pipefd, 0);
+}
+
+
+int pipe2(int pipefd[2], int flags)
+{
+	if(flags != 0) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	/* TODO */
+	errno = ENOSYS;
+	return -1;
+}
+
+
+long read(int fd, void *buf, size_t count)
+{
+	errno = ENOSYS;
+	return -1;
+}
+
+
+long write(int fd, const void *buf, size_t count)
+{
+	errno = ENOSYS;
+	return -1;
+}
+
+
+uint64_t lseek(int fd, uint64_t offset, int whence)
+{
+	errno = ENOSYS;
+	return -1;
+}
+
+
+int dup(int oldfd)
+{
+	errno = ENOSYS;
+	return -1;
+}
+
+
+int dup2(int oldfd, int newfd)
+{
+	errno = ENOSYS;
+	return -1;
+}
+
+
+int dup3(int oldfd, int newfd, int flags)
+{
+	errno = ENOSYS;
+	return -1;
+}
+
+
+int fcntl(int fd, int cmd, ...)
+{
+	errno = ENOSYS;
+	return -1;
 }

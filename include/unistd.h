@@ -24,6 +24,19 @@ extern int pause(void);
 
 extern int close(int fd);
 extern long read(int fd, void *buf, size_t count);
+extern long write(int fd, const void *buf, size_t count);
+extern uint64_t lseek(int fd, uint64_t offset, int whence);
+
+extern int dup(int oldfd);
+extern int dup2(int oldfd, int newfd);
+#ifdef _GNU_SOURCE
+extern int dup3(int oldfd, int newfd, int flags);
+#endif
+
+extern int pipe(int pipefd[2]);
+#ifdef _GNU_SOURCE
+extern int pipe2(int pipefd[2], int flags);
+#endif
 
 extern __pid_t fork(void);
 extern __pid_t wait(int *status_p);
