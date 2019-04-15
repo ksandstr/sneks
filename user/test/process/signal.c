@@ -265,8 +265,9 @@ START_TEST(pause_basic)
 	}
 
 	usleep(5 * 1000);
+	todo_start("sneks' waitpid() handles no-change wrong");
 	int st, dead = waitpid(-1, &st, WNOHANG);
-	if(!ok(dead < 0 && errno == ECHILD, "no waitpid before signal")) {
+	if(!ok(dead == 0, "no waitpid before signal")) {
 		diag("dead=%d, st=%d, errno=%d", dead, st, errno);
 	}
 

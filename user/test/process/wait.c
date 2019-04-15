@@ -36,8 +36,9 @@ START_TEST(busy_wait)
 		exit(0);
 	}
 
+	todo_start("sneks' waitpid() handles no-change wrong");
 	int st, dead = waitpid(-1, &st, WNOHANG);
-	if(!ok(dead < 0 && errno == ECHILD, "child hasn't exited")) {
+	if(!ok(dead == 0, "child hasn't exited")) {
 		diag("dead=%d, st=%d, errno=%d", dead, st, errno);
 	}
 	usleep(10 * 1000);
@@ -76,7 +77,7 @@ START_LOOP_TEST(return_value, iter, 0, 1)
 		if(!WIFEXITED(st)) {
 			diag("i=%d, didn't exit?", i);
 			rc_ok = false;
-		} else if(WEXITSTATUS(st) != rc) {
+		} else if((int8_t)WEXITSTATUS(st) != rc) {
 			diag("i=%d, status=%d but rc=%d?", i, WEXITSTATUS(st), rc);
 			rc_ok = false;
 		}
