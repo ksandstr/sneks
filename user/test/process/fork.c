@@ -6,12 +6,16 @@
 #include <assert.h>
 #include <signal.h>
 #include <sys/wait.h>
+
+#ifdef __l4x2__
 #include <l4/types.h>
 #include <l4/ipc.h>
+#endif
 
 #include <sneks/test.h>
 
 
+#ifdef __sneks__
 START_LOOP_TEST(fork_basic, iter, 0, 1)
 {
 	const bool active_exit = (iter & 1) != 0;
@@ -46,6 +50,7 @@ START_LOOP_TEST(fork_basic, iter, 0, 1)
 END_TEST
 
 DECLARE_TEST("process:fork", fork_basic);
+#endif
 
 
 /* tests that it's possible to fork a bunch of times concurrently, without

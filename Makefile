@@ -44,6 +44,13 @@ distclean: clean
 qcheck: check
 
 
+# run the test suite on the host. this may become a silent part of `make check'
+# in the future, but for now it's useful for manual test validation.
+hostcheck:
+	+@make -C user/test hostsuite
+	@TEST_CMDLINE="user/test/hostsuite 2>&1" $(MUNG_DIR)/user/testbench/report.pl
+
+
 check: all
 	@echo "-- system tests..."
 	@SYSTEST=1 $(MUNG_DIR)/user/testbench/report.pl

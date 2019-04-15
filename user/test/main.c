@@ -58,6 +58,11 @@ int main(int argc, char *argv[])
 {
 	printf("hello, world!\n");
 
+	/* FIXME: remove the #ifdef once sneks gets setvbuf(3) */
+#ifndef __sneks__
+	setvbuf(stdout, NULL, _IONBF, 0);
+#endif
+
 	opt_register_table(opts, NULL);
 	if(!opt_parse(&argc, argv, &ignore_opt_error)) {
 		printf("*** option parsing failed!\n");

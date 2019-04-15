@@ -172,4 +172,10 @@ extern int subtest_end(void);
 
 extern int exit_status(void);
 
+
+#ifndef __sneks__
+/* being nice to hostsuite <3 */
+extern int strscpy(char *dest, const char *src, size_t n);
+#endif
+
 #endif

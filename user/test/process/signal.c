@@ -16,20 +16,28 @@
 #include <sys/types.h>
 #include <ccan/minmax/minmax.h>
 
+#ifdef __l4x2__
 #include <l4/types.h>
 #include <l4/ipc.h>
 #include <l4/syscall.h>
+#endif
 
 #include <sneks/test.h>
 
 
 static sig_atomic_t chld_got = 0, int_got = 0, int_max_depth = 0;
-static L4_ThreadId_t chld_handler_tid, int_handler_tid;
+
+#ifdef __l4x2__
+static L4_ThreadId_t chld_handler_tid = { .raw = 0 },
+	int_handler_tid = { .raw = 0 };
+#endif
 
 
 static void basic_sigchld_handler(int signum)
 {
+#ifdef __l4x2__
 	chld_handler_tid = L4_MyGlobalId();
+#endif
 	for(;;) {
 		int st, dead = waitpid(-1, &st, WNOHANG);
 		if(dead <= 0) break;
@@ -45,7 +53,6 @@ START_LOOP_TEST(sigaction_basic, iter, 0, 1)
 	plan_tests(4);
 
 	chld_got = 0;
-	chld_handler_tid = L4_nilthread;
 	struct sigaction act = { .sa_handler = &basic_sigchld_handler };
 	int n = sigaction(SIGCHLD, &act, NULL);
 	if(!ok(n == 0, "sigaction")) diag("errno=%d", errno);
@@ -61,9 +68,15 @@ START_LOOP_TEST(sigaction_basic, iter, 0, 1)
 	}
 	if(!ok(child > 0, "fork")) diag("errno=%d", errno);
 
-	const L4_Time_t iter_timeout = L4_TimePeriod(5 * 1000);
+	const int timeout_us = 5000;
 	int iters = 5;
 	while(child > 0 && chld_got < 1 && --iters) {
+#ifndef __l4x2__
+		if(usleep(timeout_us) < 0) {
+			diag("usleep(3) failed, errno=%d (not an error)", errno);
+		}
+#else
+		L4_Time_t iter_timeout = L4_TimePeriod(timeout_us);
 		L4_MsgTag_t tag;
 		L4_ThreadId_t dummy;
 		if(sleep_in_recv) {
@@ -76,13 +89,18 @@ START_LOOP_TEST(sigaction_basic, iter, 0, 1)
 		if(L4_IpcFailed(tag) && (L4_ErrorCode() & ~1ul) != 2) {
 			diag("sleep failed, ec=%lu (not an error)", L4_ErrorCode());
 		}
+#endif
 	}
 	if(!ok(iters > 0, "signal was processed") && child > 0) {
 		int st, dead = wait(&st);
 		diag("waited for dead=%d (child=%d)", dead, child);
 	}
+#ifdef __l4x2__
 	ok(L4_SameThreads(L4_Myself(), chld_handler_tid),
 		"current thread was used");
+#else
+	skip(1, "no emulation of L4_SameThreads() yet");
+#endif
 }
 END_TEST
 
@@ -92,7 +110,9 @@ DECLARE_TEST("process:signal", sigaction_basic);
 
 static void recur_sigchld_handler(int signum)
 {
+#ifdef __l4x2__
 	chld_handler_tid = L4_MyGlobalId();
+#endif
 	kill(getpid(), SIGINT);
 	for(;;) {
 		int st, dead = waitpid(-1, &st, WNOHANG);
@@ -105,7 +125,9 @@ static void recur_sigchld_handler(int signum)
 static void recur_sigint_handler(int signum)
 {
 	int_got++;
+#ifdef __l4x2__
 	int_handler_tid = L4_MyGlobalId();
+#endif
 }
 
 
@@ -123,8 +145,6 @@ START_TEST(sigaction_recur)
 	plan_tests(7);
 
 	chld_got = 0; int_got = 0;
-	chld_handler_tid = L4_nilthread;
-	int_handler_tid = L4_nilthread;
 	struct sigaction act = { .sa_handler = &recur_sigchld_handler };
 	int n = sigaction(SIGCHLD, &act, NULL);
 	if(!ok(n == 0, "sigaction for CHLD")) diag("errno=%d", errno);
@@ -138,15 +158,22 @@ START_TEST(sigaction_recur)
 	}
 	if(!ok(child > 0, "fork")) diag("errno=%d", errno);
 
-	const L4_Time_t iter_timeout = L4_TimePeriod(5 * 1000);
+	const int timeout_us = 5000;
 	int iters = 5;
 	while(child > 0 && chld_got < 1 && --iters) {
+#ifndef __l4x2__
+		if(usleep(timeout_us) < 0) {
+			diag("usleep(3) failed, errno=%d (not an error)", errno);
+		}
+#else
+		const L4_Time_t iter_timeout = L4_TimePeriod(timeout_us);
 		L4_ThreadId_t dummy;
 		L4_MsgTag_t tag = L4_Ipc(L4_Myself(), L4_nilthread,
 			L4_Timeouts(iter_timeout, L4_ZeroTime), &dummy);
 		if(L4_IpcFailed(tag) && (L4_ErrorCode() & ~1ul) != 2) {
 			diag("sleep failed, ec=%lu (not an error)", L4_ErrorCode());
 		}
+#endif
 	}
 	if(!ok(iters > 0, "signal was processed") && child > 0) {
 		int st, dead = wait(&st);
@@ -155,8 +182,12 @@ START_TEST(sigaction_recur)
 
 	ok1(chld_got > 0);
 	ok1(int_got > 0);
+#ifdef __l4x2__
 	ok(L4_SameThreads(L4_Myself(), int_handler_tid),
 		"SIGINT handled in main thread");
+#else
+	skip(1, "no emulation of L4_SameThreads() yet");
+#endif
 }
 END_TEST
 

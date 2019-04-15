@@ -13,3 +13,4 @@ initrd.img
 *-defs.h
 *.d
 ccan-*.[oa]
+core

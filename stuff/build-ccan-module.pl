@@ -4,12 +4,14 @@ use File::Temp qw/tempdir/;
 use Cwd;
 
 my $VERBOSE = $ENV{VERBOSE} // 0;
+my $opt_add_host = $ENV{HOSTSUITE} // 0;
 
 my $modname = shift @ARGV // die "needs module name!";
 my @cflags = @ARGV;
 
 my @sources = <$modname/*.c>;
-my $outnam = 'ccan-' . ($modname =~ /([^\/]+)$/)[0] . '.a';
+my $outnam = 'ccan-' . ($modname =~ /([^\/]+)$/)[0]
+	. ($opt_add_host ? ".host" : "") . '.a';
 my $outdir = getcwd();
 
 if($VERBOSE) {

@@ -13,7 +13,6 @@
 #include <errno.h>
 #include <ctype.h>
 #include <assert.h>
-#include <threads.h>
 
 #include <ccan/container_of/container_of.h>
 #include <ccan/htable/htable.h>
@@ -39,8 +38,6 @@ struct utest
 	void (*fn)(int iter);
 };
 
-
-static tss_t in_test_key = ~0;
 
 static darray(struct utest *) all_tests = darray_new();
 
@@ -76,13 +73,8 @@ void exit_on_fail(void)
 	 * that aren't controlled by fixtures will be left hanging, which may
 	 * compromise the test process under !do_fork.
 	 */
-	thrd_exit(1);
+	exit(1);
 	abort();
-}
-
-
-bool in_test(void) {
-	return tss_get(in_test_key) == (void *)IN_TEST_MAGIC;
 }
 
 
