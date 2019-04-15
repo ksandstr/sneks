@@ -39,7 +39,7 @@ single program. In particular that program should run without taking fifty
 milliseconds to spin an advertiser's browser malware in the background every
 1200th time. Similarly, the UNIX directory tree should exhibit atomicity,
 consistency, isolation, and durability regardless of how its component storage
-volumes are mounted or managed.
+volumes are set up.
 
 However, since IPC scheduling is easily undone by concurrency-obstructing
 primitives in the chain members, unorthodox methods are required. In sneks'
@@ -55,12 +55,11 @@ How?
 ----
 
 Beats me, it's way under development. Check this section out again once
-virtual memory, filesystems, and userland operation have been added.
-
-This source was released to the public in early 2018 just so that it wouldn't
-have taken well into 2018 proper. As this was premature by all relevant
-measures, many things out of even the few that were implemented as of late
-december 2017 are subject to revision. To say the least.
+virtual memory, filesystems, block device access, and so forth have been
+added. The Makefiles etc. are customizable but the source tree has inobvious
+dependencies to various bits from a mix of Devuan's `jessie' and `ascii'
+releases, so any actual use of the source tree may be challenging for the time
+being.
 
 
 ### What's your target audience? ###
@@ -71,18 +70,17 @@ Neckbeards.
 #### ... and target platform? ####
 
 For now, the KVM virtualizer of Linux. Ultimately, ThinkPad laptops between
-the generations of T61p and W520 models, inclusive.
+the generations of T41p and W520 models, inclusive.
 
-In terms of processor architecture, sneks will regard support of ia32 and
-amd64 as first-class. This is to say that no other platform shall hold
-development back.
+In terms of processor architecture, sneks will support PC-style ia32 and amd64
+as first priority; no other platform shall retard development.
 
 
 ### Ooh I like the sound of that. Can I chip in? ###
 
-Sadly, black magic is not for the faint of heart, and if you must ask then
-you're not good enough. This project is not here to hold your hand; get good,
-then we'll talk.
+Sadly, visionary nonsense like this isn't for newbies or the easily
+intimidated, and for practical reasons this project is not here to teach text
+editors or typing. Get good, then we'll talk.
 
 In the future there may be opportunities for non-core efforts associated with
 `sneks', such as maintenance and development of the test harness or the IDL
@@ -97,8 +95,7 @@ experiments. Go right ahead, make my day.
 
 ### But what's with the name? ###
 
-It's Volapük for the plural of snake, in turn referencing the national sport
-of Finland.
+It's Volapük for the plural of snake, after the national sport of Finland.
 
 
 ### Something about this bothers me personally! ###

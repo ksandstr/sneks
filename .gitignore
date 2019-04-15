@@ -4,6 +4,7 @@ initrd.img
 
 # detritus
 .*.sw[opn]
+.sw[opn]
 *~
 *.o
 .deps
