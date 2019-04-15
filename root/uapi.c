@@ -970,11 +970,6 @@ static void sig_deliver(struct process *p, int sig, bool self)
 		abort();	/* FIXME: unfuckinate! */
 	}
 
-	/* TODO: set up something that'll catch @tid's exit, like a call to
-	 * sigset() from the threadlet, which would return 0 if the thread weren't
-	 * brutally moida'd.
-	 */
-
 add_sig:
 	p->pending_set |= (1ull << (sig - 1));
 }
@@ -997,7 +992,8 @@ static void sig_remove_helper(struct process *p)
 
 /* TODO: add varargs for signal-specific parameters passed down to
  * sig_deliver? though these won't be saved in the pending set unless there
- * were fields in <struct process> for each, which seems ugly.
+ * were fields in <struct process> for each, which seems ugly and wouldn't
+ * play well with how Proc::sigset is defined.
  */
 static void sig_send(struct process *p, int sig, bool self)
 {
@@ -1075,11 +1071,7 @@ static int uapi_wait(
 
 		case P_ANY:
 			dead = list_top(&self->dead_list, struct process, dead_link);
-			if(dead == NULL
-				&& (!has_children(caller) || (options & WNOHANG) != 0))
-			{
-				return -ECHILD;
-			}
+			if(dead == NULL && !has_children(caller)) return -ECHILD;
 			assert(dead == NULL || dead->ppid == caller);
 			break;
 

@@ -36,7 +36,6 @@ START_TEST(busy_wait)
 		exit(0);
 	}
 
-	todo_start("sneks' waitpid() handles no-change wrong");
 	int st, dead = waitpid(-1, &st, WNOHANG);
 	if(!ok(dead == 0, "child hasn't exited")) {
 		diag("dead=%d, st=%d, errno=%d", dead, st, errno);
