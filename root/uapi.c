@@ -1026,7 +1026,8 @@ static int uapi_kill(int pid, int sig)
 		return -EPERM;
 	}
 
-	sig_send(p, sig, pid == sender_pid);
+	if(sig < 0 || sig >= 64) return -EINVAL;
+	if(sig != 0) sig_send(p, sig, pid == sender_pid);
 	return 0;
 }
 
