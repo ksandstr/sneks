@@ -285,6 +285,21 @@ END_TEST
 DECLARE_TEST("process:signal", pause_basic);
 
 
+/* error returns from kill(2). */
+START_TEST(kill_error)
+{
+	plan_tests(4);
+
+	ok1(kill(getpid(), -1) < 0 && errno == EINVAL);
+	ok1(kill(getpid(), 12345) < 0 && errno == EINVAL);
+	ok1(kill(getpid() ^ 12345, SIGINT) < 0 && errno == ESRCH);
+	ok1(kill(1, SIGINT) < 0 && errno == EPERM);
+}
+END_TEST
+
+DECLARE_TEST("process:signal", kill_error);
+
+
 static void ks_sigint_handler(int signum) {
 	if(signum == SIGINT) int_got++;
 }
@@ -307,6 +322,28 @@ START_TEST(kill_self)
 END_TEST
 
 DECLARE_TEST("process:signal", kill_self);
+
+
+/* test for process existence with kill(pid, 0). */
+START_TEST(kill_zero)
+{
+	plan_tests(4);
+
+	ok1(kill(getpid(), 0) == 0);
+
+	int child = fork();
+	if(child == 0) {
+		usleep(5 * 1000);
+		exit(0);
+	}
+	ok1(kill(child, 0) == 0);
+	int st, dead = waitpid(child, &st, 0);
+	ok1(dead == child);
+	ok1(kill(child, 0) < 0 && errno == ESRCH);
+}
+END_TEST
+
+DECLARE_TEST("process:signal", kill_zero);
 
 
 /* the most basic test of sigprocmask(2) and sigpending(2): does masking
