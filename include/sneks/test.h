@@ -169,8 +169,37 @@ extern void todo_end(void);
 
 extern void subtest_start(const char *fmt, ...);
 extern int subtest_end(void);
+extern char *subtest_pop(int *rc_p, void **freeptr_p);
 
 extern int exit_status(void);
+
+/* forked subtests. obviously not available under sys/test .
+ * #include <sys/wait.h> to make these compile.
+ *
+ * TODO: fetch test name from child somehow, display in fork_subtest_wait().
+ * this may require pipes or a shared memory segment or something.
+ */
+#define fork_subtest_start(_fmt, ...) ({ \
+		int __stc = fork(); \
+		if(__stc == 0) { \
+			subtest_start(_fmt, ##__VA_ARGS__);
+
+#define fork_subtest_end \
+			int _rc; \
+			char *_msg = subtest_pop(&_rc, NULL); \
+			diag("(subtest name was `%s')", _msg); \
+			exit(_rc == 1 ? 0 : 1); \
+		} \
+		__stc; \
+	})
+
+#define fork_subtest_wait(_child) ({ \
+		int __st, __dead = waitpid((_child), &__st, 0), \
+			_ok = ok(__dead == (_child) \
+					&& WIFEXITED(__st) && WEXITSTATUS(__st) == 0, \
+				"unknown subtest"); 	/* press f to pay respects */ \
+		_ok; \
+	})
 
 
 #ifndef __sneks__

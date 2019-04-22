@@ -131,7 +131,7 @@ void subtest_start(const char *fmt, ...)
 }
 
 
-int subtest_end(void)
+char *subtest_pop(int *rc_p, void **freeptr_p)
 {
 	if(save_stack == NULL) {
 		diag("%s: save_stack == NULL", __func__);
@@ -153,11 +153,22 @@ int subtest_end(void)
 	failed_tests = c->failed_tests;
 	free(todo_msg); todo_msg = c->todo_msg;
 
-	int ret = ok(exst == 0, "%s", c->testmsg);
+	int ret = exst == 0;
 	if(!ret) diag("subtest exit_status=%d", exst);
-	free(c);
+	if(rc_p != NULL) *rc_p = ret;
+	if(freeptr_p != NULL) *freeptr_p = c;
+	return c->testmsg;
+}
 
-	return ret;
+
+int subtest_end(void)
+{
+	int rc;
+	void *freeptr;
+	char *msg = subtest_pop(&rc, &freeptr);
+	ok(rc, "%s", msg);
+	free(freeptr);
+	return rc;
 }
 
 
