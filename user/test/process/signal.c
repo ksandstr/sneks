@@ -420,8 +420,6 @@ START_LOOP_TEST(procmask_and_fork, iter, 0, 1)
 	diag("unblock_sigint=%s", btos(unblock_sigint));
 	plan_tests(2);
 
-	todo_start("fork_subtest_start testbed");
-
 	int_got = 0;
 	struct sigaction act = { .sa_handler = &ks_sigint_handler };
 	int n = sigaction(SIGINT, &act, NULL);

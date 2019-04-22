@@ -1158,6 +1158,10 @@ static int uapi_fork(L4_Word_t *tid_raw_p, L4_Word_t sp, L4_Word_t ip)
 	}
 	dst->ppid = pid;
 	dst->sigpage_addr = src->sigpage_addr;
+	dst->ign_set = src->ign_set;
+	dst->dfl_set = src->dfl_set;
+	dst->mask_set = src->mask_set;
+	dst->pending_set = 0;
 	bool ok = htable_add(&pid_to_child_hash, int_hash(pid), dst);
 	if(!ok) {
 		/* FIXME: cleanup */
