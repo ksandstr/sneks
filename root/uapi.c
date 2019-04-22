@@ -66,6 +66,7 @@ struct process
 
 	unsigned flags;	/* mishmash of PF_* */
 	int ppid;		/* parent's PID */
+	__uid_t real_uid, eff_uid, saved_uid;
 	L4_ThreadId_t wait_tid;	/* waiting TID on parent */
 	/* waitid() output values */
 	short signo, status;
@@ -763,6 +764,32 @@ static int uapi_spawn(
 	if(p == NULL) return -ENOMEM;
 	assert(newpid > 0 && newpid <= SNEKS_MAX_PID);
 
+	L4_ThreadId_t caller = muidl_get_sender();
+	if(IS_SYSTASK(pidof_NP(caller))) {
+		/* systask spawn always start at root privilege. this could be
+		 * specified otherwise so that root-privileged processes aren't
+		 * created willy nilly.
+		 */
+		p->real_uid = p->eff_uid = p->saved_uid = 0;
+		/* TODO: same for gids */
+	} else {
+		struct process *parent = get_process(pidof_NP(caller));
+		if(parent == NULL) {
+			printf("%s: can't find parent process (caller=%#lx:%#lx, pid=%u)\n",
+				__func__, L4_ThreadNo(caller), L4_Version(caller),
+				pidof_NP(caller));
+			p->task.utcb_area = L4_Nilpage;
+			ra_free(ra_process, p);
+			return -EINVAL;
+		}
+
+		p->real_uid = parent->real_uid;
+		p->eff_uid = parent->eff_uid;
+		/* TODO: saved_uid, same for gid. or maybe stick 'em in a struct and
+		 * assign that.
+		 */
+	}
+
 	int n = __vm_fork(vm_tid, 0, newpid);
 	if(n != 0) {
 		p->task.utcb_area = L4_Nilpage;
@@ -1162,6 +1189,9 @@ static int uapi_fork(L4_Word_t *tid_raw_p, L4_Word_t sp, L4_Word_t ip)
 		return -ENOMEM;
 	}
 	dst->ppid = pid;
+	dst->real_uid = src->real_uid;
+	dst->eff_uid = src->eff_uid;
+	dst->saved_uid = src->saved_uid;
 	dst->sigpage_addr = src->sigpage_addr;
 	dst->ign_set = src->ign_set;
 	dst->dfl_set = src->dfl_set;
@@ -1298,6 +1328,76 @@ static uint64_t uapi_sigset(
 }
 
 
+static void uapi_getresugid(
+	__uid_t *r_uid, __uid_t *e_uid, __uid_t *s_uid,
+	__gid_t *r_gid, __gid_t *e_gid, __gid_t *s_gid)
+{
+	struct process *p = get_process(pidof_NP(muidl_get_sender()));
+	if(p == NULL) {
+		*r_uid = *e_uid = *s_uid = ~0u;
+		*r_gid = *e_gid = *s_gid = ~0u;
+		return;
+	}
+
+	*r_uid = p->real_uid; *e_uid = p->eff_uid; *s_uid = p->saved_uid;
+	/* TODO */
+	*r_gid = ~0u; *e_gid = ~0u; *s_gid = ~0u;
+}
+
+
+static int uapi_setresugid(
+	int16_t mode,
+	__uid_t r_uid, __uid_t e_uid, __uid_t s_uid,
+	__gid_t r_gid, __gid_t e_gid, __gid_t s_gid)
+{
+	struct process *p = get_process(pidof_NP(muidl_get_sender()));
+	if(p == NULL) return -ESRCH; /* sneks extension for no process found */
+
+	if(mode < 1 || mode > 3) return -EINVAL;
+	else if(mode == 1) {
+		if(p->eff_uid == 0) {
+			/* "if the calling process is privileged, the real UID and saved
+			 * set-user-ID are also set." here it's assumed that "saved
+			 * set-user-ID" means saved UID.
+			 *
+			 * TODO: do this also when @p got suid-root via exec.
+			 */
+			e_uid = r_uid;
+			s_uid = r_uid;
+		} else if(r_uid == p->eff_uid || r_uid == p->saved_uid) {
+			e_uid = r_uid;
+			r_uid = -1;
+			assert(s_uid == -1);
+		} else {
+			return -EPERM;
+		}
+		/* TODO: 1-parameter mode for gids */
+	} else if(mode == 2) {
+		/* TODO */
+		return -ENOSYS;
+	} else if(mode == 3 && p->eff_uid != 0) {
+		/* validate when not in root mode. */
+		const uint32_t cands[] = { r_uid, e_uid, s_uid };
+		for(int i=0; i < ARRAY_SIZE(cands); i++) {
+			uint32_t c = cands[i];
+			if(c == -1) continue;
+			if(c != p->real_uid && c != p->eff_uid && c != p->saved_uid) {
+				return -EPERM;	/* DENIED */
+			}
+		}
+		/* TODO: same for gids */
+	}
+
+	/* assign. */
+	if(r_uid != -1) p->real_uid = r_uid;
+	if(e_uid != -1) p->eff_uid = e_uid;
+	if(s_uid != -1) p->saved_uid = s_uid;
+	/* TODO: same for gids */
+
+	return 0;
+}
+
+
 int uapi_loop(void *param_ptr)
 {
 	uapi_tid = L4_Myself();
@@ -1312,6 +1412,8 @@ int uapi_loop(void *param_ptr)
 		.fork = &uapi_fork,
 		.sigconfig = &uapi_sigconfig,
 		.sigset = &uapi_sigset,
+		.getresugid = &uapi_getresugid,
+		.setresugid = &uapi_setresugid,
 	};
 	for(;;) {
 		L4_Word_t st = _muidl_root_uapi_dispatch(&vtab);

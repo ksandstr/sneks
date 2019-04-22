@@ -15,6 +15,9 @@ interface Proc
 	typedef string<512> pathbuf;
 	typedef string<4096> argbuf; /* substrings separated by 0x1e (RS). */
 
+	/* TODO: move these into posixlike.idl or somewhere */
+	typedef unsigned long uid_t, gid_t;
+
 	[Label(0x1234)]		/* (provisional) */
 	void create_thread([MR(1)] out L4X2::ThreadId tid)
 		raises(Posix::Errno);
@@ -117,6 +120,29 @@ interface Proc
 		in unsigned long long or_bits,
 		in unsigned long long and_bits)
 			raises(muidl::NoReply);
+
+	/* what it says on the tin. effectively getresuid(2) and getresgid(2)
+	 * rolled up.
+	 */
+	void getresugid(
+		out uid_t real_uid, out uid_t eff_uid, out uid_t saved_uid,
+		out gid_t real_gid, out gid_t eff_gid, out gid_t saved_gid);
+
+	/* when @mode is 1, Proc::setresugid behaves like setuid(@real_uid) and
+	 * then setgid(@real_gid), where applicable.
+	 * when @mode is 2, the semantics are of setreuid(2) and setregid(2)
+	 * respectively.
+	 * when @mode is 3, setresuid(2) and setresgid(2).
+	 *
+	 * to ignore a parameter, pass -1. this is required for parameters not
+	 * applied per @mode. one might look at @mode as specifying the semantics
+	 * by reference to number of parameters.
+	 */
+	void setresugid(
+		in short mode,
+		in uid_t real_uid, in uid_t eff_uid, in uid_t saved_uid,
+		in gid_t real_gid, in gid_t eff_gid, in gid_t saved_gid)
+			raises(Posix::Errno);
 };
 
 
