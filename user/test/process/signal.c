@@ -409,3 +409,57 @@ START_LOOP_TEST(procmask_and_pending_basic, iter, 0, 1)
 END_TEST
 
 DECLARE_TEST("process:signal", procmask_and_pending_basic);
+
+
+/* test that the blocked signal mask is inherited across fork(), so that the
+ * parent's mask guards children from receiving some signals until ready.
+ */
+START_LOOP_TEST(procmask_and_fork, iter, 0, 1)
+{
+	const bool unblock_sigint = !!(iter & 1);
+	diag("unblock_sigint=%s", btos(unblock_sigint));
+	plan_tests(2);
+
+	todo_start("fork_subtest_start testbed");
+
+	int_got = 0;
+	struct sigaction act = { .sa_handler = &ks_sigint_handler };
+	int n = sigaction(SIGINT, &act, NULL);
+	fail_unless(n == 0);
+
+	/* block SIGINT. */
+	sigset_t sigint_set, oldset;
+	sigemptyset(&sigint_set);
+	if(!unblock_sigint) sigaddset(&sigint_set, SIGINT);
+	n = sigprocmask(SIG_BLOCK, &sigint_set, &oldset);
+	fail_unless(n == 0);
+	ok1(!sigismember(&oldset, SIGINT));
+
+	int child = fork_subtest_start("child sigprocmask(2)") {
+		plan_tests(5);
+		int first_got = int_got;
+		usleep(5 * 1000);
+		int second_got = int_got;
+		n = sigprocmask(SIG_SETMASK, &oldset, NULL);
+		usleep(5 * 1000);
+		if(!ok1(n == 0)) diag("child sigprocmask failed, errno=%d", errno);
+		ok(int_got > 0, "got signal");	/* move zig */
+		imply_ok(!unblock_sigint, first_got == second_got,
+			"when blocked, signaled between fork and unmask");
+		imply_ok(!unblock_sigint, int_got > second_got,
+			"when blocked, signaled after unmask");
+		imply_ok(unblock_sigint, int_got == second_got,
+			"when not blocked, signaled before unmask");
+	} fork_subtest_end;
+
+	n = sigprocmask(SIG_SETMASK, &oldset, NULL);
+	fail_unless(n == 0);
+
+	n = kill(child, SIGINT);
+	fail_unless(n == 0);
+
+	fork_subtest_wait(child);
+}
+END_TEST
+
+DECLARE_TEST("process:signal", procmask_and_fork);
