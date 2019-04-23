@@ -162,6 +162,7 @@ void unlock_uapi(void)
 static void free_threadno(L4_ThreadId_t tid)
 {
 	int map = L4_ThreadNo(tid) >> 16, bit = L4_ThreadNo(tid) & 0xffff;
+	assert(!bitmap_test_bit(tno_free_maps[map], bit));
 	bitmap_set_bit(tno_free_maps[map], bit);
 	tno_free_counts[map]++;
 	assert(tno_free_counts[map] <= TNOS_PER_BITMAP);
@@ -323,6 +324,8 @@ L4_ThreadId_t allocate_thread(int pid, void **utcb_loc_p)
 	int bit = bitmap_ffs(tno_free_maps[map], 0, TNOS_PER_BITMAP);
 	assert(bit < TNOS_PER_BITMAP);
 	bitmap_clear_bit(tno_free_maps[map], bit);
+	assert(tno_free_counts[map] > 0);
+	tno_free_counts[map]--;
 
 	L4_ThreadId_t tid = L4_GlobalId(map << 16 | bit,
 		IS_SYSTASK(pid) ? (pid - SNEKS_MIN_SYSID) << 2 | 2
@@ -343,6 +346,8 @@ L4_ThreadId_t allocate_thread(int pid, void **utcb_loc_p)
 			L4_Address(ta->base.utcb_area), L4_Size(ta->base.utcb_area));
 #endif
 		bitmap_set_bit(tno_free_maps[map], bit);
+		tno_free_counts[map]++;
+		assert(tno_free_counts[map] <= TNOS_PER_BITMAP);
 		return L4_nilthread;
 	}
 	bitmap_clear_bit(task->utcb_free, utcb_slot);
