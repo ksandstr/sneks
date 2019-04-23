@@ -41,4 +41,12 @@ enum {
 extern unsigned int sleep(unsigned int seconds);
 extern int usleep(__useconds_t usec);
 
+extern __uid_t getuid(void);
+extern __uid_t geteuid(void);
+
+extern int setuid(__uid_t uid);
+extern int seteuid(__uid_t uid);
+extern int setreuid(__uid_t real_uid, __uid_t eff_uid);
+extern int setresuid(__uid_t real_uid, __uid_t eff_uid, __uid_t saved_uid);
+
 #endif

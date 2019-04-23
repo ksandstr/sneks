@@ -14,6 +14,8 @@ typedef int32_t pid_t;
 
 typedef int32_t idtype_t, id_t;
 
+typedef uint32_t __uid_t, __gid_t;
+
 /* ... and others */
 
 #endif
