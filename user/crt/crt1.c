@@ -158,6 +158,7 @@ int __crt1_entry(uintptr_t fdlistptr)
 	/* printf() works after this line only. otherwise, use
 	 * L4_KDB_PrintString() w/ fingers crossed.
 	 */
+	__init_crt_cached_creds();
 
 	extern int main(int argc, char *argv[], char *envp[]);
 	return main(n_args,

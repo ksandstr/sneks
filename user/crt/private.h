@@ -43,4 +43,8 @@ extern void __sig_bottom(void);
 extern void __attribute__((regparm(3))) __sig_invoke(int sig);
 
 
+/* from uid.c */
+extern void __init_crt_cached_creds(void);
+
+
 #endif
