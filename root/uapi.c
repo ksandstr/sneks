@@ -1054,7 +1054,15 @@ static int uapi_kill(int pid, int sig)
 	if(p == NULL) return -ESRCH;
 
 	int sender_pid = pidof_NP(muidl_get_sender());
-	if(!IS_SYSTASK(sender_pid) && p->ppid != sender_pid && pid != sender_pid) {
+	struct process *sender = get_process(sender_pid);
+	/* TODO: also permit SIGCONT within session. */
+	if(!IS_SYSTASK(sender_pid)
+		&& sender->eff_uid != 0
+		&& sender->real_uid != p->real_uid
+		&& sender->real_uid != p->saved_uid
+		&& sender->eff_uid != p->real_uid
+		&& sender->eff_uid != p->saved_uid)
+	{
 		return -EPERM;
 	}
 

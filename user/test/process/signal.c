@@ -374,7 +374,6 @@ START_LOOP_TEST(kill_permissions, iter, 0, 127)
 		btos(rc_real), btos(rc_eff), btos(rc_saved));
 
 	plan_tests(5);
-	if(!from_root) todo_start("sometimes fails");
 
 	int_got = 0;
 	struct sigaction act = { .sa_handler = &ks_sigint_handler };
