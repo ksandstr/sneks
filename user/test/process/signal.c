@@ -285,15 +285,15 @@ END_TEST
 DECLARE_TEST("process:signal", pause_basic);
 
 
-/* error returns from kill(2). */
+/* error returns from kill(2).
+ * TODO: fill the rest in which e.g. kill_permissions doesn't cover.
+ */
 START_TEST(kill_error)
 {
-	plan_tests(4);
+	plan_tests(2);
 
 	ok1(kill(getpid(), -1) < 0 && errno == EINVAL);
 	ok1(kill(getpid(), 12345) < 0 && errno == EINVAL);
-	ok1(kill(getpid() ^ 12345, SIGINT) < 0 && errno == ESRCH);
-	ok1(kill(1, SIGINT) < 0 && errno == EPERM);
 }
 END_TEST
 
@@ -344,6 +344,84 @@ START_TEST(kill_zero)
 END_TEST
 
 DECLARE_TEST("process:signal", kill_zero);
+
+
+/* test that kill(2) is able to send to anyone if the caller is root, when
+ * sender's real or effective uid matches recipient's real or saved uid, and
+ * fails with EPERM otherwise.
+ *
+ * variables:
+ *   - [from_root] whether signal is sent from uid 0.
+ *   - [change_real, change_eff, change_saved] whether sender should have
+ *     different UID in the respective field when sending the signal.
+ *   - [rc_{real,eff,saved}] same for the receiver side
+ */
+START_LOOP_TEST(kill_permissions, iter, 0, 127)
+{
+	if(getuid() != 0) {
+		plan_skip_all("root access required (for setuid)");
+		return;
+	}
+
+	const bool from_root = !!(iter & 1),
+		change_real = !!(iter & 2), change_eff = !!(iter & 4),
+		change_saved = !!(iter & 8),
+		rc_real = !!(iter & 16), rc_eff = !!(iter & 32),
+		rc_saved = !!(iter & 64);
+	diag("from_root=%s, change_real=%s, _eff=%s, _saved=%s", btos(from_root),
+		btos(change_real), btos(change_eff), btos(change_saved));
+	diag("  rc_real=%s, rc_eff=%s, rc_saved=%s",
+		btos(rc_real), btos(rc_eff), btos(rc_saved));
+
+	plan_tests(5);
+	if(!from_root) todo_start("sometimes fails");
+
+	int_got = 0;
+	struct sigaction act = { .sa_handler = &ks_sigint_handler };
+	int n = sigaction(SIGINT, &act, NULL);
+	fail_unless(n == 0);
+
+	sigset_t sigint_set, oldset;
+	sigemptyset(&sigint_set);
+	sigaddset(&sigint_set, SIGINT);
+	n = sigprocmask(SIG_BLOCK, &sigint_set, &oldset);
+	fail_unless(n == 0);
+
+	int receiver = fork_subtest_start("signal receiver") {
+		plan_tests(2);
+		n = setresuid(rc_real ? 2222 : 1000, rc_eff ? 2222 : 1000,
+			rc_saved ? 2222 : 1000);
+		if(!ok1(n == 0)) diag("receiver's setresuid: errno=%d", errno);
+		int got_before = int_got;
+		n = sigprocmask(SIG_SETMASK, &oldset, NULL);
+		fail_unless(n == 0);
+		usleep(5 * 1000);
+		int got_after = int_got;
+		const bool signaled = got_before < got_after;
+		imply_ok1(!signaled, !from_root);
+	} fork_subtest_end;
+
+	if(!from_root) {
+		n = setresuid(change_real ? 1111 : 1000,
+			change_eff ? 1111 : 1000, change_saved ? 1111 : 1000);
+		fail_unless(n == 0);
+	}
+	usleep(2 * 1000);
+	n = kill(receiver, SIGINT);
+	if(!ok1(n == 0 || (n < 0 && errno == EPERM))) {
+		diag("errno=%d", errno);
+	}
+	ok1(kill(receiver, 0) == n);	/* carpet matches the drapes */
+	fork_subtest_wait(receiver);
+
+	const bool signaled = (n == 0);
+	imply_ok1(!signaled, !from_root);
+	iff_ok1(signaled, from_root
+		|| ((!change_real || !change_eff) && (!rc_real || !rc_saved)));
+}
+END_TEST
+
+DECLARE_TEST("process:signal", kill_permissions);
 
 
 /* the most basic test of sigprocmask(2) and sigpending(2): does masking
