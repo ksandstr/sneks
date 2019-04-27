@@ -398,7 +398,26 @@ static void zombify(struct process *p)
 	task_common_dtor(&p->task);
 
 	struct process *parent = get_process(p->ppid);
-	assert(parent != NULL);		/* FIXME: handle death of init */
+	if(parent == NULL) {
+		/* FIXME holy shit move this into a header */
+		extern NORETURN void panic(const char *croak);
+		int pid = ra_ptr2id(ra_process, p);
+		if(pid == 1) {
+			printf("init died? exitcode=%#08x\n", p->code);
+			panic("it's wholly improper for init(8) to exit (not syncing)");
+		} else {
+			if(p->ppid != 0) {
+				printf("warning: exiting pid=%d had ->ppid=%d, which doesn't exist\n",
+					pid, p->ppid);
+			}
+			/* reparent it to init, see what happens. */
+			p->ppid = 1;
+			parent = get_process(1);
+			if(parent == NULL) panic("no init? shame on you");
+			assert(parent != p);	/* roll along, ouroboros */
+		}
+	}
+
 	/* NOTE: there's a question about whether sigchld should be sent when the
 	 * exiting child is immediately caught in a waitid(). sneks does, because
 	 * SIGCHLD handlers are supposed to use WNOHANG and deal with spurious
@@ -764,7 +783,6 @@ static int uapi_spawn(
 	const L4_Word_t *fd_cookies, unsigned fd_cookies_len,
 	const int32_t *fd_fds, unsigned fd_fds_len)
 {
-	printf("%s: entered! filename=`%s'\n", __func__, filename);
 	assert(!L4_IsNilThread(vm_tid));
 
 	int newpid;
@@ -780,6 +798,7 @@ static int uapi_spawn(
 		 */
 		p->real_uid = p->eff_uid = p->saved_uid = 0;
 		/* TODO: same for gids */
+		p->ppid = 0;
 	} else {
 		struct process *parent = get_process(pidof_NP(caller));
 		if(parent == NULL) {
@@ -796,6 +815,7 @@ static int uapi_spawn(
 		/* TODO: saved_uid, same for gid. or maybe stick 'em in a struct and
 		 * assign that.
 		 */
+		p->ppid = pidof_NP(caller);
 	}
 
 	int n = __vm_fork(vm_tid, 0, newpid);
@@ -830,9 +850,6 @@ static int uapi_spawn(
 	p->task.utcb_area = L4_Fpage(resv_start, ua_size);
 	p->task.kip_area = L4_Fpage(resv_start + ua_size,
 		L4_KipAreaSize(the_kip));
-	printf("%s: utcb_area=%#lx:%#lx, kip_area=%#lx:%#lx\n", __func__,
-		L4_Address(p->task.utcb_area), L4_Size(p->task.utcb_area),
-		L4_Address(p->task.kip_area), L4_Size(p->task.kip_area));
 	darray_init(p->task.threads);
 	p->task.utcb_free = alloc_utcb_bitmap(p->task.utcb_area);
 	if(p->task.utcb_free == NULL) {
