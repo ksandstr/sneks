@@ -3,23 +3,24 @@
 # utility script for execution of sneks' test suites in serial console mode.
 # used by test reporting, manual testing, and derived utility scripts. passes
 # $SYSTEST_OPTS down as command-line arguments to systest and $UTEST_OPTS to
-# the userspace testsuite (executed as init(8)), and further command line
+# the userspace testsuite (executed by init(8)), and further command line
 # arguments to `kvm'.
 
 MUNG="../mung"
 
-INITRD_TAIL=""
+INITRD_TAIL=" init=/initrd/sbin/init"
 if [ -n "$UTEST_OPTS" ] || [ -z "$SYSTEST" ]; then
-	PACK_UTEST_OPTS=`echo $UTEST_OPTS | sed 's/ /;/g'`
-	if [ -n "$PACK_UTEST_OPTS" ]; then
-		PACK_UTEST_OPTS=";$PACK_UTEST_OPTS"
+	PACK_INIT_OPTS=`echo $UTEST_OPTS | sed 's/ /&/g'`
+	if [ -n "$PACK_INIT_OPTS" ]; then
+		PACK_INIT_OPTS=";--setenv=UTEST_OPTS=$PACK_INIT_OPTS"
 	fi
-	INITRD_TAIL=" init=/initrd/user/testsuite$PACK_UTEST_OPTS"
+	# 6 runs testsuite and waits for it to complete.
+	INITRD_TAIL="${INITRD_TAIL}$PACK_INIT_OPTS;6"
 fi
 
 # systests can be run with "SYSTEST=1 ./run.sh yada yada"
 SYSTEST_PART=""
-if [ -n "$SYSTEST_OPTS" ] || [ -n "$SYSTEST" ]; then
+if [ -n "$SYSTEST" ]; then
 	INITRD_TAIL="${INITRD_TAIL} waitmod=systest"
 	SYSTEST_PART=",sys/test/systest $SYSTEST_OPTS"
 fi

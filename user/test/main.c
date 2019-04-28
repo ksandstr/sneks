@@ -54,7 +54,7 @@ static const struct opt_table opts[] = {
 };
 
 
-int main(int argc, char *argv[])
+int main(int argc, char *argv[], char *envp[])
 {
 	printf("hello, world!\n");
 
@@ -67,6 +67,41 @@ int main(int argc, char *argv[])
 	if(!opt_parse(&argc, argv, &ignore_opt_error)) {
 		printf("*** option parsing failed!\n");
 		return 1;
+	}
+
+	/* TODO: use getenv() once crt1.c works its spawn environment issue
+	 * out.
+	 */
+#if 1
+	char *envargs = NULL;
+	for(int i=0; envp[i] != NULL; i++) {
+		if(strncmp(envp[i], "UTEST_OPTS=", 11) == 0) {
+			envargs = envp[i] + 11;
+			break;
+		}
+	}
+#else
+	char *envargs = getenv("UTEST_OPTS");
+#endif
+	if(envargs != NULL) {
+		/* parse a second set of arguments from UTEST_OPTS. these are
+		 * separated by ampersands.
+		 */
+		envargs = strdup(envargs);	/* leak like a boss */
+		darray(char *) other_argv = darray_new();
+		darray_push(other_argv, argv[0]);
+		while(*envargs != '\0') {
+			char *sep = envargs + strcspn(envargs, "&");
+			if(*sep == '&') *(sep++) = '\0';
+			darray_push(other_argv, envargs);
+			envargs = sep;
+		}
+		int other_argc = other_argv.size;
+		if(!opt_parse(&other_argc, other_argv.item, &ignore_opt_error)) {
+			printf("*** UTEST_OPTS parsing failed!\n");
+			return 1;
+		}
+		darray_free(other_argv);
 	}
 
 	if(do_describe) describe_all_tests();

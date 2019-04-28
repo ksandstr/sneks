@@ -161,6 +161,10 @@ int __crt1_entry(uintptr_t fdlistptr)
 	__init_crt_cached_creds();
 
 	extern int main(int argc, char *argv[], char *envp[]);
+	/* FIXME: stick the unpacked argpage into putenv() one at a time, once
+	 * either lib/env.c drops the htable requirement or lib/ starts including
+	 * htable. for now, spawn environment doesn't show up in getenv().
+	 */
 	return main(n_args,
 		unpack_argpage(args_base, argbuflen, n_args, false),
 		unpack_argpage(envs_base, envbuflen, n_envs, true));

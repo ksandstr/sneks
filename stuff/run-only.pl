@@ -78,6 +78,7 @@ if($test_user) {
 } else {
 	die unless $test_system;
 	$envvar = "SYSTEST_OPTS";
+	$ENV{SYSTEST} = 1;
 }
 $ENV{$envvar} = "--run-only=" . join('+', map { combine_spec($_) } @tests);
 print STDERR "$envvar <- $ENV{$envvar}\n" if $verbose;

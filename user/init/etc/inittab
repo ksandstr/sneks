@@ -1,0 +1,4 @@
+id:2:initdefault:
+
+# sneks in-development runlevels
+l7:6:wait:/initrd/user/testsuite
