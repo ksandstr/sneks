@@ -32,6 +32,7 @@ extern L4_ThreadId_t __main_tid;
 
 /* what file descriptors index into. */
 extern struct __sneks_file *__files;
+extern int __max_valid_fd;	/* inclusive, < 0 before init */
 
 
 struct sneks_fdlist;

@@ -7,6 +7,7 @@
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <ccan/darray/darray.h>
 
 #include <l4/types.h>
 #include <l4/thread.h>
@@ -16,6 +17,32 @@
 
 #include "proc-defs.h"
 #include "private.h"
+
+
+/* copypasta'd from sys/crt/misc.c .
+ * TODO: deduplicate them somewhere.
+ */
+#define RECSEP 0x1e	/* ASCII record separator control character. whee! */
+
+static char *p_to_argbuf(char *const strp[])
+{
+	size_t sz = 128;
+	char *buf = malloc(sz), *pos = buf;
+	for(int i=0; strp[i] != NULL; i++) {
+		int len = strlen(strp[i]);
+		if(len + 1 > sz - (pos - buf)) {
+			sz *= 2;
+			int off = pos - buf;
+			buf = realloc(buf, sz);
+			pos = buf + off;
+		}
+		memcpy(pos, strp[i], len);
+		pos[len] = strp[i + 1] == NULL ? '\0' : RECSEP;
+		pos += len + 1;
+	}
+	if(strp[0] == NULL) *(pos++) = '\0';
+	return realloc(buf, pos - buf + 1);
+}
 
 
 int getpid(void) {
@@ -42,6 +69,40 @@ int atexit(void (*fn)(void))
 {
 	/* failure: implementation missing (oopsie) */
 	return -1;
+}
+
+
+/* copypasta'd from sys/crt/misc.c , caveats apply */
+int spawn_NP(const char *filename, char *const argv[], char *const envp[])
+{
+	char *args = p_to_argbuf(argv), *envs = p_to_argbuf(envp);
+	uint16_t pid = 0;
+	/* app shitcode ahoy!
+	 *
+	 * FIXME: also, don't propagate all the file descriptors. that's silly.
+	 * stdout, stdin, stderr should suffice. however since sneks doesn't
+	 * really have any file descriptors besides those three, this'll do for
+	 * now.
+	 */
+	darray(int32_t) fds = darray_new();
+	darray(L4_Word_t) cookies = darray_new(), servs = darray_new();
+	for(int i=0; i <= __max_valid_fd; i++) {
+		if(!IS_FD_VALID(i)) continue;
+		darray_push(fds, i);
+		darray_push(cookies, FD_COOKIE(i));
+		darray_push(servs, FD_SERVICE(i).raw);
+	}
+	int n = __proc_spawn(__the_sysinfo->api.proc, &pid, filename, args, envs,
+		servs.item, servs.size, cookies.item, cookies.size,
+		fds.item, fds.size);
+	free(args); free(envs);
+	darray_free(fds); darray_free(cookies); darray_free(servs);
+	if(n != 0) {
+		errno = n > 0 ? -EIO : -n;
+		return -1;
+	}
+
+	return pid;
 }
 
 

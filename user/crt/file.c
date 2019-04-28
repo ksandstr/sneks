@@ -14,26 +14,25 @@
 
 /* NOTE: statically allocated when max_valid_fd < 8. */
 struct __sneks_file *__files = NULL;
-
-static int max_valid_fd = -1;	/* valid as in memory, not IS_FD_VALID() */
+int __max_valid_fd = -1;	/* valid as in memory, not IS_FD_VALID() */
 
 
 /* this isn't as much cold as init-only. */
 COLD void __file_init(struct sneks_fdlist *fdlist)
 {
 	if(fdlist == NULL) return;
-	assert(max_valid_fd < 0);
+	assert(__max_valid_fd < 0);
 
 	static struct __sneks_file first_files[8];
 	if(fdlist == NULL || fdlist->fd < ARRAY_SIZE(first_files)) {
-		max_valid_fd = ARRAY_SIZE(first_files) - 1;
+		__max_valid_fd = ARRAY_SIZE(first_files) - 1;
 		__files = first_files;
 		for(int i=0; i < ARRAY_SIZE(first_files); i++) {
 			first_files[i] = (struct __sneks_file){ };
 		}
 	} else {
-		max_valid_fd = fdlist->fd;
-		__files = calloc(max_valid_fd + 1, sizeof *__files);
+		__max_valid_fd = fdlist->fd;
+		__files = calloc(__max_valid_fd + 1, sizeof *__files);
 		if(__files == NULL) abort();	/* callstack breadcrumbs > segfault */
 	}
 	int prev = fdlist->fd;
