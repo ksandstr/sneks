@@ -21,7 +21,7 @@ fi
 # systests can be run with "SYSTEST=1 ./run.sh yada yada"
 SYSTEST_PART=""
 if [ -n "$SYSTEST" ]; then
-	INITRD_TAIL="${INITRD_TAIL} waitmod=systest"
+	INITRD_TAIL="${INITRD_TAIL} latewaitmod=systest"
 	SYSTEST_PART=",sys/test/systest $SYSTEST_OPTS"
 fi
 

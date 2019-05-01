@@ -1418,6 +1418,36 @@ static COLD void configure_uapi(L4_Fpage_t sm_kip, L4_Fpage_t sm_utcb)
 }
 
 
+/* run specified boot module as a systask and wait for it to complete, as
+ * determined by its main thread becoming unavailable. @stem is prefixed to
+ * "waitmod" to fetch the list of modules from @root_args.
+ *
+ * TODO: run multiway modules as well; one after another.
+ */
+static COLD void run_waitmods(struct htable *root_args, const char *stem)
+{
+	if(stem == NULL) stem = "";
+	char arg[16 + strlen(stem)];
+	snprintf(arg, sizeof arg, "%swaitmod", stem);
+	const char *waitmod = get_root_arg(root_args, arg);
+	if(waitmod == NULL) return;
+
+	L4_ThreadId_t wm_tid = spawn_systask(waitmod, NULL);
+	if(!L4_IsNilThread(wm_tid)) {
+		/* wait until it's been removed, indicating completion. */
+		L4_MsgTag_t tag;
+		do {
+			L4_Accept(L4_UntypedWordsAcceptor);
+			tag = L4_Receive(wm_tid);
+		} while(L4_IpcSucceeded(tag));
+		if(L4_ErrorCode() != 5) {
+			printf("%swaitmod exit check failed, ec=%lu\n", stem, L4_ErrorCode());
+			abort();
+		}
+	}
+}
+
+
 int main(void)
 {
 	printf("hello, world!\n");
@@ -1507,30 +1537,6 @@ int main(void)
 		.memory.biggest_page_log2 = PAGE_BITS,
 	};
 
-	/* run specified boot module as a systask and wait for it to complete, as
-	 * determined by its main thread becoming unavailable.
-	 */
-	/* TODO: remove this feature when systests aren't enabled using a
-	 * compiletime switch.
-	 */
-	/* TODO: run multiway modules as well; one after another. */
-	const char *waitmod = get_root_arg(&root_args, "waitmod");
-	if(waitmod != NULL) {
-		L4_ThreadId_t wm_tid = spawn_systask(waitmod, NULL);
-		if(!L4_IsNilThread(wm_tid)) {
-			/* wait until it's been removed, indicating completion. */
-			L4_MsgTag_t tag;
-			do {
-				L4_Accept(L4_UntypedWordsAcceptor);
-				tag = L4_Receive(wm_tid);
-			} while(L4_IpcSucceeded(tag));
-			if(L4_ErrorCode() != 5) {
-				printf("systest exit ipc failed, ec=%lu\n", L4_ErrorCode());
-				abort();
-			}
-		}
-	}
-
 	/* launch init.
 	 * TODO: when init exits, reboot or shutdown according to its exit code
 	 * (or some such).
@@ -1543,6 +1549,8 @@ int main(void)
 	} else if(init_pid != 1) {
 		panic("init's pid isn't 1? what in tarnation");
 	}
+
+	run_waitmods(&root_args, "late");
 
 	printf("*** root entering service mode\n");
 	static const struct root_serv_vtable vtab = {
