@@ -23,9 +23,6 @@
 START_TEST(mmap_errors)
 {
 	plan_tests(2);
-#ifdef __sneks__
-	todo_start("not in sneks yet");
-#endif
 
 	/* should reject MAP_PRIVATE | MAP_SHARED. */
 	void *ptr = mmap(NULL, sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE,
@@ -58,10 +55,6 @@ START_LOOP_TEST(mmap_basic, iter, 0, 3)
 	diag("page_size=%d, addr_from_sbrk=%s, is_shared=%s", page_size,
 		btos(addr_from_sbrk), btos(is_shared));
 	plan_tests(4);
-
-#ifdef __sneks__
-	todo_start("not in sneks yet");
-#endif
 
 	const int map_size = 16 * page_size;
 
@@ -102,9 +95,6 @@ START_LOOP_TEST(mmap_across_fork, iter, 0, 1)
 	const bool is_private = !!(iter & 1);
 	diag("is_private=%s", btos(is_private));
 	plan_tests(2);
-#ifdef __sneks__
-	todo_start("pls no step on snek");
-#endif
 
 	char *area = mmap(NULL, sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE,
 		MAP_ANONYMOUS | (is_private ? MAP_PRIVATE : MAP_SHARED), -1, 0);
@@ -162,9 +152,6 @@ START_LOOP_TEST(munmap_geometry_shrapnel, iter, 0, 63)
 		btos(pad_front), btos(pad_rear), btos(lap_front), btos(lap_rear),
 		num_under);
 	plan_tests(1);
-#ifdef __sneks__
-	todo_start("crummy?");
-#endif
 
 	const int page_size = sysconf(_SC_PAGESIZE);
 	void *const base = sbrk(0),

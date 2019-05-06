@@ -1,7 +1,17 @@
 
-/* systemspace POSIX-like virtual memory server. */
+/* systemspace POSIX-like virtual memory server.
+ *
+ * note that this is currently a single-threaded implementation, with some
+ * lf/wf primitives mixed into the design even when they're not being used.
+ * the idea is that once mung gets MP and muidl becomes multithreaded,
+ * reworking vm to behave regardless of concurrency will be that much of a
+ * smaller job, and that using epochs before MP should expose problems with
+ * collection speed, usage issues, etc.
+ */
 
 #define VMIMPL_IMPL_SOURCE
+//#define TRACE_FAULTS 1
+//#define TRACE_FORK 1
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,12 +27,15 @@
 #include <ccan/array_size/array_size.h>
 #include <ccan/likely/likely.h>
 #include <ccan/container_of/container_of.h>
+#include <ccan/darray/darray.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
 #include <l4/space.h>
+#include <l4/kip.h>
 
 #include <ukernel/rangealloc.h>
+#include <ukernel/memdesc.h>
 #include <sneks/mm.h>
 #include <sneks/bitops.h>
 #include <sneks/rbtree.h>
@@ -42,21 +55,40 @@
 
 
 #ifndef TRACE_FAULTS
-#define TRACE_FAULTS 0
+#define TRACE_FAULT(...)
+#else
+#define TRACE_FAULT(...) printf(__VA_ARGS__)
 #endif
 
 
 struct pl;
 
+typedef darray(struct pl *) plbuf;
 
-/* flags etc. in vp->vaddr's low 12 bits */
+
+/* flags etc. in vp->vaddr's low 12 bits:
+ *   - VPM_RIGHTS covers L4.X2 access bits in the low 3. see VPF_COW.
+ *   - VPF_SHARED: contents in the page cache.
+ *   - VPF_ANON: contents not backed by a file.
+ *   - VPF_COW write faults to this page are processed copy-on-write.
+ *     exclusive with L4_Writable.
+ */
 #define VPM_RIGHTS 0x7
-#define VPF_COW 0x8
+#define VPF_SHARED 0x8
+#define VPF_ANON 0x10
+#define VPF_COW 0x20
 
 
 /* bitfield accessors. */
 #define VP_RIGHTS(vp) ((vp)->vaddr & 7)	/* low 3 = rwx */
-#define VP_IS_COW(vp) (((vp)->vaddr & VPF_COW) != 0)
+#define VP_IS_SHARED(vp) !!((vp)->vaddr & VPF_SHARED)
+#define VP_IS_ANON(vp) !!((vp)->vaddr & VPF_ANON)
+#define VP_IS_COW(vp) !!((vp)->vaddr & VPF_COW)
+
+/* access of <struct pl>'s fsid_ino . */
+#define PL_FSID(pl) ((pl)->fsid_ino >> 48)
+#define PL_INO(pl) ((pl)->fsid_ino & ~0xffff000000000000ull)
+#define PL_IS_PRIVATE(pl) ((pl)->fsid_ino == 0)
 
 
 struct vp;
@@ -72,14 +104,6 @@ struct pp
 	/* frame number implied via pp_ra. */
 	struct pl *_Atomic link;
 	struct vp *_Atomic owner;	/* primary owner. see share_table. */
-
-	/* for pagecache pages only.
-	 * (TODO: move into <struct pl> since these are set when list membership
-	 * changes.)
-	 */
-	unsigned long fsid;
-	uint64_t ino;
-	uint32_t offset;	/* limits files to 16 TiB each */
 };
 
 
@@ -87,7 +111,22 @@ struct pp
 struct pl {
 	struct nbsl_node nn;
 	uint32_t page_num;
+	/* NOTE: this appears to be mostly unused. use it for something, then. */
 	_Atomic uint32_t status;
+
+	/* for pagecache pages: those backed by files and either shared or
+	 * copy-on-written, and anonymous pages part of a shared-memory mapping.
+	 *
+	 * fsid_ino has the filesystem ID in the top 16 bits and a per-filesystem
+	 * value in the lower 48, typically an inode number. fsid is pidof_NP() of
+	 * filesystem, or vm for anonymous memory.
+	 *
+	 * these fields may be written in the structure received from
+	 * get_free_pl(), because that structure will only be phantom up the
+	 * freelist where these fields are ignored.
+	 */
+	uint64_t fsid_ino;
+	uint32_t offset;	/* limits files to 16 TiB each */
 };
 
 
@@ -103,7 +142,8 @@ struct pl {
  * flags are assigned in ->vaddr's low 12 bits as follows:
  *   - 2..0 are a mask of L4_Readable, L4_Writable, and L4_eXecutable,
  *     designating the access granted to the associated address space.
- *   - bits 11..3 are not used and should be left clear.
+ *   - bit 3 indicates copy-on-write sharing.
+ *   - bits 11..4 are not used and should be left clear.
  */
 struct vp {
 	uintptr_t vaddr;	/* vaddr in 31..12, flags in 11..0 */
@@ -118,9 +158,11 @@ struct vp {
 struct vm_space
 {
 	L4_Fpage_t kip_area, utcb_area, sysinfo_area;
-	struct htable pages;	/* in vm_space.pages with hash_vp_by_vaddr() */
+	struct htable pages;	/* <struct vp *> with hash_vp_by_vaddr() */
 	struct rb_root maps;	/* lazy_mmap per range of addr and length */
+	struct rb_root as_free;	/* as_free per non-overlapping ->fp */
 	L4_Word_t brk;			/* top of non-mmap heap */
+	L4_Word_t mmap_bot;		/* bottom of as_free range */
 };
 
 
@@ -134,16 +176,44 @@ struct lazy_mmap
 	uintptr_t addr;
 	size_t length;
 	long flags;			/* see main comment wrt rights */
+
+	/* for pagecache access.
+	 *
+	 * when backed by a file, the three reference a filesystem service, an
+	 * inode number, and a page offset within that file.
+	 *
+	 * when anonymous, ->fd_serv is VM's sysid, ->ino is zero for private maps
+	 * and an anonymous mapping ID when the map is shared. offset is nonzero
+	 * in tail fragment mmaps caused by munmap().
+	 */
 	L4_ThreadId_t fd_serv;
-	L4_Word_t fd;
+	uint64_t ino;
 	size_t offset;
 };
 
 
+/* chunk of free address space in vm_space.as_free . */
+struct as_free {
+	struct rb_node rb;
+	L4_Fpage_t fp;
+};
+
+
+#define flush_plbuf(pls) do { \
+		remove_active_pls((pls)->item, (pls)->size); \
+		darray_free(*(pls)); \
+	} while(0)
+
+
 static size_t hash_vp_by_phys(const void *ptr, void *priv);
+static void remove_vp(struct vp *vp, plbuf *plbuf);
+static void remove_active_pls(struct pl **pls, int n_pls);
 
 static size_t pp_first;
 static struct rangealloc *pp_ra, *vm_space_ra;
+static L4_Word_t user_addr_max;
+
+static _Atomic unsigned long next_anon_ino = 1;
 
 /* all of these contain <struct pl> alone. */
 static struct nbsl page_free_list = NBSL_LIST_INIT(page_free_list),
@@ -151,6 +221,12 @@ static struct nbsl page_free_list = NBSL_LIST_INIT(page_free_list),
 
 static struct htable share_table = HTABLE_INITIALIZER(
 	share_table, &hash_vp_by_phys, NULL);
+
+/* pagecache. */
+static uint32_t pc_salt[4];	/* init-once salt for hash_cached_page() */
+static struct nbsl *pc_buckets;
+static unsigned char n_pc_buckets_log2;
+#define n_pc_buckets (1u << n_pc_buckets_log2)
 
 L4_ThreadId_t __uapi_tid;
 
@@ -179,14 +255,6 @@ static size_t hash_vp_by_phys(const void *ptr, void *priv) {
 	return int_hash(v->status);
 }
 
-static bool cmp_vp_to_phys(const void *cand, void *key) {
-	const struct vp *v = cand;
-	assert(v->status != 0);
-	/* TODO: see above, same thing here */
-	uint32_t *page_num = key;
-	return v->status == *page_num;
-}
-
 
 /* FIXME: this should assert that the pp's link field points to @link. a
  * conditional version can return NULL if it doesn't (i.e. to spot when the
@@ -207,15 +275,101 @@ static struct pp *get_pp(uint32_t page_num) {
 static void push_page(struct nbsl *list, struct pl *oldlink)
 {
 	struct pl *nl = malloc(sizeof *nl);
-	*nl = (struct pl){
-		.page_num = oldlink->page_num,
-		.status = oldlink->status,
-	};
+	*nl = *oldlink;
 	atomic_store_explicit(&pl2pp(oldlink)->link, nl, memory_order_relaxed);
 	struct nbsl_node *top;
 	do {
 		top = nbsl_top(list);
 	} while(!nbsl_push(list, top, &nl->nn));
+}
+
+
+/* shooting a fly with a cannon, here */
+static size_t hash_cached_page(uint32_t a, uint32_t b, uint32_t c)
+{
+	return bob96bitmix(
+		bob96bitmix(pc_salt[0], pc_salt[1], a),
+		bob96bitmix(pc_salt[2], pc_salt[3], b),
+		c);
+}
+
+static size_t hash_lazy_mmap(const struct lazy_mmap *mm, int bump)
+{
+	return hash_cached_page(mm->offset + bump,
+		pidof_NP(mm->fd_serv) << 16 | ((mm->ino >> 32) & 0xffff),
+		mm->ino & 0xffffffffu);
+}
+
+
+/* insert copy of @oldlink under @lookup_top, or find an existing link, but
+ * either way stash it in *@cached_p.
+ *
+ * TODO: recycle the hash value from find_cached_page() as well.
+ */
+static int push_cached_page(
+	struct pl **cached_p,
+	struct nbsl_node *lookup_top, const struct pl *oldlink)
+{
+	size_t hash = hash_cached_page(oldlink->offset,
+		oldlink->fsid_ino >> 32, oldlink->fsid_ino & 0xffffffffu);
+	struct nbsl *list = &pc_buckets[hash & (n_pc_buckets - 1)];
+
+	struct pl *nl = malloc(sizeof *nl);
+	if(nl == NULL) return -ENOMEM;
+	*nl = *oldlink;
+	do {
+		struct nbsl_node *top = nbsl_top(list);
+		if(lookup_top != top) {
+			/* examine new nodes between first and @lookup_top. */
+			struct nbsl_iter it;
+			for(struct nbsl_node *cur = nbsl_first(list, &it);
+				cur != NULL && cur != lookup_top;
+				cur = nbsl_next(list, &it))
+			{
+				struct pl *cand = container_of(cur, struct pl, nn);
+				if(cand->fsid_ino == nl->fsid_ino
+					&& cand->offset == nl->offset)
+				{
+					*cached_p = cand;
+					free(nl);
+					return -EEXIST;
+				}
+			}
+			lookup_top = top;
+		}
+	} while(!nbsl_push(list, lookup_top, &nl->nn));
+
+	atomic_store(&pl2pp(oldlink)->link, nl);
+	*cached_p = nl;
+
+	return 0;
+}
+
+
+static struct pl *find_cached_page(
+	struct nbsl_node **top_p,
+	const struct lazy_mmap *mm, int bump)
+{
+	assert(top_p != NULL);
+
+	size_t hash = hash_lazy_mmap(mm, bump);
+	struct nbsl *bucket = &pc_buckets[hash & (n_pc_buckets - 1)];
+	struct nbsl_iter it;
+	for(struct nbsl_node *cur = *top_p = nbsl_first(bucket, &it);
+		cur != NULL;
+		cur = nbsl_next(bucket, &it))
+	{
+		struct pl *cand = container_of(cur, struct pl, nn);
+		if(PL_INO(cand) == mm->ino
+			&& cand->offset == mm->offset + bump
+			&& PL_FSID(cand) == pidof_NP(mm->fd_serv))
+		{
+			/* booya! */
+			return cand;
+		}
+	}
+
+	return NULL;
 }
 
 
@@ -273,6 +427,33 @@ static struct lazy_mmap *find_lazy_mmap(struct vm_space *sp, uintptr_t addr)
 }
 
 
+/* the silly bruteforce edit. */
+static struct lazy_mmap *first_lazy_mmap(
+	struct vm_space *sp, uintptr_t addr, size_t sz)
+{
+	struct rb_node *n = sp->maps.rb_node;
+	struct lazy_mmap *cand = NULL;
+	while(n != NULL) {
+		cand = rb_entry(n, struct lazy_mmap, rb);
+		if(addr < cand->addr) n = n->rb_left;
+		else if(addr >= cand->addr + cand->length) n = n->rb_right;
+		else return cand;
+	}
+	/* >> */
+	while(cand != NULL && addr + sz <= cand->addr) {
+		cand = container_of_or_null(__rb_next(&cand->rb),
+			struct lazy_mmap, rb);
+	}
+	/* << */
+	while(cand != NULL && addr >= cand->addr + cand->length) {
+		cand = container_of_or_null(__rb_prev(&cand->rb),
+			struct lazy_mmap, rb);
+	}
+	/* \o/ */
+	return cand;
+}
+
+
 static COLD void init_phys(L4_Fpage_t *phys, int n_phys)
 {
 	size_t p_min = ~0ul, p_max = 0;
@@ -286,7 +467,6 @@ static COLD void init_phys(L4_Fpage_t *phys, int n_phys)
 		(unsigned long)p_total, (unsigned long)p_min);
 	pp_first = p_min;
 
-	int eck = e_begin();
 	pp_ra = RA_NEW(struct pp, p_total);
 	for(int i=0; i < n_phys; i++) {
 		int base = (L4_Address(phys[i]) >> PAGE_BITS) - pp_first;
@@ -297,7 +477,7 @@ static COLD void init_phys(L4_Fpage_t *phys, int n_phys)
 			assert(ra_id2ptr(pp_ra, base + o) == pp);
 			struct pl *link = malloc(sizeof *link);
 			link->page_num = base + o;
-			atomic_store_explicit(&link->status, 0, memory_order_relaxed);
+			atomic_store(&link->status, 0);
 			atomic_store(&pp->link, link);
 			struct nbsl_node *top;
 			do {
@@ -305,7 +485,38 @@ static COLD void init_phys(L4_Fpage_t *phys, int n_phys)
 			} while(!nbsl_push(&page_free_list, top, &link->nn));
 		}
 	}
-	e_end(eck);
+	printf("vm: physical memory tracking initialized.\n");
+}
+
+
+static COLD void init_pc(const L4_Fpage_t *phys, int n_phys)
+{
+	uint64_t total_pages = 0;
+	for(int i=0; i < n_phys; i++) {
+		total_pages += L4_Size(phys[i]) / PAGE_SIZE;
+	}
+
+	/* pagecache bucket heads cost two words apiece, so we'll allocate one for
+	 * every 12 physical pages -- rounding up to nearest power of two.
+	 */
+	n_pc_buckets_log2 = size_to_shift(total_pages / 12);
+	pc_buckets = malloc(sizeof *pc_buckets * n_pc_buckets);
+	if(pc_buckets == NULL) {
+		printf("vm: can't allocate pagecache buckets???\n");
+		abort();
+	}
+	for(int i=0; i < n_pc_buckets; i++) nbsl_init(&pc_buckets[i]);
+
+	/* TODO: grab these off a random number generator when NDEBUG is defined,
+	 * but use stupid constants otherwise.
+	 */
+	pc_salt[0] = 0xdeadbeef;
+	pc_salt[1] = 0xcafebabe;
+	pc_salt[2] = 0xfeedface;
+	pc_salt[3] = 0x12345678;
+
+	printf("vm: page cache initialized with 2**%d (= %u) buckets\n",
+		n_pc_buckets_log2, n_pc_buckets);
 }
 
 
@@ -321,16 +532,128 @@ static inline int prot_to_l4_rights(int prot)
 }
 
 
+static L4_Word_t get_as_free(struct vm_space *sp, size_t length)
+{
+	/* TODO: search through sp->as_free in reverse for a chunk that fits
+	 * @length & carve it up.
+	 */
+	return 0;
+}
+
+
+/* split and remove lazy mmaps and vpages covered by @addr:@size. */
+static void munmap_space(struct vm_space *sp, L4_Word_t addr, size_t size)
+{
+	assert(e_inside());
+	assert(((addr | size) & PAGE_MASK) == 0);
+
+	/* carve up lazy mmaps */
+	for(struct lazy_mmap *cur = first_lazy_mmap(sp, addr, size), *next;
+		cur != NULL;
+		cur = next)
+	{
+		next = container_of_or_null(__rb_next(&cur->rb),
+			struct lazy_mmap, rb);
+		assert(cur->addr >= addr || cur->addr + cur->length > addr);
+		if(cur->addr >= addr + size) break;
+		if(cur->addr >= addr && cur->addr + cur->length <= addr + size) {
+			/* lazy_mmap entirely within range. remove it outright. */
+			__rb_erase(&cur->rb, &sp->maps);
+			e_free(cur);
+			continue;
+		} else if(cur->addr < addr && cur->addr + cur->length > addr + size) {
+			/* the other way around; shorten and add fragment for tail. */
+			struct lazy_mmap *tail = malloc(sizeof *tail);
+			if(tail == NULL) {
+				/* FIXME: handle this by popping ENOMEM and doing the virtual
+				 * page removal step for the range that was actually covered
+				 * in this loop.
+				 */
+				printf("vm:%s: out of memory\n", __func__);
+				abort();
+			}
+			*tail = *cur;	/* TODO: duplicate fds? */
+			tail->addr = addr + size;
+			tail->length = cur->length - (tail->addr - cur->addr);
+			cur->length = addr - cur->addr;
+			struct lazy_mmap *old = insert_lazy_mmap(sp, tail);
+			assert(old == NULL);
+		} else if(cur->addr < addr) {
+			/* overlap on the left. shorten existing map. */
+			assert(addr < cur->addr + cur->length);
+			cur->length = addr - cur->addr;
+		} else {
+			/* overlap on the right. move existing map up. */
+			assert(cur->addr + cur->length > addr + size);
+			assert(cur->addr < addr + size);
+			cur->length -= addr + size - cur->addr;
+			cur->addr = addr + size;
+		}
+	}
+
+	/* remove virtual pages. */
+	plbuf pls = darray_new();
+	for(L4_Word_t pos = addr; pos < addr + size; pos += PAGE_SIZE) {
+		size_t hash = int_hash(pos);
+		/* WIBNI there were a htable_get() that returned a copy of the
+		 * iterator that a subsequent htable_del() needn't iterate again?
+		 */
+		struct vp *v = htable_get(&sp->pages, hash, &cmp_vp_to_vaddr, &pos);
+		if(v == NULL) continue;
+		htable_del(&sp->pages, hash, v);
+		/* FIXME: status==0 is for lazy brk. remove it once lazy brk goes
+		 * away.
+		 */
+		if(v->status != 0) remove_vp(v, &pls);
+	}
+	flush_plbuf(&pls);
+
+	assert(first_lazy_mmap(sp, addr, size) == NULL);
+}
+
+
+static int reserve_mmap(
+	struct lazy_mmap *mm,
+	struct vm_space *sp, L4_Word_t address, size_t length)
+{
+	mm->length = (length + PAGE_SIZE - 1) & ~PAGE_MASK;
+	if(address != 0) {
+		/* TODO: find something "nearby" to addr. for now we'll catch overlap
+		 * thru insert_lazy_mmap() and undo, but this pops an error to the
+		 * client needlessly.
+		 */
+		mm->addr = (address + PAGE_SIZE / 2) & ~PAGE_MASK;
+	} else {
+		address = get_as_free(sp, mm->length);
+		if(address != 0) mm->addr = address;
+		else {
+			/* carve up more fresh address space. mm, delicious. */
+			/* FIXME: avoid utcb, kip, sysinfo */
+			mm->addr = sp->mmap_bot - mm->length + 1;
+			sp->mmap_bot -= mm->length;
+		}
+	}
+
+	struct lazy_mmap *old = insert_lazy_mmap(sp, mm);
+	if(old != NULL) {
+		/* TODO: turn this check into an assert once the error would be
+		 * caught or avoided further up.
+		 */
+
+		assert(address != 0);
+		/* FIXME: return as_free to pool (or remove this clause entirely) */
+		return -EEXIST;
+	}
+
+	return 0;
+}
+
+
 static int vm_mmap(
 	uint16_t target_pid, L4_Word_t *addr_ptr, uint32_t length,
 	int32_t prot, int32_t flags,
 	L4_Word_t fd_serv, L4_Word_t fd, uint32_t offset)
 {
-#if 0
-	printf("%s: target_pid=%u, addr=%#lx, length=%#x, offset=%u\n",
-		__func__, target_pid, *addr_ptr, length, offset);
-#endif
-
 	if(length == 0) return -EINVAL;
 	if((*addr_ptr | offset) & PAGE_MASK) return -EINVAL;
 	if((flags & MAP_PRIVATE) && (flags & MAP_SHARED)) return -EINVAL;
@@ -343,34 +666,24 @@ static int vm_mmap(
 	struct vm_space *sp = ra_id2ptr(vm_space_ra, target_pid);
 	if(sp->kip_area.raw == 0) return -EINVAL;
 
-	if(*addr_ptr != 0) {
-		/* TODO: cut addr, length up by kip_area, utcb_area, sbrk, and all the
-		 * existing maps.
-		 */
-	} else {
-		/* FIXME: assign *addr_ptr a good ways forward of the sbrk heap,
-		 * around existing reservations.
-		 */
-		printf("%s: allocating mmap not implemented\n", __func__);
-		return -ENOSYS;
-	}
 	struct lazy_mmap *mm = malloc(sizeof *mm);
 	if(mm == NULL) return -ENOMEM;
+	if(flags & MAP_ANONYMOUS) {
+		fd_serv = L4_MyGlobalId().raw;
+		fd = atomic_fetch_add(&next_anon_ino, 1);
+		offset = 0;
+	}
 	*mm = (struct lazy_mmap){
-		.addr = *addr_ptr,
-		.length = (length + PAGE_SIZE - 1) & ~PAGE_MASK,
 		.flags = flags | (prot_to_l4_rights(prot) << 16),
-		.fd_serv.raw = fd_serv, .fd = fd, .offset = offset,
+		.fd_serv.raw = fd_serv, .ino = fd, .offset = offset >> PAGE_BITS,
 	};
-	struct lazy_mmap *old = insert_lazy_mmap(sp, mm);
-	if(old != NULL) {
-		/* TODO: turn this check into an assert once addr, length is properly
-		 * cut up
-		 */
+	int n = reserve_mmap(mm, sp, *addr_ptr, length);
+	if(n < 0) {
 		free(mm);
-		return -EEXIST;
+		return n;
 	}
 
+	*addr_ptr = mm->addr;
 	return 0;
 }
 
@@ -380,7 +693,6 @@ static int vm_brk(L4_Word_t addr)
 	int sender_pid = pidof_NP(muidl_get_sender());
 	if(unlikely(sender_pid >= SNEKS_MAX_PID)) return -EINVAL;
 
-	printf("%s: sender_pid=%d, addr=%#lx\n", __func__, sender_pid, addr);
 	struct vm_space *sp = ra_id2ptr(vm_space_ra, sender_pid);
 	assert(!L4_IsNilFpage(sp->utcb_area));
 
@@ -404,7 +716,10 @@ static int vm_brk(L4_Word_t addr)
 				/* FIXME: roll back and error out */
 				abort();
 			}
-			*v = (struct vp){ .vaddr = a | L4_FullyAccessible, .age = 1 };
+			*v = (struct vp){
+				.vaddr = a | L4_FullyAccessible | VPF_ANON,
+				.age = 1,
+			};
 			assert(hash_vp_by_vaddr(v, NULL) == hash);
 			bool ok = htable_add(&sp->pages, hash, v);
 			if(unlikely(!ok)) {
@@ -420,20 +735,156 @@ static int vm_brk(L4_Word_t addr)
 }
 
 
-static int vm_munmap(L4_Word_t addr, uint32_t size)
+static bool has_shares(size_t hash, uint32_t page_num, int count)
 {
-	/* TODO */
-	return -ENOSYS;
+	struct htable_iter it;
+	for(struct vp *cur = htable_firstval(&share_table, &it, hash);
+		cur != NULL;
+		cur = htable_nextval(&share_table, &it, hash))
+	{
+		if(cur->status == page_num && --count <= 0) return true;
+	}
+	return false;
 }
 
 
-/* copy lazy_mmaps. */
+/* returns as htable_add(). */
+static bool add_share(uint32_t status, struct vp *share)
+{
+	/* TODO: handle other forms of vp->status as they appear. */
+	assert(~status & 0x80000000);	/* in physical memory */
+	struct pp *phys = get_pp(status);
+	struct vp *prev_owner = NULL;
+	if(atomic_compare_exchange_strong(&phys->owner, &prev_owner, share)) {
+		/* primary ownership taken. */
+		return true;
+	} else {
+		/* multiple ownership. */
+		return htable_add(&share_table, hash_vp_by_phys(share, NULL), share);
+	}
+}
+
+
+/* add_share() in reverse. caller should release the physical page if the last
+ * share was removed in which case rm_share() returns true, otherwise false.
+ */
+static bool rm_share(struct vp *vp)
+{
+	/* TODO: handle other forms of vp->status as they appear. */
+	assert(~vp->status & 0x80000000);	/* in physical memory */
+	size_t hash = hash_vp_by_phys(vp, NULL);
+	struct pp *phys = get_pp(vp->status);
+	struct vp *prev_owner = vp;
+	if(!atomic_compare_exchange_strong(&phys->owner, &prev_owner, NULL)) {
+		/* wasn't primary. */
+		bool ok = htable_del(&share_table, hash, vp);
+		assert(ok);
+		return prev_owner == NULL && !has_shares(hash, vp->status, 1);
+	} else {
+		/* was primary. */
+		return !has_shares(hash, vp->status, 1);
+	}
+}
+
+
+static int cmp_ptrs(const void *a, const void *b) {
+	return *(const void **)a - *(const void **)b;
+}
+
+
+/* NOTE: this routine is all kinds of horseshit. instead, old <struct pl>
+ * should be cleaned up with some kind of a garbage-collection step to get a
+ * specified benefit for a linear crawl over every active physical page in the
+ * system. iteration over page_active_list must deal with dead links already,
+ * so it's not a big deal interfacewise.
+ *
+ * in fact, garbage collection has a name: page replacement. there should
+ * probably be some kind of an accumulated vs. collected garbage counter, or
+ * pair thereof, to indicate when garbage collection should be run (or some
+ * extra turns of page replacement, since those'll touch the structures
+ * anyway).
+ *
+ * also, darrays, how cute. it's application shitcode in a kernel component,
+ * introducing malloc's locking to otherwise lockfree code.
+ */
+static void remove_active_pls(struct pl **pls, int n_pls)
+{
+	assert(e_inside());
+	if(n_pls == 0) return;
+	if(n_pls > 1) qsort(pls, n_pls, sizeof *pls, &cmp_ptrs);
+	struct nbsl_iter it;
+	for(struct nbsl_node *n = nbsl_first(&page_active_list, &it);
+		n != NULL;
+		n = nbsl_next(&page_active_list, &it))
+	{
+		struct pl *cur = container_of(n, struct pl, nn),
+			**got = n_pls > 1 ? bsearch(&cur, pls, n_pls, sizeof *pls, &cmp_ptrs)
+				: (cur == *pls ? pls : NULL);
+		if(got == NULL) continue;
+		assert(*got == cur);
+		bool ok = nbsl_del_at(&page_active_list, &it);
+		if(!ok) {
+			printf("vm:%s: concurrent nbsl_del_at()?\n", __func__);
+			/* FIXME: consider what to do here. it shouldn't happen in the
+			 * single-threaded vm yet.
+			 */
+			assert(false);
+		}
+		e_free(cur);
+	}
+}
+
+
+/* adds dropped active_page_list links to @plbuf or removes them one by one if
+ * it's NULL.
+ */
+static void remove_vp(struct vp *vp, plbuf *plbuf)
+{
+	assert(e_inside());
+	struct pp *phys = get_pp(vp->status);
+	if(VP_IS_COW(vp)) {
+		printf("handle copy-on-write pages in remove_vp!\n");
+		abort();
+	} else {
+		struct pl *link0 = atomic_load_explicit(&phys->link,
+			memory_order_acquire);
+		if(PL_IS_PRIVATE(link0)) {
+			assert(phys->owner == vp);
+			struct pl *link = atomic_exchange(&phys->link, NULL);
+			assert(link0 == link);	/* private, so won't have changed */
+			push_page(&page_free_list, link);
+			assert(atomic_load(&phys->link) != link);
+		} else {
+			if(rm_share(vp)) {
+				push_page(&page_free_list, link0);
+				assert(atomic_load(&phys->link) != link0);
+			}
+		}
+		if(plbuf != NULL) darray_push(*plbuf, link0);
+		else remove_active_pls(&link0, 1);
+	}
+	e_free(vp);
+}
+
+
+static int vm_munmap(L4_Word_t addr, uint32_t size)
+{
+	int sender_pid = pidof_NP(muidl_get_sender());
+	if(sender_pid == 0 || sender_pid > SNEKS_MAX_PID) return -EINVAL;
+	struct vm_space *sp = ra_id2ptr(vm_space_ra, sender_pid);
+	if(sp->kip_area.raw == 0) return -EINVAL;
+
+	int eck = e_begin();
+	munmap_space(sp, addr, size);
+	e_end(eck);
+
+	return 0;
+}
+
+
 static int fork_maps(struct vm_space *src, struct vm_space *dest)
 {
-	for(struct rb_node *cur = __rb_first(&src->maps);
-		cur != NULL;
-		cur = __rb_next(cur))
-	{
+	RB_FOREACH(cur, &src->maps) {
 		struct lazy_mmap *orig = container_of(cur, struct lazy_mmap, rb),
 			*copy = malloc(sizeof *copy);
 		if(copy == NULL) {
@@ -458,6 +909,7 @@ static int fork_pages(struct vm_space *src, struct vm_space *dest)
 	 * than a sequence of scattered mallocs. (however, this is optimizations,
 	 * and there's no benchmark.)
 	 */
+	struct vp *copy = NULL;
 	L4_Fpage_t unmaps[64];
 	int unmap_pos = 0, n_pages = 0;
 	struct htable_iter it;
@@ -465,71 +917,117 @@ static int fork_pages(struct vm_space *src, struct vm_space *dest)
 		cur != NULL;
 		cur = htable_next(&src->pages, &it))
 	{
-		n_pages++;
-		if(cur->status == 0) {
-			/* replicate unmapped brk area. */
-			assert(cur->vaddr < src->brk);
-			struct vp *copy = malloc(sizeof *copy);
+		assert(VP_IS_COW(cur) ^ !!(VP_RIGHTS(cur) & L4_Writable));
+
+		if(copy == NULL) {
+			copy = malloc(sizeof *copy);
 			if(copy == NULL) goto Enomem;
+		}
+		size_t hash = hash_vp_by_vaddr(cur, NULL);
+
+/* (use this after lazy brk has been removed, subsequent to pf rejigger.) */
+#if 0
+		/* NOTE: for now, all pages are in memory. at some point swapped
+		 * pages and pages removed from page cache may appear.
+		 */
+		assert(cur->status & ~0x80000000);
+#endif
+
+		if(cur->status == 0) {
+			/* replicate unmapped brk area.
+			 *
+			 * TODO: remove preallocation of the brk area. it's silly and bad;
+			 * lazy brk should be serviced through a branch-predictable pf
+			 * fastpath.
+			 */
+			assert(cur->vaddr < src->brk);
 			*copy = (struct vp){ .vaddr = cur->vaddr, .age = 1 };
-			bool ok = htable_add(&dest->pages,
-				hash_vp_by_vaddr(copy, NULL), copy);
+			bool ok = htable_add(&dest->pages, hash, copy);
 			if(!ok) goto Enomem;
+			n_pages++; copy = NULL;
 			continue;
 		}
 
-		/* currently we only need handle private anonymous memory, which is
-		 * always COW'd when writable, and shared when not.
-		 *
-		 * TODO: indicate read-only sharing somewhere besides share_table.
-		 */
-		bool unmap = !VP_IS_COW(cur) && (VP_RIGHTS(cur) & L4_Writable) != 0;
-		struct vp *copy = malloc(sizeof *copy);
-		if(copy == NULL) goto Enomem;
-		*copy = (struct vp){
-			.vaddr = cur->vaddr | VPF_COW,
-			.status = cur->status,
-			.age = 1,
-		};
-		bool ok = htable_add(&dest->pages,
-			hash_vp_by_vaddr(copy, NULL), copy);
-		if(!ok) goto Enomem;
-		if(unmap) {
-			cur->vaddr |= VPF_COW;
-			assert(VP_IS_COW(cur));
-		}
-		struct pp *phys = get_pp(cur->status);
-		struct vp *prev_owner = NULL;
-		if(!atomic_compare_exchange_strong_explicit(
-			&phys->owner, &prev_owner, copy,
-			memory_order_release, memory_order_relaxed))
+		if(!VP_IS_ANON(cur)
+			&& (VP_IS_SHARED(cur) || (~VP_RIGHTS(cur) & L4_Writable)))
 		{
-			/* multiple ownership. */
-			ok = htable_add(&share_table, hash_vp_by_phys(copy, NULL), copy);
-			if(!ok) {
+			/* ignore private+file+ro or shared+file pages since they can be
+			 * found in the page cache.
+			 */
+#ifdef TRACE_FORK
+			printf("vm: full pagecache page ignored at vaddr=%#x\n",
+				cur->vaddr & ~PAGE_MASK);
+#endif
+			continue;
+		} else if(VP_IS_SHARED(cur)) {
+			/* shared pages get another reference and the show goes on. */
+#ifdef TRACE_FORK
+			printf("vm: forking shared page at vaddr=%#x\n",
+				cur->vaddr & ~PAGE_MASK);
+#endif
+			abort();	/* retain until hit */
+			*copy = (struct vp){
+				.vaddr = cur->vaddr,
+				.status = cur->status,
+				.age = 1,
+			};
+			bool ok = htable_add(&dest->pages, hash, copy);
+			if(!ok || !add_share(cur->status, copy)) goto Enomem;
+		} else {
+			/* anonymous and private pages get copy-on-write. this applies
+			 * even if said pages were read-only right now and made writable
+			 * later.
+			 *
+			 * TODO: test this once mprotect() appears.
+			 */
+#ifdef TRACE_FORK
+			printf("vm: cow for anon/private page at vaddr=%#x\n",
+				cur->vaddr & ~PAGE_MASK);
+#endif
+			/* older TODO: indicate read-only sharing somewhere besides
+			 * share_table.
+			 */
+			bool unmap = !VP_IS_COW(cur) && (VP_RIGHTS(cur) & L4_Writable) != 0;
+			*copy = (struct vp){
+				.vaddr = (cur->vaddr & ~L4_Writable)
+					| ((VP_RIGHTS(cur) & L4_Writable) ? VPF_COW : 0),
+				.status = cur->status,
+				.age = 1,
+			};
+			bool ok = htable_add(&dest->pages, hash, copy);
+			if(!ok) goto Enomem;
+			if(unmap) {
+				cur->vaddr |= VPF_COW;
+				cur->vaddr &= ~L4_Writable;
+				assert(VP_IS_COW(cur));
+			}
+			if(!add_share(cur->status, copy)) {
 				if(unmap) {
 					cur->vaddr &= ~VPF_COW;
+					cur->vaddr |= L4_Writable;
 					assert(!VP_IS_COW(cur));
 				}
 				goto Enomem;
 			}
-		}
 
-		if(unmap) {
-			L4_Fpage_t phys = L4_FpageLog2(
-				cur->status << PAGE_BITS, PAGE_BITS);
-			L4_Set_Rights(&phys, L4_Writable);
-			unmaps[unmap_pos++] = phys;
-			if(unmap_pos == ARRAY_SIZE(unmaps)) {
-				L4_UnmapFpages(ARRAY_SIZE(unmaps), unmaps);
-				unmap_pos = 0;
+			if(unmap) {
+				L4_Fpage_t phys = L4_FpageLog2(
+					cur->status << PAGE_BITS, PAGE_BITS);
+				L4_Set_Rights(&phys, L4_Writable);
+				unmaps[unmap_pos++] = phys;
+				if(unmap_pos == ARRAY_SIZE(unmaps)) {
+					L4_UnmapFpages(ARRAY_SIZE(unmaps), unmaps);
+					unmap_pos = 0;
+				}
 			}
 		}
+
+		n_pages++; copy = NULL;
 	}
+	free(copy);
 
 end:
 	if(unmap_pos > 0) L4_UnmapFpages(unmap_pos, unmaps);
-	// printf("forked %d pages (tail=%d).\n", n_pages, unmap_pos);
 	return n_pages;
 
 Enomem:
@@ -564,21 +1062,23 @@ static int vm_fork(uint16_t srcpid, uint16_t destpid)
 	assert(destpid <= 0 || destpid == ra_ptr2id(vm_space_ra, dest));
 
 	htable_init(&dest->pages, &hash_vp_by_vaddr, NULL);
+	dest->maps = RB_ROOT;
+	dest->as_free = RB_ROOT;
 	if(src == NULL) {
 		/* creates an unconfigured address space as for spawn. caller should
 		 * use VM::configure() to set it up before causing page faults.
 		 */
 		dest->kip_area.raw = ~0ul;
 		dest->utcb_area = L4_Nilpage;
-		dest->maps = RB_ROOT;
 		dest->brk = 0;
+		dest->mmap_bot = user_addr_max;
 	} else {
 		/* fork from @src. */
 		dest->kip_area = src->kip_area;
 		dest->utcb_area = src->utcb_area;
 		dest->sysinfo_area = src->sysinfo_area;
 		dest->brk = src->brk;
-		dest->maps = RB_ROOT;
+		dest->mmap_bot = src->mmap_bot;
 		int n = fork_maps(src, dest);
 		if(n == 0) n = fork_pages(src, dest);
 		if(n < 0) {
@@ -619,26 +1119,20 @@ static int vm_upload_page(
 	uint16_t target_pid, L4_Word_t addr,
 	const uint8_t *data, unsigned data_len)
 {
-#if 0
-	printf("%s: target_pid=%u, addr=%#lx, data_len=%u\n", __func__,
-		target_pid, addr, data_len);
-#endif
-
 	struct vm_space *sp = ra_id2ptr(vm_space_ra, target_pid);
 	if(unlikely(L4_IsNilFpage(sp->utcb_area))) return -EINVAL;
 	if((addr & PAGE_MASK) != 0) return -EINVAL;
 
 	struct vp *v = malloc(sizeof *v);
 	if(unlikely(v == NULL)) return -ENOMEM;
-	v->vaddr = addr | L4_FullyAccessible;
+	v->vaddr = addr | L4_FullyAccessible | VPF_ANON;
 	v->age = 1;
 
 	size_t hash = int_hash(addr);
 	struct vp *old = htable_get(&sp->pages, hash, &cmp_vp_to_vaddr, &addr);
 	if(old != NULL) {
 		htable_del(&sp->pages, hash, old);
-		/* FIXME: drop the physical page as well */
-		free(old);
+		remove_vp(old, NULL);
 	}
 
 	/* allocate fresh new anonymous memory for this. */
@@ -652,6 +1146,7 @@ static int vm_upload_page(
 	push_page(&page_active_list, link);
 	e_free(link);
 	v->status = (L4_Word_t)mem >> PAGE_BITS;
+	atomic_store_explicit(&get_pp(v->status)->owner, v, memory_order_relaxed);
 	e_end(eck);
 
 	/* plunk it in there. */
@@ -689,22 +1184,11 @@ static void vm_iopf(L4_Fpage_t fault, L4_Word_t fip, L4_MapItem_t *page_ptr)
 }
 
 
-static bool has_shares(size_t hash, uint32_t page_num, int count)
-{
-	struct htable_iter it;
-	for(struct vp *cur = htable_firstval(&share_table, &it, hash);
-		cur != NULL;
-		cur = htable_nextval(&share_table, &it, hash))
-	{
-		if(cur->status == page_num && --count <= 0) return true;
-	}
-	return false;
-}
-
-
 static L4_Fpage_t pf_cow(struct vp *virt)
 {
 	assert(VP_IS_COW(virt));
+	assert(~VP_RIGHTS(virt) & L4_Writable);
+
 	struct pp *phys = get_pp(virt->status);
 	struct vp *primary = atomic_load_explicit(&phys->owner,
 		memory_order_relaxed);
@@ -726,6 +1210,7 @@ static L4_Fpage_t pf_cow(struct vp *virt)
 			atomic_store_explicit(&phys->owner, virt, memory_order_relaxed);
 		}
 		virt->vaddr &= ~VPF_COW;
+		virt->vaddr |= L4_Writable;
 	} else {
 		/* no. make a copy. */
 		if(primary == virt) {
@@ -737,6 +1222,7 @@ static L4_Fpage_t pf_cow(struct vp *virt)
 			PAGE_SIZE);
 		virt->status = newpl->page_num;
 		virt->vaddr &= ~VPF_COW;
+		virt->vaddr |= L4_Writable;
 		atomic_store_explicit(&pl2pp(newpl)->owner, virt,
 			memory_order_release);
 		push_page(&page_active_list, newpl);
@@ -749,9 +1235,207 @@ static L4_Fpage_t pf_cow(struct vp *virt)
 }
 
 
-/* TODO: add some kind of tracing enabler or printf-equivalent so that the
- * debug outputs get line buffering and so won't break TAP output. maybe.
+/* finds the cached page, or reads it from @mm if it's not in cache.
+ * @bump is # of pages from @mm start. @vp is the virtual page that'll take
+ * ownership of a freshly-loaded page. return value is negative errno, or 0
+ * when found, or 1 when loaded. *@cached_p will be filled in.
+ *
+ * TODO: in the future this function will do some sort of continuation
+ * business to allow vm to respond while waiting for IO. for now, not so much.
+ * this'll also require some way to wait on ongoing fetches, so the actual
+ * item that lands in the page cache may also be a placeholder.
  */
+static int fetch_cached_page(
+	struct pl **cached_p,
+	const struct lazy_mmap *mm, int bump, struct vp *vp)
+{
+	assert(e_inside());
+	struct nbsl_node *top;
+	struct pl *cached = find_cached_page(&top, mm, bump);
+	if(cached != NULL) {
+		/* hit! */
+		TRACE_FAULT("vm:%s:pc hit on %x:%lx:%x\n", __func__,
+			pidof_NP(mm->fd_serv), (unsigned long)mm->ino,
+			mm->offset + bump);
+		*cached_p = cached;
+		return 0;
+	} else {
+		/* allocate, read, and try to insert. */
+		struct pl *link = get_free_pl();
+		void *page = (void *)((uintptr_t)link->page_num << PAGE_BITS);
+		unsigned n_bytes = 0;
+		if(~mm->flags & MAP_ANONYMOUS) {
+			n_bytes = PAGE_SIZE;
+			int n = __fs_read(mm->fd_serv, page, &n_bytes, mm->ino,
+				(mm->offset + bump) * PAGE_SIZE, PAGE_SIZE);
+			if(unlikely(n != 0)) {
+				push_page(&page_free_list, link);
+				e_free(link);
+				return n > 0 ? -EIO : n;
+			}
+			if(n_bytes < PAGE_SIZE) {
+				TRACE_FAULT("vm:%s: short read (got %u bytes)\n", __func__, n_bytes);
+			}
+		}
+		if(n_bytes < PAGE_SIZE) {
+			memset(page + n_bytes, '\0', PAGE_SIZE - n_bytes);
+		}
+
+		/* insert. (it's ok to modify link->foo since those fields are unused
+		 * in the freelist. push_cached_page() always adds a new link.)
+		 */
+		link->fsid_ino = (uint64_t)pidof_NP(mm->fd_serv) << 48
+			| (mm->ino & ~(0xffffull << 48));
+		assert(PL_FSID(link) == pidof_NP(mm->fd_serv));
+		assert(PL_INO(link) == mm->ino);
+		link->offset = mm->offset + bump;
+		atomic_store(&pl2pp(link)->owner, vp);
+		int n = push_cached_page(&cached, top, link);
+		if(n == 0) {
+			assert(cached != NULL);
+			TRACE_FAULT("vm:%s:pc miss on %x:%lx:%x, vp'=%p, phys=%p\n", __func__,
+				pidof_NP(mm->fd_serv), (unsigned long)mm->ino,
+				mm->offset + bump, vp, pl2pp(link));
+			n = 1;	/* actual miss and insert */
+			assert(pl2pp(cached)->owner == vp);
+		} else {
+			assert(n == -EEXIST);
+			push_page(&page_free_list, link);
+			assert(cached != NULL);
+			TRACE_FAULT("vm:%s:pc false miss on %x:%lx:%x\n", __func__,
+				pidof_NP(mm->fd_serv), (unsigned long)mm->ino,
+				mm->offset + bump);
+			n = 0;	/* it's a hit after all */
+		}
+		e_free(link);
+
+		*cached_p = cached;
+		return n;
+	}
+}
+
+
+/* handling of faults on maps with MAP_SHARED, or file-backed but not a write
+ * fault (so a caching candidate).
+ */
+static int pf_mmap_shared(
+	L4_Fpage_t *map_page_p, struct vp *vp,	/* out */
+	const struct lazy_mmap *mm, L4_Word_t faddr, int fault_rwx)
+{
+	assert(e_inside());
+	struct nbsl_node *top;
+	int bump = ((faddr & ~PAGE_MASK) - mm->addr) >> PAGE_BITS;
+	struct pl *cached = find_cached_page(&top, mm, bump);
+	if(cached == NULL) {
+		/* allocate. */
+		struct pl *link = get_free_pl();
+		void *page = (void *)((uintptr_t)link->page_num << PAGE_BITS);
+		unsigned n_bytes = 0;
+		if(~mm->flags & MAP_ANONYMOUS) {
+			n_bytes = PAGE_SIZE;
+			int n = __fs_read(mm->fd_serv, page, &n_bytes, mm->ino,
+				mm->offset * PAGE_SIZE + ((faddr & ~PAGE_MASK) - mm->addr),
+				PAGE_SIZE);
+			if(unlikely(n != 0)) {
+				push_page(&page_free_list, link);
+				e_free(link);
+				return n;
+			}
+#ifdef TRACE_FAULTS
+			if(n_bytes < PAGE_SIZE) {
+				TRACE_FAULT("vm:%s: short read (got %u bytes)\n", __func__, n_bytes);
+			}
+#endif
+		}
+		if(n_bytes < PAGE_SIZE) {
+			memset(page + n_bytes, '\0', PAGE_SIZE - n_bytes);
+		}
+
+		/* insert. (it's ok to modify link->foo since those fields are unused
+		 * in the freelist. push_cached_page() always adds a new link.)
+		 */
+		link->fsid_ino = (uint64_t)pidof_NP(mm->fd_serv) << 48
+			| (mm->ino & ~(0xffffull << 48));
+		assert(PL_FSID(link) == pidof_NP(mm->fd_serv));
+		assert(PL_INO(link) == mm->ino);
+		link->offset = mm->offset + bump;
+		atomic_store(&pl2pp(link)->owner, vp);
+		int n = push_cached_page(&cached, top, link);
+		if(n == 0) {
+			*map_page_p = L4_FpageLog2((L4_Word_t)page, PAGE_BITS);
+			TRACE_FAULT("vm:%s:pc miss on %x:%lx:%x, vp'=%p, phys=%p\n", __func__,
+				pidof_NP(mm->fd_serv), (unsigned long)mm->ino,
+				mm->offset + bump, vp, pl2pp(link));
+		} else {
+			assert(n == -EEXIST);
+			push_page(&page_free_list, link);
+			assert(cached != NULL);
+			TRACE_FAULT("vm:%s:pc false miss on %x:%lx:%x\n", __func__,
+				pidof_NP(mm->fd_serv), (unsigned long)mm->ino,
+				mm->offset + bump);
+		}
+		e_free(link);
+	}
+	if(cached != NULL) {
+		/* share. possibly from an abortive cache insert. */
+		/* FIXME: overwritten in caller, required by hash_vp_by_phys() i.e.
+		 * add_share().
+		 */
+		vp->status = cached->page_num;
+		int n = add_share(cached->page_num, vp);
+		if(n < 0) return n;
+		*map_page_p = L4_FpageLog2(cached->page_num << PAGE_BITS, PAGE_BITS);
+		TRACE_FAULT("vm:%s:pc hit on %x:%lx:%x\n", __func__,
+			pidof_NP(mm->fd_serv), (unsigned long)mm->ino,
+			mm->offset + bump);
+	}
+
+	vp->vaddr |= VPF_SHARED;
+	L4_Set_Rights(map_page_p, VP_RIGHTS(vp));
+	return 0;
+}
+
+
+/* handling MAP_PRIVATE non-anonymous write faults, i.e. those that
+ * pf_mmap_shared() doesn't. the mechanical difference is that this one makes
+ * a copy of the file-backed page if it's found in the page cache, possibly
+ * inserting it first if not already found.
+ */
+static int pf_mmap_private(
+	L4_Fpage_t *map_page_p, struct vp *vp,	/* out */
+	const struct lazy_mmap *mm, L4_Word_t faddr, int fault_rwx)
+{
+	assert(e_inside());
+	assert(fault_rwx & L4_Writable);
+
+	struct pl *cached;
+	int offset = ((faddr & ~PAGE_MASK) - mm->addr) >> PAGE_BITS,
+		n = fetch_cached_page(&cached, mm, offset, vp);
+	if(n < 0) return n;
+	assert(cached != NULL);
+
+	struct pl *link = get_free_pl();
+	*map_page_p = L4_FpageLog2((uintptr_t)link->page_num << PAGE_BITS,
+		PAGE_BITS);
+	memcpy((void *)L4_Address(*map_page_p),
+		(void *)((uintptr_t)cached->page_num << PAGE_BITS), PAGE_SIZE);
+	atomic_store_explicit(&pl2pp(link)->owner, vp, memory_order_relaxed);
+	push_page(&page_active_list, link);
+	e_free(link);
+	vp->vaddr |= VPF_ANON;
+	assert(!VP_IS_SHARED(vp));
+	assert(!VP_IS_COW(vp));
+
+	if(n == 1) {
+		/* drop ownership of the freshly-loaded page. */
+		struct vp *old = atomic_exchange(&pl2pp(cached)->owner, NULL);
+		assert(old == vp);
+	}
+
+	return 0;
+}
+
+
 static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 {
 	int n, pid = pidof_NP(muidl_get_sender());
@@ -770,13 +1454,11 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 	}
 
 	const int fault_rwx = L4_Label(muidl_get_tag()) & 7;
-#if TRACE_FAULTS
-	printf("%s: pid=%d, faddr=%#lx, fip=%#lx, access=%c%c%c",
+	TRACE_FAULT("%s: pid=%d, faddr=%#lx, fip=%#lx, [%c%c%c]",
 		__func__, pid, faddr, fip,
 		(fault_rwx & L4_Readable) != 0 ? 'r' : '-',
 		(fault_rwx & L4_Writable) != 0 ? 'w' : '-',
 		(fault_rwx & L4_eXecutable) != 0 ? 'x' : '-');
-#endif
 
 	int eck = e_begin();
 
@@ -786,10 +1468,8 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 	struct vp *old = htable_get(&sp->pages, hash,
 		&cmp_vp_to_vaddr, &faddr_page);
 	if(old != NULL && old->status == 0) {
-		/* lazy brk fastpath. */
-#if TRACE_FAULTS
-		printf("  lazy brk\n");
-#endif
+		/* lazy brk fastpath. always private anonymous memory. */
+		TRACE_FAULT("  lazy brk\n");
 		struct pl *link = get_free_pl();
 		void *page = (void *)((uintptr_t)link->page_num << PAGE_BITS);
 		memset(page, '\0', PAGE_SIZE);
@@ -800,40 +1480,30 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 		push_page(&page_active_list, link);
 		e_free(link);
 		goto reply;
-	} else if(old != NULL && (VP_RIGHTS(old) & fault_rwx) != fault_rwx) {
-#if TRACE_FAULTS
-		printf("  no access!!!\n");
-#endif
-		printf("%s: segv (access=%#x, had=%#x)\n", __func__,
-			fault_rwx, VP_RIGHTS(old));
-		goto segv;
 	} else if(old != NULL && VP_IS_COW(old)) {
 		if((fault_rwx & L4_Writable) != 0) {
-#if TRACE_FAULTS
-			printf("  copy-on-write\n");
-#endif
+			TRACE_FAULT("  copy-on-write\n");
 			map_page = pf_cow(old);
 		} else {
 			/* read-only while supplies last. */
-#if TRACE_FAULTS
-			printf("  read-only/shared\n");
-#endif
+			TRACE_FAULT("  read-only/shared\n");
 			map_page = L4_FpageLog2(old->status << PAGE_BITS, PAGE_BITS);
 			L4_Set_Rights(&map_page, fault_rwx);
 		}
 		goto reply;
+	} else if(old != NULL && (VP_RIGHTS(old) & fault_rwx) != fault_rwx) {
+		TRACE_FAULT("  no access!!!\n");
+		printf("%s: segv (access=%#x, had=%#x)\n", __func__,
+			fault_rwx, VP_RIGHTS(old));
+		goto segv;
 	} else if(old != NULL) {
 		/* quick remap or expand. */
-#if TRACE_FAULTS
-		printf("  remap\n");
-#endif
+		TRACE_FAULT("  remap\n");
 		map_page = L4_FpageLog2(old->status << PAGE_BITS, PAGE_BITS);
 		L4_Set_Rights(&map_page, VP_RIGHTS(old));
 		goto reply;
 	} else if(unlikely(ADDR_IN_FPAGE(sp->sysinfo_area, faddr))) {
-#if TRACE_FAULTS
-		printf("  sysinfopage\n");
-#endif
+		TRACE_FAULT("  sysinfopage\n");
 		assert(the_sip->magic == SNEKS_SYSINFO_MAGIC);
 		map_page = L4_FpageLog2((uintptr_t)the_sip, PAGE_BITS);
 		L4_Set_Rights(&map_page, L4_Readable);
@@ -843,17 +1513,13 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 	int rights;
 	struct lazy_mmap *mm = find_lazy_mmap(sp, faddr);
 	if(mm == NULL) {
-#if TRACE_FAULTS
-		printf("  segv (unmapped)\n");
-#endif
+		TRACE_FAULT("  segv (unmapped)\n");
 		goto segv;
 	} else {
 		assert(faddr >= mm->addr && faddr < mm->addr + mm->length);
-		rights = (mm->flags >> 16) & 7;
+		rights = (mm->flags >> 16) & 7;	/* see comment at lazy_mmap decl */
 		if(unlikely((fault_rwx & rights) != fault_rwx)) {
-#if TRACE_FAULTS
-			printf("  segv (access mode, mmap)\n");
-#endif
+			TRACE_FAULT("  segv (access mode, mmap)\n");
 			goto segv;
 		}
 	}
@@ -863,54 +1529,59 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 		/* FIXME */
 		abort();
 	}
-	*vp = (struct vp){ .vaddr = faddr_page | rights };
+	*vp = (struct vp){ .vaddr = faddr_page | rights, .age = 1 };
 
-	uint8_t *page;
-	if((mm->flags & MAP_ANONYMOUS) != 0) {
-#if TRACE_FAULTS
-		printf("  anon\n");
-#endif
+	if((mm->flags & MAP_SHARED)
+		|| ((~fault_rwx & L4_Writable) && (~mm->flags & MAP_ANONYMOUS)))
+	{
+		TRACE_FAULT("  mmap/shared\n");
+		/* look for it in the page cache, or load from a file. */
+		n = pf_mmap_shared(&map_page, vp, mm, faddr, fault_rwx);
+		if(n != 0) {
+			printf("pf_mmap_shared failed! n=%d\n", n);
+			abort();
+			/* FIXME: clean up, detect EFAULT, etc., instead */
+		}
+		/* copy-on-write read faults on writable private+file maps */
+		if(~fault_rwx & L4_Writable) {
+			if(vp->vaddr & L4_Writable) {
+				vp->vaddr |= VPF_COW;
+				vp->vaddr &= ~L4_Writable;
+			}
+		}
+	} else if(mm->flags & MAP_ANONYMOUS) {
+		TRACE_FAULT("  mmap/anon\n");
 		struct pl *link;
 		link = get_free_pl();
-		page = (uint8_t *)((uintptr_t)link->page_num << PAGE_BITS);
-		memset(page, '\0', PAGE_SIZE);
+		map_page = L4_FpageLog2((uintptr_t)link->page_num << PAGE_BITS,
+			PAGE_BITS);
+		memset((void *)L4_Address(map_page), '\0', PAGE_SIZE);
 		atomic_store_explicit(&pl2pp(link)->owner, vp, memory_order_relaxed);
 		push_page(&page_active_list, link);
 		e_free(link);
+		vp->vaddr |= VPF_ANON;
 	} else {
-#if TRACE_FAULTS
-		printf("  file\n");
-#endif
-		struct pl *link = get_free_pl();
-		page = (uint8_t *)((uintptr_t)link->page_num << PAGE_BITS);
-		unsigned n_bytes = PAGE_SIZE;
-		n = __fs_read(mm->fd_serv, page, &n_bytes, mm->fd,
-			mm->offset + ((faddr & ~PAGE_MASK) - mm->addr), PAGE_SIZE);
-		if(unlikely(n != 0)) {
-			push_page(&page_free_list, link);
-			e_free(link);
-			printf("%s: I/O error on file mapping: n=%d\n", __func__, n);
-			goto segv;
+		TRACE_FAULT("  mmap/private\n");
+		/* writes into private file maps; insert-or-lookup in page cache and
+		 * make a copy.
+		 */
+		n = pf_mmap_private(&map_page, vp, mm, faddr, fault_rwx);
+		if(n != 0) {
+			printf("pf_mmap_private failed! n=%d\n", n);
+			abort();
+			/* FIXME: handle prettily instead */
 		}
-		if(n_bytes < PAGE_SIZE) {
-			printf("%s: short read (got %u bytes)\n", __func__, n_bytes);
-			memset(&page[n_bytes], '\0', PAGE_SIZE - n_bytes);
-		}
-		atomic_store_explicit(&pl2pp(link)->owner, vp, memory_order_relaxed);
-		push_page(&page_active_list, link);
-		e_free(link);
 	}
 
-	vp->status = (L4_Word_t)page >> PAGE_BITS;
+	vp->status = L4_Address(map_page) >> PAGE_BITS;
+	L4_Set_Rights(&map_page, VP_RIGHTS(vp));
+
 	bool ok = htable_add(&sp->pages, hash_vp_by_vaddr(vp, NULL), vp);
 	if(unlikely(!ok)) {
 		/* FIXME: roll back and segfault. */
 		printf("%s: can't handle failing htable_add()!\n", __func__);
 		abort();
 	}
-
-	map_page = L4_FpageLog2((L4_Word_t)page, PAGE_BITS);
-	L4_Set_Rights(&map_page, rights);
 
 reply:
 	*map_out = L4_MapItem(map_page, faddr_page);
@@ -942,6 +1613,26 @@ static COLD void get_services(void)
 }
 
 
+static COLD void find_max_addr(void)
+{
+	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
+	struct memdescbuf md = {
+		.ptr = L4_MemoryDesc(kip, 0),
+		.len = kip->MemoryInfo.n,
+	};
+	L4_Word_t acc = 0;
+	L4_Fpage_t fp;
+	do {
+		fp = mdb_query(&md, acc, ~0ul, true, false,
+			L4_ConventionalMemoryType);
+		if(!L4_IsNilFpage(fp) && L4_SizeLog2(fp) >= PAGE_BITS) {
+			acc = max(acc, L4_Address(fp) + L4_Size(fp));
+		}
+	} while(!L4_IsNilFpage(fp));
+	user_addr_max = acc - 1;
+}
+
+
 int main(int argc, char *argv[])
 {
 	printf("vm sez hello!\n");
@@ -950,11 +1641,14 @@ int main(int argc, char *argv[])
 	L4_Fpage_t *phys = init_protocol(&n_phys, &init_tid);
 	printf("vm: init protocol done.\n");
 
+	int eck = e_begin();
 	init_phys(phys, n_phys);
+	init_pc(phys, n_phys);
 	free(phys);
-	printf("vm: physical memory tracking initialized.\n");
+	e_end(eck);
 
 	/* the rest of the owl */
+	find_max_addr();
 	vm_space_ra = RA_NEW(struct vm_space, SNEKS_MAX_PID + 1);
 	get_services();
 
