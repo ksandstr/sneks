@@ -1,0 +1,140 @@
+
+/* tests on mmap(2), munmap(), mprotect(), etc. */
+
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <signal.h>
+#include <unistd.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/mman.h>
+
+#include <sneks/test.h>
+
+
+/* error cases of mmap(2).
+ *
+ * TODO: add ones with a backing file once random-access files are available.
+ */
+START_TEST(mmap_errors)
+{
+	plan_tests(2);
+#ifdef __sneks__
+	todo_start("not in sneks yet");
+#endif
+
+	/* should reject MAP_PRIVATE | MAP_SHARED. */
+	void *ptr = mmap(NULL, sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE,
+		MAP_ANONYMOUS | MAP_PRIVATE | MAP_SHARED, -1, 0);
+	if(!ok(ptr == MAP_FAILED && errno == EINVAL, "both shared and private")) {
+		diag("ptr=%p, errno=%d", ptr, errno);
+	}
+
+	/* and the absence of both. */
+	ptr = mmap(NULL, sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE,
+		MAP_ANONYMOUS, -1, 0);
+	if(!ok(ptr == MAP_FAILED && errno == EINVAL,
+		"neither shared nor private"))
+	{
+		diag("ptr=%p, errno=%d", ptr, errno);
+	}
+
+	/* TODO: checks on validity of addr, length, and offset. */
+}
+END_TEST
+
+DECLARE_TEST("process:memory", mmap_errors);
+
+
+/* mmap(2), munmap() API basics. */
+START_LOOP_TEST(mmap_basic, iter, 0, 3)
+{
+	const int page_size = sysconf(_SC_PAGESIZE);
+	const bool addr_from_sbrk = !!(iter & 1), is_shared = !!(iter & 2);
+	diag("page_size=%d, addr_from_sbrk=%s, is_shared=%s", page_size,
+		btos(addr_from_sbrk), btos(is_shared));
+	plan_tests(4);
+
+#ifdef __sneks__
+	todo_start("not in sneks yet");
+#endif
+
+	const int map_size = 16 * page_size;
+
+	void *addr_hint = NULL;
+	if(addr_from_sbrk) addr_hint = sbrk(0) + page_size;
+	diag("addr_hint=%p", addr_hint);
+	void *ptr = mmap(addr_hint, map_size, PROT_READ | PROT_WRITE,
+		MAP_ANONYMOUS | (is_shared ? MAP_SHARED : MAP_PRIVATE), -1, 0);
+
+	skip_start(!ok1(ptr != MAP_FAILED), 2, "no valid map") {
+		diag("ptr=%p", ptr);
+
+		strcpy(ptr, "ja sit teet mun matikanläksyt jouluspettariin asti");
+		pass("write didn't break");
+
+		int n = munmap(ptr, map_size);
+		if(!ok(n == 0, "munmap")) diag("munmap errno=%d", errno);
+	} skip_end;
+
+	void *moer = sbrk(map_size);
+	ok(moer != (void *)-1, "sbrk after unmap");
+	sbrk(-map_size);
+}
+END_TEST
+
+DECLARE_TEST("process:memory", mmap_basic);
+
+
+static sig_atomic_t poked = 0;
+
+static void sync_poke(int signum) {
+	poked = 1;
+}
+
+/* non-/survival of mmap(2) regions through fork(). */
+START_LOOP_TEST(mmap_across_fork, iter, 0, 1)
+{
+	const bool is_private = !!(iter & 1);
+	diag("is_private=%s", btos(is_private));
+	plan_tests(2);
+#ifdef __sneks__
+	todo_start("pls no step on snek");
+#endif
+
+	char *area = mmap(NULL, sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE,
+		MAP_ANONYMOUS | (is_private ? MAP_PRIVATE : MAP_SHARED), -1, 0);
+	diag("area=%p", area);
+	skip_start(!ok(area != MAP_FAILED, "mmap(2)"), 1,
+		"no mmap area, errno=%d", errno)
+	{
+		const char *ref = "mitä teille tulee mieleen sanasta hattivatti?";
+		strcpy(area, ref);
+		sigset_t usr1, old;
+		sigemptyset(&usr1);
+		sigaddset(&usr1, SIGUSR1);
+		int n = sigprocmask(SIG_BLOCK, &usr1, &old);
+		fail_unless(n == 0, "sigprocmask errno=%d", errno);
+
+		int child = fork_subtest_start("child process") {
+			plan_tests(1);
+			struct sigaction act = { .sa_handler = &sync_poke };
+			n = sigaction(SIGUSR1, &act, NULL);
+			fail_unless(n == 0, "child sigaction failed");
+			while(!poked) sigsuspend(&old);
+			iff_ok1(is_private, strcmp(area, ref) == 0);
+		} fork_subtest_end;
+
+		strcpy(area, "siis hatti-vatti?");
+		n = kill(child, SIGUSR1);
+		fail_unless(n == 0, "kill(2) errno=%d", errno);
+
+		fork_subtest_ok1(child);
+	} skip_end;
+}
+END_TEST
+
+DECLARE_TEST("process:memory", mmap_across_fork);
