@@ -630,8 +630,8 @@ static int map_elf_image(
 			addr = ep.p_vaddr + mapped;
 			size_t sz = (ep.p_memsz - mapped + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 			n = __vm_mmap(vm_tid, target_pid, &addr, sz,
-				PROT_READ | PROT_WRITE, MAP_ANONYMOUS, L4_nilthread.raw,
-				~0ul, 0);
+				PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE,
+				L4_nilthread.raw, ~0ul, 0);
 			if(n != 0) {
 				printf("vm_mmap (tail) failed, n=%d\n", n);
 				goto end;
