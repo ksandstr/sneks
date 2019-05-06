@@ -29,11 +29,9 @@ interface VM
 		in L4X2::ThreadId fd_serv, in L4X2::word fd, in off_t offset)
 			raises(Posix::Errno);
 
-#if 0
-	/* self only. */
+	/* implied @target_pid = getpid(). works as POSIX munmap(2). */
 	void munmap(in L4X2::word addr, in size_t length)
 		raises(Posix::Errno);
-#endif
 
 	/* virtual memory part of fork(2). systask only. if @srcpid == 0, creates
 	 * an empty space which must be initialized with configure(). otherwise, a

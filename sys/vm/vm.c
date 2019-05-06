@@ -420,6 +420,13 @@ static int vm_brk(L4_Word_t addr)
 }
 
 
+static int vm_munmap(L4_Word_t addr, uint32_t size)
+{
+	/* TODO */
+	return -ENOSYS;
+}
+
+
 /* copy lazy_mmaps. */
 static int fork_maps(struct vm_space *src, struct vm_space *dest)
 {
@@ -963,6 +970,7 @@ int main(int argc, char *argv[])
 	static const struct vm_impl_vtable vtab = {
 		/* Sneks::VM */
 		.mmap = &vm_mmap,
+		.munmap = &vm_munmap,
 		.fork = &vm_fork,
 		.configure = &vm_configure,
 		.upload_page = &vm_upload_page,
