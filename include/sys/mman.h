@@ -2,6 +2,9 @@
 #ifndef _SYS_MMAN_H
 #define _SYS_MMAN_H
 
+#include <stdlib.h>
+#include <stdint.h>
+
 
 /* for mmap(2) */
 #define PROT_NONE	0
@@ -13,8 +16,16 @@
 #define MAP_PRIVATE	2
 
 #define MAP_FILE	0
+#define MAP_FAILED (void *)-1
+#define MAP_FIXED 0x10		/* succeed at @addr or fail. */
 #define MAP_ANONYMOUS 0x20
 
+
+extern void *mmap(
+	void *addr, size_t length, int prot, int flags,
+	int fd, unsigned long offset);
+
+extern int munmap(void *addr, size_t length);
 
 
 #endif

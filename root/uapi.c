@@ -652,7 +652,8 @@ static int map_elf_image(
 				goto end;
 			}
 			n = __vm_mmap(vm_tid, target_pid, &addr, ep.p_filesz,
-				PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_FILE,
+				PROT_READ | PROT_WRITE | PROT_EXEC,
+				MAP_PRIVATE | MAP_FILE | MAP_FIXED,
 				fs.raw, handle, ep.p_offset);
 			if(n != 0) {
 				printf("vm_mmap (file) failed, n=%d\n", n);
@@ -663,8 +664,8 @@ static int map_elf_image(
 		if(ep.p_memsz > mapped) {
 			addr = ep.p_vaddr + mapped;
 			size_t sz = (ep.p_memsz - mapped + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-			n = __vm_mmap(vm_tid, target_pid, &addr, sz,
-				PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE,
+			n = __vm_mmap(vm_tid, target_pid, &addr, sz, PROT_READ | PROT_WRITE,
+				MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED,
 				L4_nilthread.raw, ~0ul, 0);
 			if(n != 0) {
 				printf("vm_mmap (tail) failed, n=%d\n", n);

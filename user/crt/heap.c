@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <assert.h>
 #include <errno.h>
+#include <sys/mman.h>
 
 #include <l4/thread.h>
 #include <sneks/mm.h>
@@ -59,4 +60,33 @@ void *sbrk(intptr_t increment)
 	}
 	if(brk((void *)new_brk) != 0) ret = (void *)-1;
 	return ret;
+}
+
+
+void *mmap(
+	void *_addr, size_t length, int prot, int flags,
+	int fd, unsigned long offset)
+{
+	if(~flags & MAP_ANONYMOUS) goto Enosys;	/* TODO: file support */
+
+	L4_Word_t addr = (L4_Word_t)_addr;
+	int n = __vm_mmap(L4_Pager(), 0, &addr, length, prot, flags,
+		L4_nilthread.raw, 0, offset);
+	if(n != 0) goto En;
+
+	return (void *)addr;
+
+Enosys: n = -ENOSYS; goto En;
+En:
+	errno = n < 0 ? -n : EIO;
+	return MAP_FAILED;
+}
+
+
+int munmap(void *addr, size_t length)
+{
+	int n = __vm_munmap(L4_Pager(), (L4_Word_t)addr, length);
+	if(n == 0) return 0;
+	errno = n < 0 ? -n : EIO;
+	return -1;
 }
