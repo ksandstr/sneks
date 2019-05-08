@@ -6,6 +6,9 @@
 #define __SNEKS_TEST_H__
 
 #include <stdbool.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/autodata/autodata.h>
 
@@ -176,7 +179,7 @@ extern int exit_status(void);
 /* forked subtests. obviously not available under sys/test .
  * #include <sys/wait.h> to make these compile.
  *
- * TODO: fetch test name from child somehow, display in fork_subtest_wait().
+ * TODO: fetch test name from child somehow, display in fork_subtest_ok1().
  * this may require pipes or a shared memory segment or something.
  */
 #define fork_subtest_start(_fmt, ...) ({ \
@@ -193,7 +196,17 @@ extern int exit_status(void);
 		__stc; \
 	})
 
-#define fork_subtest_wait(_child) ({ \
+/* returns the waitpid() status, for WIFEXITED() and the like. */
+#define fork_subtest_join(_child) ({ \
+		int __st, __dead = waitpid((_child), &__st, 0); \
+		fail_unless(__dead == (_child)); \
+		__st; \
+	})
+
+/* joins the forked subtest as a test point in the parent. will eventually
+ * print the test name in the ok-line. returns like ok1().
+ */
+#define fork_subtest_ok1(_child) ({ \
 		int __st, __dead = waitpid((_child), &__st, 0), \
 			_ok = ok(__dead == (_child) \
 					&& WIFEXITED(__st) && WEXITSTATUS(__st) == 0, \

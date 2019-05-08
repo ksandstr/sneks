@@ -411,7 +411,7 @@ START_LOOP_TEST(kill_permissions, iter, 0, 127)
 		diag("errno=%d", errno);
 	}
 	ok1(kill(receiver, 0) == n);	/* carpet matches the drapes */
-	fork_subtest_wait(receiver);
+	fork_subtest_ok1(receiver);
 
 	const bool signaled = (n == 0);
 	imply_ok1(!signaled, !from_root);
@@ -533,7 +533,7 @@ START_LOOP_TEST(procmask_and_fork, iter, 0, 1)
 	n = kill(child, SIGINT);
 	fail_unless(n == 0);
 
-	fork_subtest_wait(child);
+	fork_subtest_ok1(child);
 }
 END_TEST
 

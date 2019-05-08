@@ -166,6 +166,9 @@ static void forking_handler(int signum)
 		/* invisible steering wheel! */
 	} else if(signum == SIGCHLD && n_forks++ < 5) {
 		int st, dead = waitpid(-1, &st, 0);
+		if(dead < 0) {
+			diag("%s: dead=%d, errno=%d", __func__, dead, errno);
+		}
 		int n = fork();
 		if(n == 0) {
 			/* that them thur though */
