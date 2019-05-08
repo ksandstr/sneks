@@ -7,6 +7,16 @@
 #include <sneks/test.h>
 
 
+START_TEST(getpid_basic)
+{
+	plan_tests(1);
+	ok1(getpid() > 0);
+}
+END_TEST
+
+DECLARE_TEST("id:getpid", getpid_basic);
+
+
 /* tests that setuid() works once and exactly once. requires euid=0 or skips
  * all.
  */
@@ -36,4 +46,4 @@ START_TEST(setuid_basic)
 }
 END_TEST
 
-DECLARE_TEST("process:setuid", setuid_basic);
+DECLARE_TEST("id:setuid", setuid_basic);
