@@ -20,11 +20,8 @@ interface VM
 
 	/* as in mmap(2) when @target_pid == 0. otherwise, EACCES unless called
 	 * from a systask that spawned @target_pid which hasn't yet been serviced
-	 * a single page fault.
-	 *
-	 * deviates from strict mmap(2) in that when flags contains MAP_PRIVATE
-	 * and @fd_serv and @fd are given, @offset need not be page aligned.
-	 * however, copy-on-write benefits are restricted to aligned maps.
+	 * a single page fault. @addr, @offset, and @length must be aligned to
+	 * system minimum physical page size.
 	 */
 	void mmap(
 		in pid_t target_pid,

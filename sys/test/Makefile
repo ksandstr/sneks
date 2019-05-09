@@ -3,7 +3,7 @@ export CFGDIR:=$(abspath ../..)
 include $(CFGDIR)/config.mk
 
 LDSCRIPT:=$(CFGDIR)/sys/crt/systask.ld
-LDFLAGS=-e_start -N -nostdlib -L $(MUNG_DIR)/user/lib/l4 \
+LDFLAGS=-e_start -nostdlib -L $(MUNG_DIR)/user/lib/l4 \
 	-L $(CFGDIR)/lib -L $(CFGDIR)/sys/crt
 # under -O3, GCC may produce SSE instructions in a runtime that doesn't align
 # the stack properly. FIXME: repair that, then remove -mstackrealign.

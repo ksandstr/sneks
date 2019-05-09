@@ -331,10 +331,14 @@ static int vm_mmap(
 		__func__, target_pid, *addr_ptr, length, offset);
 #endif
 
+	if(length == 0) return -EINVAL;
+	if((*addr_ptr | offset) & PAGE_MASK) return -EINVAL;
+	if((flags & MAP_PRIVATE) && (flags & MAP_SHARED)) return -EINVAL;
+	if((~flags & MAP_PRIVATE) && (~flags & MAP_SHARED)) return -EINVAL;
+
 	int sender_pid = pidof_NP(muidl_get_sender());
 	if(target_pid == 0) target_pid = sender_pid;
 	if(target_pid > SNEKS_MAX_PID || target_pid == 0) return -EINVAL;
-	if((*addr_ptr & PAGE_MASK) != 0) return -EINVAL;
 
 	struct vm_space *sp = ra_id2ptr(vm_space_ra, target_pid);
 	if(sp->kip_area.raw == 0) return -EINVAL;

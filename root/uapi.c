@@ -617,6 +617,12 @@ static int map_elf_image(
 		*hi_p = max(*hi_p,
 			(addr + ep.p_memsz + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1));
 		if(ep.p_filesz > 0) {
+			if(ep.p_offset & PAGE_MASK) {
+				printf("%s: PT_LOAD offset %#x not aligned to page\n",
+					ep.p_offset);
+				n = -EINVAL;
+				goto end;
+			}
 			n = __vm_mmap(vm_tid, target_pid, &addr, ep.p_filesz,
 				PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_FILE,
 				fs.raw, handle, ep.p_offset);
