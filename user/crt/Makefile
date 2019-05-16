@@ -8,7 +8,7 @@ IDL_OBJS:=$(patsubst %.idl,%-common.o,$(IDL_FILES)) \
 
 # imports from $(CFGDIR)/lib
 LIB_OBJS=bsearch.o dlmalloc.o hash.o pidof.o sort.o rbtree.o string.o \
-	strscpy.o strtol.o vsnprintf.o env.o
+	strscpy.o strtol.o vsnprintf.o env.o stdio_portable.o
 
 CRT_SRC:=$(wildcard *.c)
 CRT_ASM:=$(wildcard *-32.S)

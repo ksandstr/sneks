@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <ccan/compiler/compiler.h>
 
+#include <sneks/console.h>
+
 #include <l4/ipc.h>
 #include <l4/kdebug.h>
 
@@ -37,7 +39,18 @@ void abort(void) {
 }
 
 
-/* special non-portable prototype in the fake <stdio.h> */
+/* for <sneks/console.h> */
 void con_putstr(const char *string) {
 	L4_KDB_PrintString((char *)string);
+}
+
+
+/* FIXME: this is stupid and dangerous, however, errno doesn't actually get
+ * used for much inside roottask so it's probably fine. this should properly
+ * be allocated per thread, see sys/crt/crt1.c for example.
+ */
+int *__errno_location(void)
+{
+	static int the_errno = 0;
+	return &the_errno;
 }

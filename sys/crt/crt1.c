@@ -17,6 +17,7 @@
 
 #include <sneks/mm.h>
 #include <sneks/process.h>
+#include <sneks/console.h>
 
 #include "sysmem-defs.h"
 #include "info-defs.h"
@@ -94,7 +95,7 @@ void abort(void) {
 }
 
 
-/* for fake_stdio.c */
+/* for con_stdio.c */
 static L4_ThreadId_t kmsg_tid = L4_nilthread;
 
 static void init_kmsg_tid(void)
@@ -248,8 +249,14 @@ int __crt1_entry(void)
 		/* disregard errors. */
 	}
 
+	int n = sneks_setup_console_stdio();
+	if(unlikely(n < 0)) {
+		/* blind dumb dead! */
+		return -n;
+	}
+
 	struct sneks_rootfs_info blk;
-	int n = __info_rootfs_block(L4_Pager(), &blk);
+	n = __info_rootfs_block(L4_Pager(), &blk);
 	if(unlikely(n != 0)) {
 		printf("crt1: can't get rootfs block, n=%d!\n", n);
 		return 1;

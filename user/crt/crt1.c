@@ -61,11 +61,6 @@ void malloc_panic(void) {
 }
 
 
-void con_putstr(const char *str) {
-	L4_KDB_PrintString((char *)str);
-}
-
-
 /* copypasta'd from sys/crt/crt1.c */
 long sysconf(int name)
 {

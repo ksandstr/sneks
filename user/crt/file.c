@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <assert.h>
+#include <unistd.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/array_size/array_size.h>
 #include <sneks/process.h>
@@ -44,4 +45,8 @@ COLD void __file_init(struct sneks_fdlist *fdlist)
 		f->cookie = fdlist->cookie;
 		fdlist = sneks_fdlist_next(fdlist);
 	}
+
+	stdin = fdopen(0, "r");
+	stdout = fdopen(1, "w");
+	stderr = fdopen(2, "w");
 }

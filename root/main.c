@@ -36,6 +36,7 @@
 #include <sneks/process.h>
 #include <sneks/sysinfo.h>
 #include <sneks/rootserv.h>
+#include <sneks/console.h>
 
 #include "elf.h"
 #include "muidl.h"
@@ -1450,6 +1451,9 @@ static COLD void run_waitmods(struct htable *root_args, const char *stem)
 
 int main(void)
 {
+	int n = sneks_setup_console_stdio();
+	if(n < 0) panic("console setup failed!");
+
 	printf("hello, world!\n");
 	the_kip = L4_GetKernelInterface();
 	sigma0_tid = L4_Pager();
@@ -1470,7 +1474,7 @@ int main(void)
 
 	/* configure sysinfo. */
 	thrd_t kmsg;
-	int n = thrd_create(&kmsg, &kmsg_impl_fn, NULL);
+	n = thrd_create(&kmsg, &kmsg_impl_fn, NULL);
 	if(n != thrd_success) {
 		printf("can't start kmsg!\n");
 		abort();

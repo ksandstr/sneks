@@ -19,6 +19,7 @@
 #include <sneks/bitops.h>
 #include <sneks/process.h>
 #include <sneks/rootserv.h>
+#include <sneks/console.h>
 #include <sneks/lz4.h>
 
 #include <l4/types.h>
@@ -189,6 +190,13 @@ NORETURN void panic(const char *msg) {
 
 void con_putstr(const char *string) {
 	L4_KDB_PrintString((char *)string);
+}
+
+
+int *__errno_location(void)
+{
+	static int the_errno = 0;
+	return &the_errno;
 }
 
 
@@ -1274,6 +1282,11 @@ int main(void)
 	the_kip = L4_GetKernelInterface();
 	s0_tid = L4_GlobalId(the_kip->ThreadInfo.X.UserBase, 1);
 	add_first_mem();
+	int n = sneks_setup_console_stdio();
+	if(n != 0) {
+		L4_KDB_PrintString("can't setup console stdio in sysmem!");
+		return 0;
+	}
 
 	static const struct sysmem_impl_vtable vtab = {
 		/* L4.X2 stuff */
