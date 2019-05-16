@@ -139,6 +139,7 @@ DECLARE_TEST("process:fork", access_mmap_memory);
 
 static int last_fork_child = 0;
 static bool fork_first_st_ok = true, fork_later_st_ok = true;
+static sig_atomic_t last_child_signaled = 0;
 
 /* forking within a signal handler is one of those ``through the looking
  * glass'' things of POSIX.
@@ -180,6 +181,8 @@ static void forking_handler(int signum)
 			fork_later_st_ok = fork_later_st_ok
 				&& (n_forks == 1 || WEXITSTATUS(st) == 0);
 		}
+	} else {
+		last_child_signaled = 1;
 	}
 }
 
@@ -201,7 +204,8 @@ START_TEST(from_signal_handler)
 	}
 
 	int sigint_child = last_fork_child;
-	for(int i=0; i < 8; i++) usleep(2 * 1000);
+	/* proceed on last SIGCHLD */
+	while(!last_child_signaled) pause();
 
 	/* wait for the last child */
 	int st, dead = waitpid(-1, &st, 0);
