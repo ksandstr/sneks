@@ -134,22 +134,19 @@ static void parse_inittab(void)
 	/* parse inittab. unfortunately since there's no file I/O in userspace,
 	 * we'll use a built-in inittab instead.
 	 */
-	extern char _binary_etc_inittab_start, _binary_etc_inittab_end,
+	extern char _binary_etc_inittab_start, // _binary_etc_inittab_end,
 		_binary_etc_inittab_size;
-	const char *text = &_binary_etc_inittab_start;
+	FILE *stream = fmemopen(&_binary_etc_inittab_start,
+		(unsigned long)&_binary_etc_inittab_size, "r");
 	inittab_linenum = 1;
-	while(text < &_binary_etc_inittab_end) {
-		char line[120], *lf = strchr(text, '\n');
-		if(lf == NULL) lf = &_binary_etc_inittab_end - 1;
-		int chunk = min_t(int, sizeof line - 1, lf - text);
-		memcpy(line, text, chunk);
-		line[chunk] = '\0';
-		struct inittab *t = parse_inittab_line(line, chunk);
+	char linebuf[256];
+	while(fgets(linebuf, sizeof linebuf, stream) != NULL) {
+		int len = strlen(linebuf);
+		while(len > 0 && linebuf[len - 1] == '\n') linebuf[--len] = '\0';
+		struct inittab *t = parse_inittab_line(linebuf, len);
 		if(t != NULL) darray_push(inittab, t);
-		text += chunk + 1;
 	}
-	assert(text - &_binary_etc_inittab_start >=
-		(unsigned long)&_binary_etc_inittab_size);
+	fclose(stream);
 }
 
 
