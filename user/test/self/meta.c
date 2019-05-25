@@ -1,5 +1,22 @@
 
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <sneks/test.h>
+
+
+START_TEST(simple_fork_subtest)
+{
+	plan_tests(1);
+
+	int child = fork_subtest_start("subtest") {
+		plan_tests(1);
+		ok1(true);
+	} fork_subtest_end;
+	fork_subtest_ok1(child);
+}
+END_TEST
+
+DECLARE_TEST("self:subtest", simple_fork_subtest);
 
 
 START_LOOP_TEST(nested_fork_subtests, iter, 0, 1)
