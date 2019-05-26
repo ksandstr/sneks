@@ -551,9 +551,6 @@ START_LOOP_TEST(sigsuspend_basic, iter, 0, 1)
 	const bool do_sleep = !!(iter & 1);
 	diag("do_sleep=%s", btos(do_sleep));
 	plan_tests(4);
-#ifdef __sneks__
-	todo_start("implementation missing");
-#endif
 
 	sigset_t block, old;
 	sigemptyset(&block);
@@ -598,7 +595,6 @@ START_LOOP_TEST(sigsuspend_multiple, iter, 0, 1)
 	const bool do_sleep = !!(iter & 1);
 	diag("do_sleep=%s", btos(do_sleep));
 	plan_tests(6);
-	todo_start("incomplete");
 
 	sigset_t block, old;
 	sigemptyset(&block);

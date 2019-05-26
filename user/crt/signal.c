@@ -93,6 +93,21 @@ int sigpending(sigset_t *set)
 
 int sigsuspend(const sigset_t *mask)
 {
-	errno = ENOSYS;
-	return -1;
+	__permit_recv_interrupt();
+	uint16_t sig;
+	int n = __proc_sigsuspend(__the_sysinfo->api.proc, &sig, *mask);
+	__forbid_recv_interrupt();
+	if(n == 0) {
+		/* got one signal immediately. */
+		__sig_invoke(sig);
+		errno = EINTR;
+		return -1;
+	} else if(n == 6 || n == 7) {
+		/* canceled (send or receive phase) */
+		errno = EINTR;
+		return -1;
+	} else {
+		errno = n > 0 ? EIO : -n;
+		return -1;
+	}
 }
