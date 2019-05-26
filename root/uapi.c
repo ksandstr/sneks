@@ -42,8 +42,9 @@
 
 #define TNOS_PER_BITMAP (1 << 16)
 
-/* flags in <struct process> */
+/* flags in <struct process>. comment describes behaviour when set. */
 #define PF_WAIT_ANY 1	/* sleeping in passive waitid(P_ANY, ...) */
+#define PF_SAVED_MASK 2	/* signal delivery is in sigsuspend mode */
 
 
 typedef darray(L4_ThreadId_t) tidlist;
@@ -76,6 +77,7 @@ struct process
 	/* signal delivery. */
 	uintptr_t sigpage_addr;
 	uint64_t ign_set, dfl_set, mask_set, pending_set;
+	uint64_t saved_mask_set;	/* for Proc::sigsuspend, cf. PF_SAVED_MASK */
 	L4_ThreadId_t sighelper_tid;
 	void *sighelper_utcb;
 
@@ -996,12 +998,12 @@ static const uint8_t sigpage_tail_code[] = {
 static void sig_deliver(struct process *p, int sig, bool self)
 {
 	assert(sig >= 1 && sig <= 64);
-	if(!L4_IsNilThread(p->sighelper_tid)) {
-		/* TODO: launch the helper-redirecting threadlet */
-		printf("uapi: can't deliver sig=%d while delivery in progress\n", sig);
-		return;
-	}
 
+	/* TODO: consider launching a helper-redirecting threadlet when
+	 * sighelper_tid is nonzero, so that running signal handlers can be
+	 * interrupted to run other handlers for reasons besides self-signaling or
+	 * block mask clearing.
+	 */
 	if(!L4_IsNilThread(p->sighelper_tid) || self) goto add_sig;
 
 	/* create the intermediary thread. TODO: move this into a
@@ -1301,8 +1303,10 @@ static void uapi_sigconfig(
 }
 
 
-static uint64_t uapi_sigset(
-	int32_t set_name, uint64_t or_bits, uint64_t and_bits)
+/* TODO: handle the case where mask_set would be altered while PF_SAVED_MASK
+ * is set.
+ */
+static uint64_t uapi_sigset(int set_name, uint64_t or_bits, uint64_t and_bits)
 {
 	struct process *p = get_process(pidof_NP(muidl_get_sender()));
 	if(set_name == 4 && (p->pending_set | and_bits) == 0
@@ -1341,6 +1345,7 @@ static uint64_t uapi_sigset(
 		*set &= and_bits | p->mask_set;
 	}
 	if(set != &p->pending_set) {
+		/* modification, not permitted for pending_set. */
 		*set |= or_bits;
 		uint64_t pos_change = oldval ^ *set;
 		if(pos_change != 0) {
@@ -1348,10 +1353,24 @@ static uint64_t uapi_sigset(
 			else if(set == &p->dfl_set) p->ign_set &= ~pos_change;
 		}
 		assert((p->ign_set & p->dfl_set) == 0);
+	} else if(oldval != 0 && (p->flags & PF_SAVED_MASK)) {
+		/* put all but first bit back into pending_set. */
+		int low = ffsll(oldval) - 1;
+		assert(low >= 0);
+		p->pending_set |= oldval & ~(1ull << low);
+		oldval = 1ull << low;
+		assert(ffsl(oldval) - 1 == low);
+		/* turn sigsuspend() off. */
+		p->flags &= ~PF_SAVED_MASK;
+		p->mask_set = p->saved_mask_set;
 	}
 	if(set == &p->mask_set) {
+		/* trigger pending signals that were just unmasked, filtering
+		 * thru possible default and ignore behaviour.
+		 */
 		uint64_t trig = p->pending_set & (oldval & ~and_bits);
 		p->pending_set &= ~trig;
+		trig &= ~p->ign_set;
 		while(trig != 0) {
 			int sig = ffsll(trig);
 			/* caller invokes masked-pending handlers synchronously, as though
@@ -1368,8 +1387,34 @@ static uint64_t uapi_sigset(
 
 static int uapi_sigsuspend(uint64_t mask)
 {
-	printf("%s: mask=%#lx\n", __func__, (unsigned long)mask);
+	struct process *p = get_process(pidof_NP(muidl_get_sender()));
+	if(p == NULL) return -EINVAL;
+
+	if(p->flags & PF_SAVED_MASK) {
+		/* TODO: change this to a WARN() or some such, perhaps dependent on
+		 * a per-process debug setting or something.
+		 */
+		printf("%s: pid=%u already has ongoing sigsuspend()?\n", __func__,
+			ra_ptr2id(ra_process, p));
+		return -EAGAIN;
+	}
+
+	/* trigger at most one signal out of the pending set immediately. polly
+	 * wanna cracker.
+	 */
+	int trig = ffsll(p->pending_set & ~mask);
+	if(trig > 0) {
+		p->pending_set &= ~(1 << (trig - 1));
+		return trig;
+	}
+
+	/* change mode for uapi_sigset(). */
+	p->saved_mask_set = p->mask_set;
+	p->mask_set = mask;
+	assert((p->pending_set & ~p->mask_set) == 0ull);
+	p->flags |= PF_SAVED_MASK;
 	muidl_raise_no_reply();
+	return 0;
 }
 
 
