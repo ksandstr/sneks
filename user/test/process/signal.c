@@ -25,7 +25,8 @@
 #include <sneks/test.h>
 
 
-static sig_atomic_t chld_got = 0, int_got = 0, int_max_depth = 0;
+static sig_atomic_t chld_got = 0, int_got = 0, handler_calls = 0,
+	int_max_depth = 0;
 
 #ifdef __l4x2__
 static L4_ThreadId_t chld_handler_tid = { .raw = 0 },
@@ -302,6 +303,7 @@ DECLARE_TEST("process:signal", kill_error);
 
 static void count_sigint_handler(int signum) {
 	if(signum == SIGINT) int_got++;
+	handler_calls++;
 }
 
 /* what it says on the tin: kill yourself to see what happens. */
@@ -538,3 +540,107 @@ START_LOOP_TEST(procmask_and_fork, iter, 0, 1)
 END_TEST
 
 DECLARE_TEST("process:signal", procmask_and_fork);
+
+
+/* sigsuspend. this could move off into process/sigsuspend.c or some such,
+ * since sigsuspend (and the associated sigwait family) seems subject of
+ * multiple tests by itself.
+ */
+START_LOOP_TEST(sigsuspend_basic, iter, 0, 1)
+{
+	const bool do_sleep = !!(iter & 1);
+	diag("do_sleep=%s", btos(do_sleep));
+	plan_tests(4);
+#ifdef __sneks__
+	todo_start("implementation missing");
+#endif
+
+	sigset_t block, old;
+	sigemptyset(&block);
+	sigaddset(&block, SIGINT);
+	int n = sigprocmask(SIG_BLOCK, &block, &old);
+	fail_if(n != 0);
+
+	struct sigaction act = { .sa_handler = &count_sigint_handler };
+	n = sigaction(SIGINT, &act, NULL);
+	fail_if(n != 0);
+
+	int_got = 0;
+	int parent = getpid();
+	int child = fork_subtest_start("signal-sending child") {
+		plan_tests(1);
+		n = kill(parent, SIGINT);
+		if(!ok1(n == 0)) diag("errno=%d", errno);
+	} fork_subtest_end;
+
+	if(do_sleep) usleep(50 * 1000);
+	ok(int_got == 0, "not signaled before suspend");
+	do {
+		n = sigsuspend(&old);
+		if(n < 0 && errno != EINTR) break;
+	} while(int_got == 0);
+	ok1(n < 0 && errno == EINTR);
+	ok(int_got > 0, "signaled during suspend");
+
+	fork_subtest_ok1(child);
+}
+END_TEST
+
+DECLARE_TEST("process:signal", sigsuspend_basic);
+
+
+/* the Linux/glibc manpage suggests that sigsuspend(2) returns after exactly
+ * one signal has caused a handler to run. test this by mostly the same as
+ * above, but sending both SIGINT and SIGUSR1.
+ */
+START_LOOP_TEST(sigsuspend_multiple, iter, 0, 1)
+{
+	const bool do_sleep = !!(iter & 1);
+	diag("do_sleep=%s", btos(do_sleep));
+	plan_tests(6);
+	todo_start("incomplete");
+
+	sigset_t block, old;
+	sigemptyset(&block);
+	sigaddset(&block, SIGINT);
+	sigaddset(&block, SIGUSR1);
+
+	int n = sigprocmask(SIG_BLOCK, &block, &old);
+	fail_if(n != 0);
+
+	int_got = 0;
+	handler_calls = 0;
+
+	struct sigaction act = { .sa_handler = &count_sigint_handler };
+	n = sigaction(SIGINT, &act, NULL);
+	fail_if(n != 0);
+	n = sigaction(SIGUSR1, &act, NULL);
+	fail_if(n != 0);
+
+	int parent = getpid();
+	int child = fork_subtest_start("signal-sending child") {
+		plan_tests(2);
+		n = kill(parent, SIGINT);
+		if(!ok(n == 0, "send SIGINT")) diag("errno=%d", errno);
+		n = kill(parent, SIGUSR1);
+		if(!ok(n == 0, "send SIGUSR1")) diag("errno=%d", errno);
+	} fork_subtest_end;
+
+	if(do_sleep) usleep(50 * 1000);
+	ok(handler_calls == 0, "not signaled before suspend");
+	int iters = 0;
+	do {
+		iters++;
+		n = sigsuspend(&old);
+		if(n < 0 && errno != EINTR) break;
+	} while(handler_calls < 2);
+	ok(n < 0 && errno == EINTR, "sigsuspend(2)");
+	ok(int_got == 1, "one SIGINT handled");
+	ok(handler_calls == 2, "two signals handled");
+	ok(iters == 2, "sigsuspend called twice");
+
+	fork_subtest_ok1(child);
+}
+END_TEST
+
+DECLARE_TEST("process:signal", sigsuspend_multiple);
