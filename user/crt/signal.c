@@ -89,3 +89,10 @@ int sigpending(sigset_t *set)
 
 	return 0;
 }
+
+
+int sigsuspend(const sigset_t *mask)
+{
+	errno = ENOSYS;
+	return -1;
+}

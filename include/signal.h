@@ -64,6 +64,7 @@ extern sighandler_t signal(int signum, sighandler_t handler);
 
 extern int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 extern int sigpending(sigset_t *set);
+extern int sigsuspend(const sigset_t *mask);
 
 extern int kill(int __pid, int __sig);
 
