@@ -300,7 +300,7 @@ END_TEST
 DECLARE_TEST("process:signal", kill_error);
 
 
-static void ks_sigint_handler(int signum) {
+static void count_sigint_handler(int signum) {
 	if(signum == SIGINT) int_got++;
 }
 
@@ -310,7 +310,7 @@ START_TEST(kill_self)
 	plan_tests(3);
 
 	int_got = 0;
-	struct sigaction act = { .sa_handler = &ks_sigint_handler };
+	struct sigaction act = { .sa_handler = &count_sigint_handler };
 	int n = sigaction(SIGINT, &act, NULL);
 	if(!ok(n == 0, "sigaction")) diag("errno=%d", errno);
 
@@ -376,7 +376,7 @@ START_LOOP_TEST(kill_permissions, iter, 0, 127)
 	plan_tests(5);
 
 	int_got = 0;
-	struct sigaction act = { .sa_handler = &ks_sigint_handler };
+	struct sigaction act = { .sa_handler = &count_sigint_handler };
 	int n = sigaction(SIGINT, &act, NULL);
 	fail_unless(n == 0);
 
@@ -434,7 +434,7 @@ START_LOOP_TEST(procmask_and_pending_basic, iter, 0, 1)
 	plan_tests(9);
 
 	int_got = 0;
-	struct sigaction act = { .sa_handler = &ks_sigint_handler };
+	struct sigaction act = { .sa_handler = &count_sigint_handler };
 	int n = sigaction(SIGINT, &act, NULL);
 	fail_unless(n == 0);
 
@@ -498,7 +498,7 @@ START_LOOP_TEST(procmask_and_fork, iter, 0, 1)
 	plan_tests(2);
 
 	int_got = 0;
-	struct sigaction act = { .sa_handler = &ks_sigint_handler };
+	struct sigaction act = { .sa_handler = &count_sigint_handler };
 	int n = sigaction(SIGINT, &act, NULL);
 	fail_unless(n == 0);
 
