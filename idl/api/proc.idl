@@ -114,12 +114,33 @@ interface Proc
 	 * the block set which was set in the pending set will cause that signal
 	 * to fire. @and_bits is applied before @or_bits, so that it's possible to
 	 * set every bit to a given value in a single call.
+	 *
+	 * if sigset() is used to alter the block set while a sigsuspend is
+	 * applied, sigset() fails with EAGAIN.
+	 * (TODO: the issue could be resolved by delivering a spurious signal to
+	 * undo the sigsuspend, then applying sigset.)
 	 */
 	unsigned long long sigset(
 		in long set_name,
 		in unsigned long long or_bits,
 		in unsigned long long and_bits)
 			raises(muidl::NoReply);
+
+	/* set temporary signal block mask. when signal delivery is next invoked,
+	 * a single signal is delivered even if several arrived concurrently, and
+	 * the block mask is reset to previous.
+	 *
+	 * if setting @mask triggers one or more pending signal, sigsuspend()
+	 * dequeues and returns the number of the lowest-numbered deliverable
+	 * signal (orig 1), and leaves the block mask as it was; otherwise the
+	 * operation doesn't return and the caller regains control by signal
+	 * delivery EINTR status.
+	 *
+	 * (TODO: note EAGAIN when PF_SAVED_MASK is already in there. or specify
+	 * overwrite behaviour, or something.)
+	 */
+	unsigned short sigsuspend(in unsigned long long mask)
+		raises(muidl::NoReply, Posix::Errno);
 
 	/* what it says on the tin. effectively getresuid(2) and getresgid(2)
 	 * rolled up.

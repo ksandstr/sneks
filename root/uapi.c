@@ -1366,6 +1366,13 @@ static uint64_t uapi_sigset(
 }
 
 
+static int uapi_sigsuspend(uint64_t mask)
+{
+	printf("%s: mask=%#lx\n", __func__, (unsigned long)mask);
+	muidl_raise_no_reply();
+}
+
+
 static void uapi_getresugid(
 	__uid_t *r_uid, __uid_t *e_uid, __uid_t *s_uid,
 	__gid_t *r_gid, __gid_t *e_gid, __gid_t *s_gid)
@@ -1450,6 +1457,7 @@ int uapi_loop(void *param_ptr)
 		.fork = &uapi_fork,
 		.sigconfig = &uapi_sigconfig,
 		.sigset = &uapi_sigset,
+		.sigsuspend = &uapi_sigsuspend,
 		.getresugid = &uapi_getresugid,
 		.setresugid = &uapi_setresugid,
 	};
