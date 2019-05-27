@@ -192,6 +192,12 @@ START_TEST(from_signal_handler)
 {
 	plan_tests(6);
 
+	sigset_t chld_set, old;
+	sigemptyset(&chld_set);
+	sigaddset(&chld_set, SIGCHLD);
+	int n = sigprocmask(SIG_BLOCK, &chld_set, &old);
+	fail_if(n != 0, "errno=%d", errno);
+
 	struct sigaction act = { .sa_handler = &forking_handler };
 	sigaction(SIGCHLD, &act, NULL);
 	sigaction(SIGINT, &act, NULL);
@@ -205,7 +211,13 @@ START_TEST(from_signal_handler)
 
 	int sigint_child = last_fork_child;
 	/* proceed on last SIGCHLD */
-	while(!last_child_signaled) pause();
+	while(!last_child_signaled) {
+		n = sigsuspend(&old);
+		if(n != -1 || errno != EINTR) {
+			diag("sigsuspend returned n=%d, errno=%d", n, errno);
+			break;
+		}
+	}
 
 	/* wait for the last child */
 	int st, dead = waitpid(-1, &st, 0);
