@@ -24,6 +24,21 @@ typedef void (*handler_bottom_fn)(void);
 static void *sig_delivery_page = NULL;
 static uint64_t ign_set = 0, dfl_set = ~0ull, block_set = 0, defer_set = 0;
 static struct sigaction sig_actions[64];
+static bool recv_break_ok = false;
+
+
+void __permit_recv_interrupt(void)
+{
+	assert(!recv_break_ok);
+	recv_break_ok = true;
+}
+
+
+void __forbid_recv_interrupt(void)
+{
+	assert(recv_break_ok);
+	recv_break_ok = false;
+}
 
 
 void __sig_bottom(void)
@@ -67,13 +82,15 @@ void __sig_bottom(void)
 
 		/* H to halt the thread;
 		 * S to interrupt a send phase;
+		 * [R to interrupt a receive phase] if applicable;
 		 * "h" to write the H flag;
 		 * "d" to deliver ctl, sp, ip, and flags.
 		 */
 		L4_Word_t ctl_out, sp_out, ip_out, flags_out, udh_out;
 		L4_ThreadId_t pager_out;
 		L4_ThreadId_t ret = L4_ExchangeRegisters(__main_tid,
-			0x001 | 0x004 | 0x100 | 0x200, 0, 0, 0, 0, L4_nilthread,
+			0x001 | (recv_break_ok ? 0x002 : 0) | 0x004 | 0x100 | 0x200,
+			0, 0, 0, 0, L4_nilthread,
 			&ctl_out, &sp_out, &ip_out, &flags_out, &udh_out, &pager_out);
 		if(L4_IsNilThread(ret)) {
 			printf("%s: send-halt ExchangeRegisters failed, ec=%lu\n",
@@ -87,19 +104,16 @@ void __sig_bottom(void)
 		*(--sp) = ip_out;	/* return address */
 		*(--sp) = flags_out;
 		*(--sp) = sig + 1;	/* POSIX signal number */
-		/* TODO: interrupt an interruptable receive phase (where declared
-		 * explicitly, such as waitid(2) or select(2) or any of the blocking
-		 * I/O calls), and use the __invoke_sig_fast path.
-		 */
 		L4_Word_t new_ip;
-		if((ctl_out & 0x002) != 0 || (ctl_out & 0x004) == 0) {
-			/* in receive phase, or no IPC at all. do the slow sp/ip switch,
-			 * possibly only after the receive phase returns from Ipc, and go
-			 * into a BR/MR-storing slow-arse signal invocation routine.
+		if((~ctl_out & 0x004) || ((ctl_out & 0x002) && !recv_break_ok)) {
+			/* in non-breakable receive phase, or no IPC at all. do the slow
+			 * sp/ip switch, possibly only after the receive phase returns
+			 * from Ipc, and go into a BR/MR-storing slow-arse signal
+			 * invocation routine.
 			 */
 			new_ip = (L4_Word_t)&__invoke_sig_slow;
 		} else {
-			/* was in a send-phase that was aborted. nice! */
+			/* was in IPC, subsequently broken, so MR/BR need not be saved. */
 			new_ip = (L4_Word_t)&__invoke_sig_fast;
 		}
 		/* TODO: block @sig for handler to clear */

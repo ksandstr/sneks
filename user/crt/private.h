@@ -42,6 +42,17 @@ extern void __file_init(struct sneks_fdlist *fdlist);
 /* from sigaction.c */
 extern void __sig_bottom(void);
 extern void __attribute__((regparm(3))) __sig_invoke(int sig);
+/* used from syscall wrappers that may wait on a receive phase for an extended
+ * period and have an useful rollback path (waitid(2) under ~WNOHANG), or
+ * require receive-phase signal interrupts as part of normal operation
+ * (sigsuspend(2)). these assert against nesting and unpaired usage. by
+ * default, aborts on the receive phase are forbidden.
+ *
+ * they're dressed up as functions to facilitate code reuse between this and a
+ * future multithreaded runtime.
+ */
+extern void __permit_recv_interrupt(void);
+extern void __forbid_recv_interrupt(void);
 
 
 /* from uid.c */
