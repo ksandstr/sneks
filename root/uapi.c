@@ -223,7 +223,7 @@ static bool task_common_ctor(
 
 
 /* destroys threads, releases tno bitmap slots, clears the tidlist, tosses
- * associated memory, and invalidates the structure.
+ * associated memory, but doesn't invalidate the structure.
  */
 static void task_common_dtor(struct task_common *task)
 {
@@ -241,7 +241,7 @@ static void task_common_dtor(struct task_common *task)
 	/* idempotent memory release */
 	darray_free(task->threads); darray_init(task->threads);
 	free(task->utcb_free); task->utcb_free = NULL;
-	task->utcb_area = L4_Nilpage;
+	assert(!L4_IsNilFpage(task->utcb_area));
 }
 
 
@@ -379,14 +379,19 @@ static void free_thread(
 }
 
 
+/* destroy a zombie process. task_common_dtor(&@p->task) should already have
+ * been called from zombify(); this one removes references and invalidates the
+ * structure.
+ */
 static void destroy_process(struct process *p)
 {
-	task_common_dtor(&p->task);
 	/* TODO: various other final process destruction things, such as
 	 * reparenting of children to PID1 and what-not.
 	 */
 	htable_del(&pid_to_child_hash, int_hash(p->ppid), p);
+	p->task.utcb_area = L4_Nilpage;
 	ra_free(ra_process, p);
+	assert(get_process(ra_ptr2id(ra_process, p)) == NULL);
 }
 
 
