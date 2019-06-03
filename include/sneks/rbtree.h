@@ -166,6 +166,12 @@ static inline void __rb_link_node(struct rb_node * node, struct rb_node * parent
 }
 
 
+#define RB_FOREACH(_cur, _rootptr) \
+	for(struct rb_node *_cur = __rb_first((_rootptr)); \
+		_cur != NULL; \
+		_cur = __rb_next(_cur))
+
+
 #ifdef __KERNEL__
 
 /* symbols exported outside rbtree.c may be used in kernel source, assuming
@@ -179,11 +185,6 @@ static inline void __rb_link_node(struct rb_node * node, struct rb_node * parent
 #define rb_last __rb_last
 #define rb_replace_node __rb_replace_node
 #define rb_link_node __rb_link_node
-
-#define RB_FOREACH(_cur, _rootptr) \
-	for(struct rb_node *_cur = rb_first((_rootptr)); \
-		_cur != NULL; \
-		_cur = rb_next(_cur))
 
 #endif
 
