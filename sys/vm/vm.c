@@ -208,6 +208,14 @@ struct as_free {
 		darray_free(*(pls)); \
 	} while(0)
 
+/* tests whether [a, a+b) and [c, c+d) overlap.
+ * TODO: move into an util.h somewhere.
+ */
+#define OVERLAP_EXCL(a, b, c, d) \
+	({ typeof(a) __a = (a); typeof(c) __c = (c); \
+	   !(__a + (b) <= __c || __a >= __c + (d)); \
+	})
+
 
 static size_t hash_vp_by_phys(const void *ptr, void *priv);
 static void remove_vp(struct vp *vp, plbuf *plbuf);
@@ -615,16 +623,42 @@ static void munmap_space(struct vm_space *sp, L4_Word_t addr, size_t size)
 
 static int reserve_mmap(
 	struct lazy_mmap *mm,
-	struct vm_space *sp, L4_Word_t address, size_t length)
+	struct vm_space *sp, L4_Word_t address, size_t length,
+	bool fixed)
 {
-	mm->length = (length + PAGE_SIZE - 1) & ~PAGE_MASK;
-	if(address != 0) {
-		/* TODO: find something "nearby" to addr. for now we'll catch overlap
-		 * thru insert_lazy_mmap() and undo, but this pops an error to the
-		 * client needlessly.
-		 */
-		mm->addr = (address + PAGE_SIZE / 2) & ~PAGE_MASK;
-	} else {
+	assert((length & PAGE_MASK) == 0);
+	assert((address & PAGE_MASK) == 0);
+
+	/* NOTE: instead of checking these for every mmap, we could allow
+	 * lazy_mmaps over sip, kip, and utcb but render them ineffective in
+	 * vm_pf() (and therefore vm_munmap()). this saves us a _NP return
+	 * from mmap(2).
+	 */
+	if((sp->brk_lo != sp->brk_hi
+			&& OVERLAP_EXCL(sp->brk_lo, sp->brk_hi - sp->brk_lo,
+				address, length))
+		|| OVERLAP_EXCL(L4_Address(sp->utcb_area), L4_Size(sp->utcb_area),
+			address, length)
+		|| OVERLAP_EXCL(L4_Address(sp->kip_area), L4_Size(sp->kip_area),
+			address, length)
+		|| OVERLAP_EXCL(L4_Address(sp->sysinfo_area),
+			L4_Size(sp->sysinfo_area), address, length))
+	{
+		/* bad hint. bad! */
+		if(fixed) return -EEXIST; else address = 0;
+	}
+
+	struct lazy_mmap *old;
+	mm->addr = address;
+	mm->length = length;
+	if(fixed) {
+		old = insert_lazy_mmap(sp, mm);
+		if(old != NULL) {
+			munmap_space(sp, mm->addr, mm->length);
+			old = insert_lazy_mmap(sp, mm);
+		}
+	} else if(address == 0 || (old = insert_lazy_mmap(sp, mm)) != NULL) {
+		/* TODO: use @address hint to find something "nearby". */
 		address = get_as_free(sp, mm->length);
 		if(address != 0) mm->addr = address;
 		else {
@@ -633,19 +667,10 @@ static int reserve_mmap(
 			mm->addr = sp->mmap_bot - mm->length + 1;
 			sp->mmap_bot -= mm->length;
 		}
+		old = insert_lazy_mmap(sp, mm);
 	}
 
-	struct lazy_mmap *old = insert_lazy_mmap(sp, mm);
-	if(old != NULL) {
-		/* TODO: turn this check into an assert once the error would be
-		 * caught or avoided further up.
-		 */
-
-		assert(address != 0);
-		/* FIXME: return as_free to pool (or remove this clause entirely) */
-		return -EEXIST;
-	}
-
+	assert(old == NULL);
 	return 0;
 }
 
@@ -678,7 +703,8 @@ static int vm_mmap(
 		.flags = flags | (prot_to_l4_rights(prot) << 16),
 		.fd_serv.raw = fd_serv, .ino = fd, .offset = offset >> PAGE_BITS,
 	};
-	int n = reserve_mmap(mm, sp, *addr_ptr, length);
+	int n = reserve_mmap(mm, sp, *addr_ptr,
+		(length + PAGE_SIZE - 1) & ~PAGE_MASK, !!(flags & MAP_FIXED));
 	if(n < 0) {
 		free(mm);
 		return n;

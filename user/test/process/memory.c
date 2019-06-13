@@ -66,7 +66,6 @@ START_TEST(mmap_reserved)
 		{ (void *)(L4_MyLocalId().raw & ~(sz - 1)), "utcb" },
 	};
 	plan_tests(ARRAY_SIZE(ptrs));
-	todo_start("woop shoop");
 	for(int i=0; i < ARRAY_SIZE(ptrs); i++) {
 		void *res = mmap(ptrs[i].ptr, sz, PROT_READ | PROT_WRITE,
 			MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED, -1, 0);
@@ -127,9 +126,6 @@ START_TEST(mmap_fixed)
 	const int page_size = sysconf(_SC_PAGESIZE);
 	diag("page_size=%d", page_size);
 	plan_tests(5);
-#ifdef __sneks__
-	todo_start("not in sneks yet");
-#endif
 
 	void *base = sbrk(0);
 	diag("base=%p", base);
