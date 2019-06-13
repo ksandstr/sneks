@@ -83,6 +83,58 @@ END_TEST
 DECLARE_TEST("process:memory", mmap_basic);
 
 
+/* MAP_FIXED to mmap(2). should overlap existing mappings. may fail at overlap
+ * with sbrk().
+ */
+START_TEST(mmap_fixed)
+{
+	const int page_size = sysconf(_SC_PAGESIZE);
+	diag("page_size=%d", page_size);
+	plan_tests(5);
+#ifdef __sneks__
+	todo_start("not in sneks yet");
+#endif
+
+	void *base = sbrk(0);
+	diag("base=%p", base);
+
+	/* part 1: MAP_FIXED should succeed ahead of sbrk(0). */
+	const size_t meg = 1024 * 1024;
+	void *ptr = mmap(base + meg, meg, PROT_READ | PROT_WRITE,
+		MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED, -1, 0);
+	ok1(ptr != MAP_FAILED);
+	ok1(ptr == base + meg);
+
+	/* sbrk into it should fail. */
+	void *next = sbrk(2 * meg);
+	if(ok1(next == (void *)-1)) diag("errno=%d", errno);
+	else {
+		diag("undoing previous sbrk");
+		sbrk(-2 * meg);
+	}
+
+	if(ptr != MAP_FAILED) munmap(ptr, meg);
+	/* and work after munmap. */
+	next = sbrk(2 * meg);
+	if(ok1(next != (void *)-1)) sbrk(-2 * meg);
+
+#ifndef __sneks__
+	skip(1, "only sneks forbids mmap() over sbrk");
+#else
+	/* part 2: MAP_FIXED into the sbrk range should fail. */
+	ptr = mmap(base - meg, page_size * 2, PROT_READ | PROT_WRITE,
+		MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED, -1, 0);
+	if(!ok1(ptr == MAP_FAILED)) {
+		diag("ptr'=%p", ptr);
+		munmap(ptr, page_size * 2);
+	}
+#endif
+}
+END_TEST
+
+DECLARE_TEST("process:memory", mmap_fixed);
+
+
 static sig_atomic_t poked = 0;
 
 static void sync_poke(int signum) {
