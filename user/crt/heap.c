@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <assert.h>
+#include <errno.h>
 
 #include <l4/thread.h>
 #include <sneks/mm.h>
@@ -28,9 +29,13 @@ int brk(void *addr)
 		 */
 		int n = __vm_brk(L4_Pager(), current_brk);
 		if(n != 0) {
-			/* FIXME: recover POSIX error, return (void *)-1 */
-			printf("VM::brk failed, n=%d\n", n);
-			abort();
+			if(n > 0 || n != -ENOMEM) {
+				/* FIXME: recover POSIX error */
+				printf("VM::brk failed, n=%d\n", n);
+				abort();
+			}
+			errno = ENOMEM;
+			return -1;
 		}
 	}
 
