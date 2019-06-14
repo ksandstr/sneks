@@ -11,6 +11,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/mman.h>
+#include <ccan/array_size/array_size.h>
 
 #include <sneks/test.h>
 
@@ -138,3 +139,104 @@ START_LOOP_TEST(mmap_across_fork, iter, 0, 1)
 END_TEST
 
 DECLARE_TEST("process:memory", mmap_across_fork);
+
+
+static void xmmap(
+	void *addr, size_t sz, int prot, int flags,
+	int fd, size_t offset)
+{
+	fail_unless(flags & MAP_FIXED);
+	void *ptr = mmap(addr, sz, prot, flags, fd, offset);
+	fail_if(ptr == MAP_FAILED, "mmap(2), errno=%d", errno);
+	fail_unless(ptr == addr, "mmap(2) result is %p, wanted %p", ptr, addr);
+}
+
+
+START_LOOP_TEST(munmap_geometry_shrapnel, iter, 0, 63)
+{
+	static const int under_counts[] = { 0, 1, 3, 11 };
+	const bool pad_front = !!(iter & 1), pad_rear = !!(iter & 2),
+		lap_front = !!(iter & 4), lap_rear = !!(iter & 8);
+	const int num_under = under_counts[(iter >> 4) & 3];
+	diag("pad_front=%s, pad_rear=%s, lap_front=%s, lap_rear=%s, num_under=%d",
+		btos(pad_front), btos(pad_rear), btos(lap_front), btos(lap_rear),
+		num_under);
+	plan_tests(1);
+#ifdef __sneks__
+	todo_start("crummy?");
+#endif
+
+	const int page_size = sysconf(_SC_PAGESIZE);
+	void *const base = sbrk(0),
+		*const start = base + page_size * 1024,
+		*const end = start + page_size * 32768;
+	diag("base=%p, start=%p, end=%p", base, start, end);
+
+	int segs[(num_under + 4) * 2], *sp = segs;
+	if(pad_front) { *sp++ = -256; *sp++ = 4; }
+	if(lap_front) { *sp++ = -4; *sp++ = 8; }
+	for(int i=0, pos = 17; i < num_under; i++) {
+		*sp++ = pos;
+		*sp++ = 77;
+		pos += 81;
+	}
+	const int last_page = (end - start) / page_size;
+	if(lap_rear) { *sp++ = last_page - 4; *sp++ = 8; }
+	if(pad_rear) { *sp++ = last_page + 123; *sp++ = 4; }
+	fail_unless(sp <= &segs[ARRAY_SIZE(segs)]);
+
+	for(int i=0; &segs[i] < sp; i+=2) {
+		void *s = start + segs[i + 0] * page_size,
+			*e = s + segs[i + 1] * page_size;
+		diag("creating mmap [%p, %p)", s, e);
+		xmmap(s, e - s, PROT_READ | PROT_WRITE,
+			MAP_FIXED | MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+	}
+
+	int n = munmap(start, end - start);
+	if(!ok(n == 0, "munmap")) diag("errno=%d", errno);
+	/* TODO: catch sigsegv to check that references are valid for the front
+	 * and rear pads and front and rear overlapping maps, respectively; and
+	 * invalid between start and end. also add a variable to fault some pages
+	 * in first.
+	 */
+}
+END_TEST
+
+DECLARE_TEST("process:memory", munmap_geometry_shrapnel);
+
+
+/* then the case which the previous test couldn't do, i.e. munmap from within
+ * a larger lazy_mmap. variables are whether it's constructed out of one part
+ * or several.
+ */
+START_LOOP_TEST(munmap_geometry_hotdog, iter, 0, 1)
+{
+	const bool from_parts = !!(iter & 1);
+	diag("from_parts=%s", btos(from_parts));
+	plan_tests(1);
+
+	const int page_size = sysconf(_SC_PAGESIZE);
+	void *const base = sbrk(0) + 1024 * page_size,
+		*const start = base + 1024 * page_size,
+		*const end = start + 4096 * page_size;
+	int n_parts = from_parts ? 16 : 1;
+	size_t sz = end - start, pc = sz / 16;
+	for(int i=0; i < n_parts; i++) {
+		diag("creating mmap [%p, %p)", start + pc * i, start + pc * i + pc);
+		xmmap(start + pc * i, pc, PROT_READ | PROT_WRITE,
+			MAP_FIXED | MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+	}
+
+	int n = munmap(start + 23 * page_size, 77 * page_size);
+	if(!ok(n == 0, "munmap")) diag("errno=%d", errno);
+
+	/* TODO: probe segvs, add parameter for faulting things in before first
+	 * unmap
+	 */
+
+	munmap(start, end - start);
+}
+END_TEST
+
+DECLARE_TEST("process:memory", munmap_geometry_hotdog);
