@@ -1,5 +1,5 @@
 
-/* tests on mmap(2), munmap(), mprotect(), etc. */
+/* tests on mmap(2), munmap(), sbrk(), etc. */
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -227,3 +227,22 @@ START_LOOP_TEST(munmap_geometry_hotdog, iter, 0, 1)
 END_TEST
 
 DECLARE_TEST("process:memory", munmap_geometry_hotdog);
+
+
+/* this is meant to hit the backward case in VM::brk.
+ * TODO: catch sigsegv to probe the sbrk heap after the negative call.
+ */
+START_TEST(sbrk_backward)
+{
+	plan_tests(2);
+
+	void *ptr = sbrk(1024 * 1024);
+	memset(ptr, 0xad, 1024 * 1024);
+	pass("didn't crash");
+
+	sbrk(-1024 * 1024);
+	pass("still didn't crash");
+}
+END_TEST
+
+DECLARE_TEST("process:memory", sbrk_backward);
