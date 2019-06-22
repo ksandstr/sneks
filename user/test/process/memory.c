@@ -13,6 +13,10 @@
 #include <sys/mman.h>
 #include <ccan/array_size/array_size.h>
 
+#ifdef __sneks__
+#include <l4/thread.h>
+#endif
+
 #include <sneks/test.h>
 
 
@@ -45,6 +49,38 @@ START_TEST(mmap_errors)
 END_TEST
 
 DECLARE_TEST("process:memory", mmap_errors);
+
+
+/* mmap(2) with MAP_FIXED over top of areas reserved by Sneks or L4.X2. */
+START_TEST(mmap_reserved)
+{
+#ifndef __sneks__
+	plan_skip_all("don't know about forbidden ranges on this host");
+#else
+
+	extern void *__the_sysinfo, *__the_kip;
+	size_t sz = sysconf(_SC_PAGESIZE);
+	struct { void *ptr; const char *name; } ptrs[] = {
+		{ __the_sysinfo, "sysinfopage" },
+		{ __the_kip, "l4.x2 kip" },
+		{ (void *)(L4_MyLocalId().raw & ~(sz - 1)), "utcb" },
+	};
+	plan_tests(ARRAY_SIZE(ptrs));
+	todo_start("woop shoop");
+	for(int i=0; i < ARRAY_SIZE(ptrs); i++) {
+		void *res = mmap(ptrs[i].ptr, sz, PROT_READ | PROT_WRITE,
+			MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED, -1, 0);
+		if(!ok(res == MAP_FAILED && errno == EEXIST,
+			"forbid map into %s", ptrs[i].name))
+		{
+			diag("errno=%d", errno);
+		}
+	}
+#endif
+}
+END_TEST
+
+DECLARE_TEST("process:memory", mmap_reserved);
 
 
 /* mmap(2), munmap() API basics. */
