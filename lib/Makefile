@@ -23,7 +23,7 @@ distclean:
 	@rm -rf .deps
 
 
-libsneks.a: $(LIB_OBJS)
+libsneks.a: $(LIB_OBJS) setjmp.o
 	@echo "  AR $@"
 	@ar cr $@ $^
 	@echo "  RANLIB $@"
