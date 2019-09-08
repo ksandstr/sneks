@@ -1360,7 +1360,6 @@ static int pf_mmap_shared(
 		assert(PL_FSID(link) == pidof_NP(mm->fd_serv));
 		assert(PL_INO(link) == mm->ino);
 		link->offset = mm->offset + bump;
-		atomic_store(&pl2pp(link)->owner, vp);
 		int n = push_cached_page(&cached, top, link);
 		if(n == 0) {
 			*map_page_p = L4_FpageLog2((L4_Word_t)page, PAGE_BITS);
