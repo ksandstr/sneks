@@ -481,12 +481,10 @@ static COLD void init_phys(L4_Fpage_t *phys, int n_phys)
 
 	pp_ra = RA_NEW(struct pp, p_total);
 	for(int i=0; i < n_phys; i++) {
-		int base = (L4_Address(phys[i]) >> PAGE_BITS) - pp_first;
-		assert(base >= 0);
+		int base = L4_Address(phys[i]) >> PAGE_BITS;
+		assert(base > 0);
 		for(int o=0; o < L4_Size(phys[i]) >> PAGE_BITS; o++) {
-			struct pp *pp = ra_alloc(pp_ra, base + o);
-			assert(ra_ptr2id(pp_ra, pp) == base + o);
-			assert(ra_id2ptr(pp_ra, base + o) == pp);
+			struct pp *pp = ra_alloc(pp_ra, base + o - pp_first);
 			struct pl *link = malloc(sizeof *link);
 			link->page_num = base + o;
 			atomic_store(&link->status, 0);
@@ -495,6 +493,8 @@ static COLD void init_phys(L4_Fpage_t *phys, int n_phys)
 			do {
 				top = nbsl_top(&page_free_list);
 			} while(!nbsl_push(&page_free_list, top, &link->nn));
+			assert(pl2pp(link) == pp);
+			assert(pp->link == link);
 		}
 	}
 	printf("vm: physical memory tracking initialized.\n");
