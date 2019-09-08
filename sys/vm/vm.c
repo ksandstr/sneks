@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <stdatomic.h>
 #include <string.h>
 #include <assert.h>
@@ -28,6 +29,7 @@
 #include <ccan/likely/likely.h>
 #include <ccan/container_of/container_of.h>
 #include <ccan/darray/darray.h>
+#include <ccan/bitmap/bitmap.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -137,10 +139,10 @@ struct pl {
  *
  * for now, ->status designates the physical page number used for this vpage.
  * its high bit should always be clear. there will be other formats for
- * swapspace slots, references to pagecache items, copy on write, and so on.
- * this arrangement allows for as many as 2^31 physical pages in vm, or 8 TiB
- * worth. if ->status is 0, anonymous memory has not yet been attached to this
- * page by the fault handler.
+ * swapspace slots, references to pagecache items, and so on. this arrangement
+ * allows for as many as 2^31 physical pages in vm, or 8 TiB worth. if
+ * ->status is 0, anonymous memory has not yet been attached to this page by
+ *  the fault handler.
  *
  * flags are assigned in ->vaddr's low 12 bits as follows:
  *   - 2..0 are a mask of L4_Readable, L4_Writable, and L4_eXecutable,
@@ -220,8 +222,9 @@ struct as_free {
 static size_t hash_vp_by_phys(const void *ptr, void *priv);
 static void remove_vp(struct vp *vp, plbuf *plbuf);
 static void remove_active_pls(struct pl **pls, int n_pls);
+static struct lazy_mmap *find_lazy_mmap(struct vm_space *sp, uintptr_t addr);
 
-static size_t pp_first;
+static size_t pp_first, pp_total;
 static struct rangealloc *pp_ra, *vm_space_ra;
 static L4_Word_t user_addr_max;
 
@@ -231,12 +234,17 @@ static _Atomic unsigned long next_anon_ino = 1;
 static struct nbsl page_free_list = NBSL_LIST_INIT(page_free_list),
 	page_active_list = NBSL_LIST_INIT(page_active_list);
 
+/* multiset of vp by physical address when that physical page has been
+ * referenced from more than one vp. a physical page's primary reference
+ * (pp->owner) is always omitted, and may be NULL if it was removed before all
+ * secondaries.
+ */
 static struct htable share_table = HTABLE_INITIALIZER(
 	share_table, &hash_vp_by_phys, NULL);
 
 /* pagecache. */
 static uint32_t pc_salt[4];	/* init-once salt for hash_cached_page() */
-static struct nbsl *pc_buckets;
+static struct nbsl *pc_buckets = NULL;
 static unsigned char n_pc_buckets_log2;
 #define n_pc_buckets (1u << n_pc_buckets_log2)
 
@@ -273,6 +281,7 @@ static size_t hash_vp_by_phys(const void *ptr, void *priv) {
  * physical page's ownership was contested, and the caller lost.)
  */
 static inline struct pp *pl2pp(const struct pl *link) {
+	assert(link->page_num >= pp_first);
 	return ra_id2ptr(pp_ra, link->page_num - pp_first);
 }
 
@@ -281,6 +290,293 @@ static struct pp *get_pp(uint32_t page_num) {
 	assert(page_num >= pp_first);
 	return ra_id2ptr(pp_ra, page_num - pp_first);
 }
+
+
+static bool has_shares(size_t hash, uint32_t page_num, int count)
+{
+	struct htable_iter it;
+	for(struct vp *cur = htable_firstval(&share_table, &it, hash);
+		cur != NULL;
+		cur = htable_nextval(&share_table, &it, hash))
+	{
+		if(cur->status == page_num && --count <= 0) return true;
+	}
+	return false;
+}
+
+
+static int cmp_ptrs(const void *a, const void *b) {
+	return *(const void **)a - *(const void **)b;
+}
+
+
+/* structural invariant checks. */
+
+#ifndef DEBUG_ME_HARDER
+#define invariants() true
+#define vp_invariants(ctx, vp, pp, pl) true
+#define all_space_invariants(ctx, allvps, nallvps) true
+#define share_table_invariants(ctx, allvps, nallvps) true
+#else
+#include <sneks/invariant.h>
+
+
+static bool vp_invariants(INVCTX_ARG,
+	struct vp *virt, struct pp *phys, struct pl *link)
+{
+	inv_iff1(virt->status == 0, phys == NULL);
+
+	if(phys != NULL) {
+		/* @virt is resident. */
+		inv_ok1(~virt->status & 0x80000000);
+		inv_ok1(virt->status == link->page_num);
+	}
+
+	inv_imply1(VP_IS_COW(virt), ~VP_RIGHTS(virt) & L4_Writable);
+	inv_imply1(VP_RIGHTS(virt) & L4_Writable, !VP_IS_COW(virt));
+
+	return true;
+
+inv_fail:
+	return false;
+}
+
+
+static bool all_space_invariants(INVCTX_ARG,
+	struct vp *const *all_vps, size_t n_all_vps)
+{
+	assert(vm_space_ra != NULL);
+
+	/* go over every space, and every vp therein. */
+	struct ra_iter space_iter;
+	for(struct vm_space *sp = ra_first(vm_space_ra, &space_iter);
+		sp != NULL;
+		sp = ra_next(vm_space_ra, &space_iter))
+	{
+		if(L4_IsNilFpage(sp->kip_area) || L4_IsNilFpage(sp->utcb_area)) {
+			/* skip invalid and uninitialized spaces */
+			continue;
+		}
+		inv_push("sp=%d, brk=[%#x, %#x)", ra_ptr2id(vm_space_ra, sp),
+			sp->brk_lo, sp->brk_hi);
+
+		/* (this all could be in a space_invariants(), one day.) */
+		struct htable_iter vpit;
+		for(const struct vp *vp = htable_first(&sp->pages, &vpit);
+			vp != NULL;
+			vp = htable_next(&sp->pages, &vpit))
+		{
+			/* the vp should be present in all_vps. */
+			inv_ok(bsearch(&vp, all_vps, n_all_vps, sizeof(struct vp *),
+				&cmp_ptrs) != NULL, "vp present in all_vps");
+
+			uintptr_t vaddr = vp->vaddr & ~PAGE_MASK;
+			inv_log("vaddr=%#x", vaddr);
+			/* should lay within the brk range or in a lazy_mmap. */
+			inv_ok((vaddr >= sp->brk_lo && vaddr < sp->brk_hi)
+					|| find_lazy_mmap(sp, vaddr) != NULL,
+				"vp->vaddr within brk range or lazy_mmap");
+		}
+
+		inv_log("kip_area=%#lx:%#lx, utcb_area=%#lx:%#lx, sysinfo_area=%#lx:%#lx",
+			L4_Address(sp->kip_area), L4_Size(sp->kip_area),
+			L4_Address(sp->utcb_area), L4_Size(sp->utcb_area),
+			L4_Address(sp->sysinfo_area), L4_Size(sp->sysinfo_area));
+		inv_ok1(!fpage_overlap(sp->kip_area, sp->utcb_area));
+		inv_ok1(!fpage_overlap(sp->kip_area, sp->sysinfo_area));
+		inv_ok1(!fpage_overlap(sp->utcb_area, sp->sysinfo_area));
+
+		inv_pop();
+	}
+
+	return true;
+
+inv_fail:
+	return false;
+}
+
+
+static bool share_table_invariants(INVCTX_ARG,
+	struct vp *const *all_vps, size_t n_all_vps)
+{
+	/* all <struct vp *> found through share_table, including the ones that're
+	 * actually the sole owner (i.e. where pp->owner == NULL).
+	 */
+	darray(struct vp *) share_vps = darray_new(),
+		owner_vps = darray_new();	/* ones discovered thru pp->owner */
+
+	struct htable_iter it;
+	for(const struct vp *share = htable_first(&share_table, &it);
+		share != NULL;
+		share = htable_next(&share_table, &it))
+	{
+		inv_push("share=%p: ->vaddr=%#x, ->status=%#x, ->age=%u",
+			share, share->vaddr, share->status, share->age);
+
+		inv_ok1(~share->status & 0x80000000);
+		if(all_vps != NULL) {
+			inv_ok(bsearch(&share, all_vps, n_all_vps, sizeof(struct vp *),
+				&cmp_ptrs) != NULL, "share present in all_vps");
+		}
+
+		const struct pp *phys = get_pp(share->status);
+		inv_log("phys=%p: ->link=%p, ->owner=%p",
+			phys, phys->link, phys->owner);
+		inv_ok1(phys->link->page_num == share->status);
+		inv_imply1(phys->owner != NULL,
+			phys->owner->status == share->status);
+		inv_ok1(share != phys->owner);
+		if(all_vps != NULL) {
+			inv_imply1(phys->owner != NULL,
+				bsearch(&phys->owner, all_vps, n_all_vps,
+					sizeof(struct vp *), &cmp_ptrs) != NULL);
+		}
+
+		if(phys->owner != NULL) darray_push(owner_vps, phys->owner);
+		darray_push(share_vps, (struct vp *)share);
+
+		inv_pop();
+	}
+
+	/* sort and uniq owner_vps, since that'll have as many duplicates of a
+	 * primary owner as there are matching secondaries in share_table. then
+	 * add it to share_vps to top that one up.
+	 *
+	 * also check that owner_vps and share_table are disjoint.
+	 */
+	qsort(owner_vps.item, owner_vps.size, sizeof(void *), &cmp_ptrs);
+	qsort(share_vps.item, share_vps.size, sizeof(void *), &cmp_ptrs);
+	size_t o = 0;
+	for(size_t i=1; i < owner_vps.size; i++) {
+		assert(o < i);
+		if(o == 0 || owner_vps.item[o - 1] != owner_vps.item[i]) {
+			owner_vps.item[o++] = owner_vps.item[i];
+			inv_ok(bsearch(&owner_vps.item[i],
+				share_vps.item, share_vps.size, sizeof(struct vp *),
+				&cmp_ptrs) == NULL, "owner_vps and share_vps are disjoint");
+		}
+		assert(o < owner_vps.alloc || i == owner_vps.size - 1);
+	}
+	darray_resize(owner_vps, o);
+	darray_append_items(share_vps, owner_vps.item, owner_vps.size);
+
+	/* sort share_vps and check against duplicates. */
+	qsort(share_vps.item, share_vps.size, sizeof(void *), &cmp_ptrs);
+	inv_imply1(all_vps != NULL, share_vps.size <= n_all_vps);
+	for(size_t i=1; i < share_vps.size; i++) {
+		inv_push("share_vps[%d]=%p ∧ share_vps[i=%d]=%p",
+			i-1, share_vps.item[i-1], i, share_vps.item[i]);
+		inv_log("->status=%#x", share_vps.item[i]->status);
+		inv_ok1(share_vps.item[i - 1] != share_vps.item[i]);
+		inv_pop();
+	}
+
+	darray_free(share_vps);
+	darray_free(owner_vps);
+	return true;
+
+inv_fail:
+	darray_free(share_vps);
+	darray_free(owner_vps);
+	return false;
+}
+
+
+static bool invariants(void)
+{
+	INV_CTX;
+	int eck = e_begin();
+
+	/* TODO: wait until all other threads have completed or hit this point
+	 * also. but there ain't no whales so we tell tall tales and sing our
+	 * whaling tune.
+	 */
+
+	/* every physical page should be found exactly once in the free list,
+	 * active list, or page cache.
+	 */
+	bitmap *phys_seen = bitmap_alloc0(pp_total);
+	darray(struct vp *) all_vps = darray_new();
+	for(int i=0; i < 2 + (pc_buckets != NULL ? n_pc_buckets : 0); i++) {
+		struct nbsl *list;
+		switch(i) {
+			case 0: list = &page_free_list; break;
+			case 1: list = &page_active_list; break;
+			default: list = &pc_buckets[i - 2]; break;
+		}
+		inv_push("list=%p (i=%d)", list, i);
+		struct nbsl_iter it;
+		for(struct nbsl_node *cur = nbsl_first(list, &it);
+			cur != NULL;
+			cur = nbsl_next(list, &it))
+		{
+			struct pl *link = container_of(cur, struct pl, nn);
+			if(atomic_load(&link->status) == 0) continue;	/* skip garbage */
+			inv_push("link=%p, ->page_num=%u", link, link->page_num);
+			struct pp *phys = pl2pp(link);
+			inv_ok1(phys->link == link);
+
+			inv_ok1(link->page_num >= pp_first);
+			size_t pgix = link->page_num - pp_first;
+			inv_ok1(!bitmap_test_bit(phys_seen, pgix));
+			bitmap_set_bit(phys_seen, pgix);
+
+			/* physical page ownership. */
+			inv_imply1(list == &page_free_list, phys->owner == NULL);
+			size_t pnhash = int_hash(link->page_num);
+			inv_imply1(list == &page_active_list,
+				phys->owner != NULL || has_shares(pnhash, link->page_num, 1));
+
+			/* checks on and collection of virtual memory pages, per phys
+			 * tracking.
+			 */
+			inv_imply1(phys->owner != NULL,
+				vp_invariants(INV_CHILD, phys->owner, phys, link));
+			if(phys->owner != NULL) darray_push(all_vps, phys->owner);
+			struct htable_iter hit;
+			for(struct vp *vp = htable_firstval(&share_table, &hit, pnhash);
+				vp != NULL;
+				vp = htable_nextval(&share_table, &hit, pnhash))
+			{
+				if(vp->status != link->page_num) continue;
+				inv_ok1(vp_invariants(INV_CHILD, vp, phys, link));
+				darray_push(all_vps, vp);
+			}
+
+			inv_pop();
+		}
+		inv_pop();
+	}
+	inv_ok(bitmap_full(phys_seen, pp_total),
+		"pp_total=%u pp seen", (unsigned)pp_total);
+
+	/* sort all_vps and check that each occurs just once. */
+	qsort(all_vps.item, all_vps.size, sizeof(void *), &cmp_ptrs);
+	for(size_t i=1; i < all_vps.size; i++) {
+		inv_push("all_vps[i=%d]=%p", i, all_vps.item[i]);
+		inv_log("->status=%#x", all_vps.item[i]->status);
+		inv_ok1(all_vps.item[i - 1] != all_vps.item[i]);
+		inv_pop();
+	}
+	if(vm_space_ra != NULL) {
+		inv_ok1(all_space_invariants(INV_CHILD, all_vps.item, all_vps.size));
+	}
+
+	inv_ok1(share_table_invariants(INV_CHILD, all_vps.item, all_vps.size));
+
+	e_end(eck);
+	free(phys_seen);
+	darray_free(all_vps);
+	return true;
+
+inv_fail:
+	e_end(eck);
+	free(phys_seen);
+	darray_free(all_vps);
+	return false;
+}
+
+#endif
 
 
 /* doesn't discard @oldlink. */
@@ -474,12 +770,12 @@ static COLD void init_phys(L4_Fpage_t *phys, int n_phys)
 		p_max = max_t(size_t, p_max,
 			(L4_Address(phys[i]) + L4_Size(phys[i])) >> PAGE_BITS);
 	}
-	size_t p_total = p_max - p_min;
+	pp_total = p_max - p_min;
 	printf("vm: allocating %lu <struct pp> (first is %lu)\n",
-		(unsigned long)p_total, (unsigned long)p_min);
+		(unsigned long)pp_total, (unsigned long)p_min);
 	pp_first = p_min;
 
-	pp_ra = RA_NEW(struct pp, p_total);
+	pp_ra = RA_NEW(struct pp, pp_total);
 	for(int i=0; i < n_phys; i++) {
 		int base = L4_Address(phys[i]) >> PAGE_BITS;
 		assert(base > 0);
@@ -558,6 +854,7 @@ static void munmap_space(struct vm_space *sp, L4_Word_t addr, size_t size)
 {
 	assert(e_inside());
 	assert(((addr | size) & PAGE_MASK) == 0);
+	assert(invariants());
 
 	/* carve up lazy mmaps */
 	for(struct lazy_mmap *cur = first_lazy_mmap(sp, addr, size), *next;
@@ -618,6 +915,7 @@ static void munmap_space(struct vm_space *sp, L4_Word_t addr, size_t size)
 	flush_plbuf(&pls);
 
 	assert(first_lazy_mmap(sp, addr, size) == NULL);
+	assert(invariants());
 }
 
 
@@ -680,6 +978,8 @@ static int vm_mmap(
 	int32_t prot, int32_t flags,
 	L4_Word_t fd_serv, L4_Word_t fd, uint32_t offset)
 {
+	assert(invariants());
+
 	if(length == 0) return -EINVAL;
 	if((*addr_ptr | offset) & PAGE_MASK) return -EINVAL;
 	if((flags & MAP_PRIVATE) && (flags & MAP_SHARED)) return -EINVAL;
@@ -707,7 +1007,7 @@ static int vm_mmap(
 		(length + PAGE_SIZE - 1) & ~PAGE_MASK, !!(flags & MAP_FIXED));
 	if(n < 0) {
 		free(mm);
-		return n;
+		goto end;
 	}
 
 	*addr_ptr = mm->addr;
@@ -715,7 +1015,10 @@ static int vm_mmap(
 		sp->brk_lo = sp->brk_hi = max_t(uintptr_t,
 			sp->brk_hi, (*addr_ptr + length + PAGE_SIZE - 1) & ~PAGE_MASK);
 	}
-	return 0;
+
+end:
+	assert(invariants());
+	return n;
 }
 
 
@@ -734,7 +1037,9 @@ static int vm_brk(L4_Word_t addr)
 	uintptr_t newhi = (addr + PAGE_SIZE - 1) & ~PAGE_MASK;
 	if(newhi < sp->brk_hi) {
 		int eck = e_begin();
+		assert(invariants());
 		munmap_space(sp, newhi, newhi - sp->brk_hi);
+		assert(invariants());
 		e_end(eck);
 	} else if(newhi > sp->brk_hi
 		&& first_lazy_mmap(sp, sp->brk_hi, newhi - sp->brk_hi) != NULL)
@@ -748,20 +1053,9 @@ static int vm_brk(L4_Word_t addr)
 }
 
 
-static bool has_shares(size_t hash, uint32_t page_num, int count)
-{
-	struct htable_iter it;
-	for(struct vp *cur = htable_firstval(&share_table, &it, hash);
-		cur != NULL;
-		cur = htable_nextval(&share_table, &it, hash))
-	{
-		if(cur->status == page_num && --count <= 0) return true;
-	}
-	return false;
-}
-
-
-/* returns as htable_add(). */
+/* returns as htable_add().
+ * TODO: why does this use @status instead of @share->status?
+ */
 static bool add_share(uint32_t status, struct vp *share)
 {
 	/* TODO: handle other forms of vp->status as they appear. */
@@ -797,11 +1091,6 @@ static bool rm_share(struct vp *vp)
 		/* was primary. */
 		return !has_shares(hash, vp->status, 1);
 	}
-}
-
-
-static int cmp_ptrs(const void *a, const void *b) {
-	return *(const void **)a - *(const void **)b;
 }
 
 
@@ -971,6 +1260,7 @@ static int fork_pages(struct vm_space *src, struct vm_space *dest)
 			};
 			bool ok = htable_add(&dest->pages, hash, copy);
 			if(!ok || !add_share(cur->status, copy)) goto Enomem;
+			assert(invariants());
 		} else {
 			/* anonymous and private pages get copy-on-write. this applies
 			 * even if said pages were read-only right now and made writable
@@ -1018,6 +1308,7 @@ static int fork_pages(struct vm_space *src, struct vm_space *dest)
 					unmap_pos = 0;
 				}
 			}
+			assert(invariants());
 		}
 
 		n_pages++; copy = NULL;
@@ -1036,6 +1327,7 @@ Enomem:
 
 static int vm_fork(uint16_t srcpid, uint16_t destpid)
 {
+	assert(invariants());
 	if(srcpid > SNEKS_MAX_PID || destpid > SNEKS_MAX_PID) return -EINVAL;
 
 	int sender_pid = pidof_NP(muidl_get_sender());
@@ -1088,6 +1380,7 @@ static int vm_fork(uint16_t srcpid, uint16_t destpid)
 		memcpy(dest->brk_bloom, src->brk_bloom, sizeof dest->brk_bloom);
 	}
 
+	assert(invariants());
 	return ra_ptr2id(vm_space_ra, dest);
 }
 
@@ -1096,6 +1389,7 @@ static int vm_configure(
 	L4_Word_t *last_resv_p,
 	uint16_t pid, L4_Fpage_t utcb, L4_Fpage_t kip)
 {
+	assert(invariants());
 	if(pid > SNEKS_MAX_PID) return -EINVAL;
 	struct vm_space *sp = ra_id2ptr(vm_space_ra, pid);
 	if(sp->kip_area.raw == 0) return -EINVAL;
@@ -1111,6 +1405,7 @@ static int vm_configure(
 	sp->sysinfo_area = L4_FpageLog2(
 		L4_Address(kip) + L4_Size(kip), PAGE_BITS);
 
+	assert(invariants());
 	*last_resv_p = L4_Address(sp->sysinfo_area) + L4_Size(sp->sysinfo_area) - 1;
 	return 0;
 }
@@ -1120,6 +1415,7 @@ static int vm_upload_page(
 	uint16_t target_pid, L4_Word_t addr,
 	const uint8_t *data, unsigned data_len)
 {
+	assert(invariants());
 	struct vm_space *sp = ra_id2ptr(vm_space_ra, target_pid);
 	if(unlikely(L4_IsNilFpage(sp->utcb_area))) return -EINVAL;
 	if((addr & PAGE_MASK) != 0) return -EINVAL;
@@ -1159,6 +1455,7 @@ static int vm_upload_page(
 		abort();
 	}
 
+	assert(invariants());
 	return 0;
 }
 
@@ -1177,6 +1474,8 @@ static void vm_breath_of_life(
 
 static void vm_iopf(L4_Fpage_t fault, L4_Word_t fip, L4_MapItem_t *page_ptr)
 {
+	assert(invariants());
+
 	/* userspace tasks can't have I/O ports. at all. it is verboten. */
 	printf("%s: IO fault from pid=%d, ip=%#lx, port=%#lx:%#lx\n",
 		__func__, pidof_NP(muidl_get_sender()), fip,
@@ -1324,6 +1623,7 @@ static int pf_mmap_shared(
 	const struct lazy_mmap *mm, L4_Word_t faddr, int fault_rwx)
 {
 	assert(e_inside());
+	assert(invariants());
 	struct nbsl_node *top;
 	int bump = ((faddr & ~PAGE_MASK) - mm->addr) >> PAGE_BITS;
 	struct pl *cached = find_cached_page(&top, mm, bump);
@@ -1390,6 +1690,7 @@ static int pf_mmap_shared(
 			mm->offset + bump);
 	}
 
+	assert(invariants());
 	vp->vaddr |= VPF_SHARED;
 	L4_Set_Rights(map_page_p, VP_RIGHTS(vp));
 	return 0;
@@ -1513,6 +1814,7 @@ static int brk_fastpath(
 
 static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 {
+	assert(invariants());
 	int n, pid = pidof_NP(muidl_get_sender());
 	if(unlikely(pid > SNEKS_MAX_PID)) {
 		printf("%s: fault from pid=%d (tid=%lu:%lu)?\n", __func__, pid,
@@ -1649,6 +1951,7 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 	}
 
 reply:
+	assert(invariants());
 	*map_out = L4_MapItem(map_page, faddr_page);
 	e_end(eck);
 	return;
@@ -1662,6 +1965,7 @@ segv:
 		printf("%s: Proc::kill() failed, n=%d\n", __func__, n);
 	}
 	muidl_raise_no_reply();
+	assert(invariants());
 	e_end(eck);
 }
 
@@ -1707,8 +2011,11 @@ int main(int argc, char *argv[])
 	printf("vm: init protocol done.\n");
 
 	int eck = e_begin();
+	assert(invariants());
 	init_phys(phys, n_phys);
+	assert(invariants());
 	init_pc(phys, n_phys);
+	assert(invariants());
 	free(phys);
 	e_end(eck);
 
@@ -1716,6 +2023,7 @@ int main(int argc, char *argv[])
 	find_max_addr();
 	vm_space_ra = RA_NEW(struct vm_space, SNEKS_MAX_PID + 1);
 	get_services();
+	assert(invariants());
 
 	L4_LoadMR(0, 0);
 	L4_MsgTag_t tag = L4_Reply(init_tid);
@@ -1746,6 +2054,7 @@ int main(int argc, char *argv[])
 		if(status != 0 && !MUIDL_IS_L4_ERROR(status)) {
 			printf("vm: dispatch status %#lx (last tag %#lx)\n",
 				status, muidl_get_tag().raw);
+			assert(invariants());
 		}
 	}
 
