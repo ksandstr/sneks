@@ -116,7 +116,12 @@ struct pp
 struct pl {
 	struct nbsl_node nn;
 	uint32_t page_num;
-	/* NOTE: this appears to be mostly unused. use it for something, then. */
+	/* status indicates whether the link structure is valid (nonzero) or dead
+	 * (zero). this is used in circumstances where a <struct pl> cannot be
+	 * removed from its list by iterator, so it's useful to batch up several
+	 * of them (such as in munmap_space()) and remove them in a single O(n)
+	 * go.
+	 */
 	_Atomic uint32_t status;
 
 	/* for pagecache pages: those backed by files and either shared or
@@ -292,6 +297,10 @@ static struct pp *get_pp(uint32_t page_num) {
 }
 
 
+/* counts the number of occurrences of @page_num in share_table, returning
+ * true if it's at least @count and false otherwise. @hash is
+ * int_hash(@page_num), likely computed elsewhere already.
+ */
 static bool has_shares(size_t hash, uint32_t page_num, int count)
 {
 	struct htable_iter it;
@@ -579,11 +588,12 @@ inv_fail:
 #endif
 
 
-/* doesn't discard @oldlink. */
+/* doesn't discard @oldlink, or mark it for disposal. */
 static void push_page(struct nbsl *list, struct pl *oldlink)
 {
 	struct pl *nl = malloc(sizeof *nl);
 	*nl = *oldlink;
+	atomic_store_explicit(&nl->status, 1, memory_order_relaxed);	/* look alive */
 	atomic_store_explicit(&pl2pp(oldlink)->link, nl, memory_order_relaxed);
 	struct nbsl_node *top;
 	do {
@@ -625,6 +635,7 @@ static int push_cached_page(
 	struct pl *nl = malloc(sizeof *nl);
 	if(nl == NULL) return -ENOMEM;
 	*nl = *oldlink;
+	atomic_store_explicit(&nl->status, 1, memory_order_relaxed);
 	do {
 		struct nbsl_node *top = nbsl_top(list);
 		if(lookup_top != top) {
@@ -782,8 +793,7 @@ static COLD void init_phys(L4_Fpage_t *phys, int n_phys)
 		for(int o=0; o < L4_Size(phys[i]) >> PAGE_BITS; o++) {
 			struct pp *pp = ra_alloc(pp_ra, base + o - pp_first);
 			struct pl *link = malloc(sizeof *link);
-			link->page_num = base + o;
-			atomic_store(&link->status, 0);
+			*link = (struct pl){ .page_num = base + o, .status = 1 };
 			atomic_store(&pp->link, link);
 			struct nbsl_node *top;
 			do {
@@ -1143,29 +1153,43 @@ static void remove_active_pls(struct pl **pls, int n_pls)
 static void remove_vp(struct vp *vp, plbuf *plbuf)
 {
 	assert(e_inside());
+	assert(invariants());
 	struct pp *phys = get_pp(vp->status);
 	if(VP_IS_COW(vp)) {
 		printf("handle copy-on-write pages in remove_vp!\n");
 		abort();
 	} else {
+		/* TODO: combine the is-private and rm-share cases smartly. */
 		struct pl *link0 = atomic_load_explicit(&phys->link,
 			memory_order_acquire);
 		if(PL_IS_PRIVATE(link0)) {
-			assert(phys->owner == vp);
+			assert(atomic_load(&phys->owner) == vp);	/* single owner */
+			assert(!has_shares(int_hash(link0->page_num), link0->page_num, 1));
 			struct pl *link = atomic_exchange(&phys->link, NULL);
 			assert(link0 == link);	/* private, so won't have changed */
-			push_page(&page_free_list, link);
-			assert(atomic_load(&phys->link) != link);
+			atomic_store_explicit(&link0->status, 0, memory_order_release);
+			struct vp *old = atomic_exchange(&phys->owner, NULL);
+			assert(old == vp);	/* likewise */
+			push_page(&page_free_list, link0);
+			assert(atomic_load(&phys->link) != link0);
+			assert(invariants());
+			if(plbuf != NULL) darray_push(*plbuf, link0);
+			else remove_active_pls(&link0, 1);
 		} else {
 			if(rm_share(vp)) {
+				atomic_store_explicit(&link0->status, 0, memory_order_release);
 				push_page(&page_free_list, link0);
 				assert(atomic_load(&phys->link) != link0);
+				assert(invariants());
+				if(plbuf != NULL) darray_push(*plbuf, link0);
+				else remove_active_pls(&link0, 1);
 			}
+			assert(atomic_load(&phys->owner) != vp);
+			assert(invariants());
 		}
-		if(plbuf != NULL) darray_push(*plbuf, link0);
-		else remove_active_pls(&link0, 1);
 	}
 	e_free(vp);
+	assert(invariants());
 }
 
 
