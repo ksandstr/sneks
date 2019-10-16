@@ -56,9 +56,14 @@ interface VM
 
 	/* upload a single page of memory to a target process address space. a
 	 * short page is padded out with zeroes. EACCES unless requirements are
-	 * met for mmap's @target_pid.
+	 * met for mmap's @target_pid. @prot and @flags as in mmap, except that
+	 * @flags must always specify MAP_ANONYMOUS and MAP_FIXED, and @prot must
+	 * be nonzero.
 	 */
-	void upload_page(in pid_t target_pid, in L4X2::word addr, in page data)
+	void upload_page(
+		in pid_t target_pid,
+		in L4X2::word addr, in page data,
+		in long prot, in long flags)
 		raises(Posix::Errno);
 
 	/* systask only. send breath-of-life to a newborn thread. rc is 0 or L4

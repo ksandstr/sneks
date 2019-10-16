@@ -929,6 +929,7 @@ static void munmap_space(struct vm_space *sp, L4_Word_t addr, size_t size)
 }
 
 
+/* TODO: expand existing mmaps even when @fixed is set. */
 static int reserve_mmap(
 	struct lazy_mmap *mm,
 	struct vm_space *sp, L4_Word_t address, size_t length,
@@ -978,6 +979,12 @@ static int reserve_mmap(
 		old = insert_lazy_mmap(sp, mm);
 	}
 
+	/* move brk_{lo,hi} up to assist uninitialized spaces (spawn, exec). */
+	if(sp->brk_lo == sp->brk_hi) {
+		sp->brk_lo = sp->brk_hi = max_t(uintptr_t,
+			sp->brk_hi, (mm->addr + length + PAGE_SIZE - 1) & ~PAGE_MASK);
+	}
+
 	assert(old == NULL);
 	return 0;
 }
@@ -985,7 +992,7 @@ static int reserve_mmap(
 
 static int vm_mmap(
 	uint16_t target_pid, L4_Word_t *addr_ptr, uint32_t length,
-	int32_t prot, int32_t flags,
+	int prot, int flags,
 	L4_Word_t fd_serv, L4_Word_t fd, uint32_t offset)
 {
 	assert(invariants());
@@ -1021,10 +1028,6 @@ static int vm_mmap(
 	}
 
 	*addr_ptr = mm->addr;
-	if(sp->brk_lo == sp->brk_hi) {
-		sp->brk_lo = sp->brk_hi = max_t(uintptr_t,
-			sp->brk_hi, (*addr_ptr + length + PAGE_SIZE - 1) & ~PAGE_MASK);
-	}
 
 end:
 	assert(invariants());
@@ -1437,17 +1440,43 @@ static int vm_configure(
 
 static int vm_upload_page(
 	uint16_t target_pid, L4_Word_t addr,
-	const uint8_t *data, unsigned data_len)
+	const uint8_t *data, unsigned data_len,
+	int prot, int flags)
 {
 	assert(invariants());
 	struct vm_space *sp = ra_id2ptr(vm_space_ra, target_pid);
 	if(unlikely(L4_IsNilFpage(sp->utcb_area))) return -EINVAL;
 	if((addr & PAGE_MASK) != 0) return -EINVAL;
+	if(~flags & MAP_ANONYMOUS) return -EINVAL;	/* can't specify file */
+	if(~flags & MAP_FIXED) return -EINVAL;		/* per spec */
+	if(prot == 0) return -EINVAL;
+	if(flags & MAP_SHARED) return -ENOSYS;	/* FIXME when required */
+	if(~flags & MAP_PRIVATE) return -EINVAL;/* ^- wew lad */
 
 	struct vp *v = malloc(sizeof *v);
 	if(unlikely(v == NULL)) return -ENOMEM;
-	v->vaddr = addr | L4_FullyAccessible | VPF_ANON;
+	v->vaddr = addr | prot_to_l4_rights(prot) | VPF_ANON;
 	v->age = 1;
+	assert(VP_RIGHTS(v) == prot_to_l4_rights(prot));
+
+	/* insert lazy_mmap to maintain invariants. */
+	struct lazy_mmap *mm = malloc(sizeof *mm);
+	if(mm == NULL) {
+		free(v);
+		return -ENOMEM;
+	}
+	*mm = (struct lazy_mmap){
+		.flags = flags | (VP_RIGHTS(v) << 16),
+		.fd_serv = L4_MyGlobalId(),
+		.ino = atomic_fetch_add(&next_anon_ino, 1),
+	};
+	int n = reserve_mmap(mm, sp, addr, PAGE_SIZE, true);
+	if(n < 0) {
+		free(v);
+		free(mm);
+		return n;
+	}
+	assert(mm->addr == addr && mm->length == PAGE_SIZE);
 
 	size_t hash = int_hash(addr);
 	struct vp *old = htable_get(&sp->pages, hash, &cmp_vp_to_vaddr, &addr);

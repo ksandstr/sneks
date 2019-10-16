@@ -882,7 +882,8 @@ static int uapi_spawn(
 	void *argtmp = malloc(max(strlen(argbuf), strlen(envbuf)) + 8);
 	for(int i=0; i < ARRAY_SIZE(bufs); i++) {
 		int len = desep(argtmp, bufs[i]);
-		n = __vm_upload_page(vm_tid, newpid, argpos, argtmp, len);
+		n = __vm_upload_page(vm_tid, newpid, argpos, argtmp, len,
+			PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED);
 		if(n != 0) {
 			free(argtmp);
 			/* FIXME: cleanup */
@@ -904,7 +905,8 @@ static int uapi_spawn(
 		fdlist_start = argpos;
 		for(int i=0; i < n_fdlist_pages; i++, argpos += PAGE_SIZE) {
 			n = __vm_upload_page(vm_tid, newpid, argpos,
-				fd_pages + i * PAGE_SIZE, PAGE_SIZE);
+				fd_pages + i * PAGE_SIZE, PAGE_SIZE,
+				PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED);
 			if(n != 0) {
 				/* FIXME: cleanup */
 				goto fail;
