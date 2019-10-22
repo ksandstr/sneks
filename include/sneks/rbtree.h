@@ -171,6 +171,13 @@ static inline void __rb_link_node(struct rb_node * node, struct rb_node * parent
 		_cur != NULL; \
 		_cur = __rb_next(_cur))
 
+/* like RB_FOREACH(), but robust against removal of the current node. */
+#define RB_FOREACH_SAFE(_cur, _rootptr) \
+	for(struct rb_node *_cur = __rb_first((_rootptr)), \
+			*_nextptr = _cur != NULL ? __rb_next(_cur) : NULL; \
+		_cur != NULL; \
+		_cur = _nextptr, _nextptr = _nextptr == NULL ? NULL : __rb_next(_nextptr))
+
 
 #ifdef __KERNEL__
 
