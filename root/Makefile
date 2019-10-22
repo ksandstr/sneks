@@ -25,7 +25,7 @@ distclean: clean
 	@rm -rf .deps $(OUTPUTS)
 
 
-root: root.ld crt0.o main.o runtime.o thrd.o uapi.o mm.o ser_io.o \
+root: root.ld crt0.o main.o runtime.o thrd.o uapi.o sig.o mm.o ser_io.o \
 		sysmem-common.o sysmem-client.o kmsg-common.o kmsg-service.o \
 		rootserv-service.o root-uapi-service.o bootcon-service.o \
 		proc-common.o proc-client.o vm-common.o vm-client.o \
