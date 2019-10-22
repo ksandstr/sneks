@@ -1,4 +1,8 @@
 
+/* TODO: separate all the systask-only calls from this interface, hide it
+ * away in idl/sys/vm.idl, and use a VMImpl thing in sys/vm.
+ */
+
 #ifndef __API_VM_IDL__
 #define __API_VM_IDL__
 
@@ -76,6 +80,15 @@ interface VM
 
 	/* as brk(2). */
 	void brk(in L4X2::word addr)
+		raises(Posix::Errno);
+
+	/* systask only. wipes the address space associated with @pid completely,
+	 * releasing its associated memory and returning it to a state where
+	 * neither VM::configure nor VM::fork has filled its details in yet.
+	 * returns EPERM when called from userspace and EINVAL if @pid isn't
+	 * associated with a configured address space.
+	 */
+	void erase(in pid_t pid)
 		raises(Posix::Errno);
 };
 

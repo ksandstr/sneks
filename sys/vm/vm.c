@@ -1066,6 +1066,59 @@ static int vm_brk(L4_Word_t addr)
 }
 
 
+static int vm_erase(unsigned short target_pid)
+{
+	assert(invariants());
+
+	int sender_pid = pidof_NP(muidl_get_sender());
+	if(unlikely(sender_pid < SNEKS_MIN_SYSID)) return -EPERM;
+
+	struct vm_space *sp = ra_id2ptr(vm_space_ra, target_pid);
+	if(L4_IsNilFpage(sp->utcb_area) || L4_IsNilFpage(sp->kip_area)) {
+		assert(sp->pages.elems == 0);
+		assert(__rb_first(&sp->maps) == NULL);
+		return -EINVAL;
+	}
+
+	int eck = e_begin();
+
+	/* toss lazy mmaps */
+	RB_FOREACH_SAFE(cur, &sp->maps) {
+		struct lazy_mmap *mm = rb_entry(cur, struct lazy_mmap, rb);
+		if(!L4_IsNilThread(mm->fd_serv)
+			&& mm->fd_serv.raw != L4_MyGlobalId().raw)
+		{
+			/* TODO: unref the inode */
+		}
+		__rb_erase(&mm->rb, &sp->maps);
+		free(mm);
+	}
+	/* and free address space tracking bits */
+	RB_FOREACH_SAFE(cur, &sp->as_free) {
+		__rb_erase(cur, &sp->as_free);
+		free(rb_entry(cur, struct as_free, rb));
+	}
+	/* finally all the virtual memory. */
+	plbuf pls = darray_new();
+	struct htable_iter it;
+	for(struct vp *v = htable_first(&sp->pages, &it);
+		v != NULL;
+		v = htable_next(&sp->pages, &it))
+	{
+		remove_vp(v, &pls);
+	}
+	htable_clear(&sp->pages);
+	flush_plbuf(&pls);
+
+	sp->kip_area = sp->utcb_area = sp->sysinfo_area = L4_Nilpage;
+	ra_free(vm_space_ra, sp);
+	e_end(eck);
+
+	assert(invariants());
+	return 0;
+}
+
+
 /* returns as htable_add().
  * TODO: why does this use @status instead of @share->status?
  */
@@ -1099,11 +1152,9 @@ static bool rm_share(struct vp *vp)
 		/* wasn't primary. */
 		bool ok = htable_del(&share_table, hash, vp);
 		assert(ok);
-		return prev_owner == NULL && !has_shares(hash, vp->status, 1);
-	} else {
-		/* was primary. */
-		return !has_shares(hash, vp->status, 1);
+		if(prev_owner != NULL) return false;
 	}
+	return !has_shares(hash, vp->status, 1);
 }
 
 
@@ -1150,49 +1201,41 @@ static void remove_active_pls(struct pl **pls, int n_pls)
 }
 
 
-/* adds dropped active_page_list links to @plbuf or removes them one by one if
- * it's NULL.
+/* puts the <struct pp> referenced by @link0 into the free page list, and adds
+ * @link0 to @plbuf.
  */
+static void free_page(struct pl *link0, plbuf *plbuf)
+{
+	struct pp *phys = pl2pp(link0);
+	atomic_store_explicit(&link0->status, 0, memory_order_release);
+	push_page(&page_free_list, link0);
+	assert(atomic_load(&phys->link) != link0);
+	darray_push(*plbuf, link0);
+}
+
+
+/* adds dropped active_page_list links to @plbuf. */
 static void remove_vp(struct vp *vp, plbuf *plbuf)
 {
 	assert(e_inside());
-	assert(invariants());
+	assert(~vp->status & 0x80000000);	/* must be resident */
 	struct pp *phys = get_pp(vp->status);
-	if(VP_IS_COW(vp)) {
-		printf("handle copy-on-write pages in remove_vp!\n");
-		abort();
-	} else {
-		/* TODO: combine the is-private and rm-share cases smartly. */
-		struct pl *link0 = atomic_load_explicit(&phys->link,
-			memory_order_acquire);
-		if(PL_IS_PRIVATE(link0)) {
-			assert(atomic_load(&phys->owner) == vp);	/* single owner */
-			assert(!has_shares(int_hash(link0->page_num), link0->page_num, 1));
-			struct pl *link = atomic_exchange(&phys->link, NULL);
-			assert(link0 == link);	/* private, so won't have changed */
-			atomic_store_explicit(&link0->status, 0, memory_order_release);
-			struct vp *old = atomic_exchange(&phys->owner, NULL);
-			assert(old == vp);	/* likewise */
-			push_page(&page_free_list, link0);
-			assert(atomic_load(&phys->link) != link0);
-			assert(invariants());
-			if(plbuf != NULL) darray_push(*plbuf, link0);
-			else remove_active_pls(&link0, 1);
-		} else {
-			if(rm_share(vp)) {
-				atomic_store_explicit(&link0->status, 0, memory_order_release);
-				push_page(&page_free_list, link0);
-				assert(atomic_load(&phys->link) != link0);
-				assert(invariants());
-				if(plbuf != NULL) darray_push(*plbuf, link0);
-				else remove_active_pls(&link0, 1);
-			}
-			assert(atomic_load(&phys->owner) != vp);
-			assert(invariants());
-		}
+	struct pl *link0 = atomic_load_explicit(&phys->link,
+		memory_order_acquire);
+	if(PL_IS_PRIVATE(link0) && !VP_IS_COW(vp)) {
+		assert(atomic_load(&phys->owner) == vp);	/* single owner */
+		assert(!has_shares(int_hash(link0->page_num), link0->page_num, 1));
+		struct pl *link = atomic_exchange(&phys->link, NULL);
+		assert(link0 == link);	/* private, so won't have changed */
+		struct vp *old = atomic_exchange(&phys->owner, NULL);
+		assert(old == vp);	/* likewise */
+		free_page(link0, plbuf);
+	} else if(rm_share(vp) && VP_IS_ANON(vp)) {
+		/* eagerly release pages that're not in the page cache. */
+		free_page(link0, plbuf);
 	}
+	assert(atomic_load(&phys->owner) != vp);
 	e_free(vp);
-	assert(invariants());
 }
 
 
@@ -1482,7 +1525,9 @@ static int vm_upload_page(
 	struct vp *old = htable_get(&sp->pages, hash, &cmp_vp_to_vaddr, &addr);
 	if(old != NULL) {
 		htable_del(&sp->pages, hash, old);
-		remove_vp(old, NULL);
+		plbuf pls = darray_new();
+		remove_vp(old, &pls);
+		flush_plbuf(&pls);
 	}
 
 	/* allocate fresh new anonymous memory for this. */
@@ -2096,6 +2141,7 @@ int main(int argc, char *argv[])
 		.upload_page = &vm_upload_page,
 		.breath_of_life = &vm_breath_of_life,
 		.brk = &vm_brk,
+		.erase = &vm_erase,
 
 		/* L4X2::FaultHandler */
 		.handle_fault = &vm_pf,

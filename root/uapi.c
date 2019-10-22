@@ -240,10 +240,19 @@ static void task_common_dtor(struct task_common *task)
 		}
 		free_threadno(tid);
 	}
+
 	/* idempotent memory release */
 	darray_free(task->threads); darray_init(task->threads);
 	free(task->utcb_free); task->utcb_free = NULL;
 	assert(!L4_IsNilFpage(task->utcb_area));
+
+	/* deconfigure virtual memory as well */
+	int n = __vm_erase(vm_tid, ra_ptr2id(ra_process,
+		container_of(task, struct process, task)));
+	if(n != 0) {
+		printf("root: VM::erase failed, n=%d\n", n);
+		/* not a lot we can do besides that */
+	}
 }
 
 
