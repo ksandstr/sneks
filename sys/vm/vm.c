@@ -1099,14 +1099,41 @@ static int vm_erase(unsigned short target_pid)
 		free(rb_entry(cur, struct as_free, rb));
 	}
 	/* finally all the virtual memory. */
+	L4_Fpage_t fps[64];
+	int n_fps = 0;
 	plbuf pls = darray_new();
 	struct htable_iter it;
 	for(struct vp *v = htable_first(&sp->pages, &it);
 		v != NULL;
 		v = htable_next(&sp->pages, &it))
 	{
+		/* TODO: this isn't nice: it's slower than a destroying
+		 * L4_ThreadControl() on account of the multiple syscalls in a
+		 * nontrivial space, it'll needlessly unmap laterally related virtual
+		 * memory, and the call to unmap loses access data used by page
+		 * replacement.
+		 *
+		 * all of these are minor issues until benchmarks and page replacement
+		 * get implemented.
+		 *
+		 * the solutions are 1) collecting <struct pp>, sorting them by
+		 * physical address, and passing them in a cache-favouring order to
+		 * L4_Unmap; 2) sucking up and dealing with it; and 3) storing a copy
+		 * of the access bits in <struct pp>.
+		 */
+		assert(~v->status & 0x80000000);
+		L4_Fpage_t fp = L4_FpageLog2(v->status << PAGE_BITS, PAGE_BITS);
+		L4_Set_Rights(&fp, L4_FullyAccessible);
+		fps[n_fps++] = fp;
+		if(n_fps == ARRAY_SIZE(fps)) {
+			/* drop the bass */
+			L4_UnmapFpages(ARRAY_SIZE(fps), fps);
+			n_fps = 0;
+		}
+
 		remove_vp(v, &pls);
 	}
+	if(n_fps > 0) L4_UnmapFpages(n_fps, fps);
 	htable_clear(&sp->pages);
 	flush_plbuf(&pls);
 
