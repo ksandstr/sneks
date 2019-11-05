@@ -36,7 +36,7 @@ systest: $(LDSCRIPT) systest.o harness.o $(TEST_OBJS) \
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T $(LDSCRIPT) \
 		$(filter %.o,$^) $(filter %.a,$^) $(LIBS) \
-		-lsneks-systask -lsneks -ll4 -lm \
+		-lsneks-systask -lsneks -lsneks-systask -ll4 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 

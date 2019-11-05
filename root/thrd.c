@@ -8,12 +8,12 @@
 #include <ccan/compiler/compiler.h>
 
 #include <l4/types.h>
-#include <l4/thread.h>
 #include <l4/syscall.h>
 #include <l4/ipc.h>
 #include <l4/kip.h>
 
 #include "defs.h"
+#include "epoch.h"
 #include "proc-defs.h"
 
 
@@ -28,7 +28,11 @@ struct rt_thread {
 	_Atomic bool alive;
 	_Atomic int retval;
 	_Atomic unsigned long joiner_tid;
+	int max_tss;
 };
+
+
+static tss_t epoch_tss;
 
 
 L4_ThreadId_t thrd_tidof_NP(thrd_t t) {
@@ -41,7 +45,7 @@ static void rt_thread_ctor(struct rt_thread *t)
 	*t = (struct rt_thread){
 		.magic = RT_THREAD_MAGIC, .alive = true,
 		.joiner_tid = L4_nilthread.raw,
-		.retval = 0,
+		.retval = 0, .max_tss = -1,
 	};
 }
 
@@ -69,6 +73,10 @@ void thrd_exit(int res)
 	struct rt_thread *rt = rt_self();
 	atomic_store(&rt->retval, res);
 	atomic_store(&rt->alive, false);
+
+	extern void __tss_on_exit(void); /* this'd be alone in a header else. */
+	__tss_on_exit();
+
 	L4_ThreadId_t joiner = { .raw = atomic_load(&rt->joiner_tid) };
 	if(!L4_IsNilThread(joiner)) {
 		L4_Set_ExceptionHandler(joiner);
@@ -217,10 +225,27 @@ again:
 }
 
 
+void *e_ext_get(size_t size, void (*dtor_fn)(void *ptr))
+{
+	void *ptr = tss_get(epoch_tss);
+	if(ptr == NULL) {
+		ptr = calloc(1, size);
+		tss_set(epoch_tss, ptr);
+	}
+	return ptr;
+}
+
+
 COLD void rt_thrd_init(void)
 {
 	int dummy;
 	rt_thread_ctor(rt_thread_in(&dummy));
+
+	/* FIXME: this doesn't do what epoch.c specifies; dtors are completely
+	 * absent from root's tss stuff.
+	 */
+	int n = tss_create(&epoch_tss, NULL);
+	assert(n == thrd_success);
 }
 
 

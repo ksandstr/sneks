@@ -5,7 +5,6 @@
 #include <stdatomic.h>
 #include <threads.h>
 #include <ccan/likely/likely.h>
-#include <ccan/darray/darray.h>
 #include <ccan/list/list.h>
 
 #include <sneks/mm.h>
@@ -22,14 +21,10 @@
 
 #define SYSCRT_THREAD_MAGIC 0xbea7deaf	/* not a drummer */
 
-typedef darray(void *) tssdata;
-
 
 L4_ThreadId_t __uapi_tid;
 
 static once_flag init_once = ONCE_FLAG_INIT;
-static atomic_flag tss_meta_lock = ATOMIC_FLAG_INIT;
-static darray(tss_dtor_t) tss_meta = darray_new();
 
 
 static void thread_ctor(struct thrd *t, L4_ThreadId_t tid)
@@ -119,72 +114,6 @@ again:
 }
 
 
-/* tss_*() family. tss_t is a 1-origin index into tss_meta, so that 0 can stay
- * as the uninitialized value.
- */
-
-static void lock_tss(void) {
-	while(!atomic_flag_test_and_set(&tss_meta_lock)) {
-		asm volatile ("pause");
-	}
-}
-
-
-static inline void unlock_tss(void) {
-	atomic_flag_clear(&tss_meta_lock);
-}
-
-
-int tss_create(tss_t *key, void (*dtor)(void *))
-{
-	lock_tss();
-	*key = tss_meta.size + 1;
-	darray_push(tss_meta, dtor);
-	unlock_tss();
-
-	return 0;
-}
-
-
-void tss_delete(tss_t key)
-{
-	/* does nothing. should call the dtor for the value in all threads' TSS
-	 * segments and then mark @key unused. none of which systasks use.
-	 */
-}
-
-
-void *tss_get(tss_t key)
-{
-	if(unlikely(key <= 0)) return NULL;
-	tssdata *data = (tssdata *)L4_UserDefinedHandle();
-	return likely(data != NULL && data->size > key - 1)
-		? data->item[key - 1] : NULL;
-}
-
-
-void tss_set(tss_t key, void *ptr)
-{
-	if(unlikely(key <= 0)) return;
-	tssdata *data = (tssdata *)L4_UserDefinedHandle();
-	if(data == NULL) {
-		data = malloc(sizeof *data);
-		darray_init(*data);
-		L4_Set_UserDefinedHandle((L4_Word_t)data);
-	}
-	if(data->size <= key - 1) {
-		/* NOTE: unsafe access of tss_meta! */
-		if(tss_meta.size <= key - 1) {
-			printf("!!! %s invalid key=%d (size=%u)\n", __func__,
-				key, (unsigned)data->size);
-			abort();
-		}
-		darray_resize0(*data, key);
-	}
-	data->item[key - 1] = ptr;
-}
-
-
 /* threads */
 
 thrd_t thrd_current(void) {
@@ -238,20 +167,8 @@ void thrd_exit(int res)
 	/* destroy per-thread data. this access pattern wrt tss_meta is mildly bad
 	 * because of the spinlock section.
 	 */
-	tssdata *data = (tssdata *)L4_UserDefinedHandle();
-	if(data != NULL) {
-		lock_tss();
-		size_t lim = min(tss_meta.size, data->size);
-		tss_dtor_t dtors[lim];
-		memcpy(dtors, tss_meta.item, lim * sizeof *tss_meta.item);
-		unlock_tss();
-		for(size_t i=0; i < lim; i++) {
-			if(data->item[i] != NULL && dtors[i] != NULL) {
-				(*dtors[i])(data->item[i]);
-			}
-		}
-		darray_free(*data);
-	}
+	extern void __tss_on_exit(void);
+	__tss_on_exit();
 
 	L4_Set_UserDefinedHandle(res);
 

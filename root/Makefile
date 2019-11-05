@@ -31,7 +31,8 @@ root: root.ld crt0.o main.o runtime.o thrd.o uapi.o sig.o mm.o ser_io.o \
 		proc-common.o proc-client.o vm-common.o vm-client.o \
 		fs-common.o fs-client.o info-common.o info-client.o \
 		ccan-htable.o ccan-bitmap.o ccan-hash.o \
-		mung-rangealloc.o mung-slab.o
+		mung-rangealloc.o mung-slab.o \
+		lfht-epoch.o lfht-nbsl.o lfht-percpu.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T root.ld \
 		$(filter %.o,$^) $(LIBS) -lsneks -ll4 -lm \
@@ -49,5 +50,10 @@ mung-%.o ::
 	@$(CC) -c -o $@ $(wildcard $(MUNG_DIR)/$*.c) $(wildcard $(MUNG_DIR)/lib/$*.c) \
 		$(CFLAGS) -nostartfiles -nodefaultlibs
 
+# same for lfht.
+lfht-%.o ::
+	@echo "  CC $@ <lfht>"
+	@$(CC) -c -o $@ $(LFHT_DIR)/$*.c \
+		$(CFLAGS) -nostartfiles -nodefaultlibs
 
 include $(wildcard .deps/*.d)

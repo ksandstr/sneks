@@ -24,12 +24,15 @@ distclean:
 	@rm -rf .deps $(OUTPUTS)
 
 
+# FIXME: the linker hax to resolve the epoch-to-nbsl dependency thing should
+# properly be done by importing all of libsneks into libsneks-systask, making
+# the latter a superset of the former, which follows usage.
 fs.squashfs: $(LDSCRIPT) squashfs.o $(IDL_OBJS) \
 		ccan-opt.a ccan-list.o ccan-htable.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T $(LDSCRIPT) \
 		$(filter %.o,$^) $(filter %.a,$^) $(LIBS) \
-		-lsneks-systask -lsneks -ll4 -lm \
+		-lsneks-systask -lsneks -lsneks-systask -ll4 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
