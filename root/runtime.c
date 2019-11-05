@@ -1,17 +1,27 @@
 
-/* runtime stuff for the root task. */
+/* runtime stuff for the root task. things such as compat for epoch handling
+ * and so forth.
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <errno.h>
+#include <sched.h>
 #include <ccan/compiler/compiler.h>
 
 #include <sneks/console.h>
 
 #include <l4/ipc.h>
+#include <l4/kip.h>
+#include <l4/thread.h>
 #include <l4/kdebug.h>
 
 /* FIXME: remove this (used for prototype of panic()) */
 #include <ukernel/misc.h>
+
+#include "defs.h"
 
 
 void __assert_failure(
@@ -53,4 +63,26 @@ int *__errno_location(void)
 {
 	static int the_errno = 0;
 	return &the_errno;
+}
+
+
+/* TODO: this is better than the one in the two C runtimes. copy it over, or
+ * move into lib/ .
+ */
+long sysconf(int name)
+{
+	switch(name) {
+		case _SC_PAGESIZE:
+			return 1 << (ffsll(L4_PageSizeMask(the_kip)) - 1);
+		case _SC_NPROCESSORS_ONLN:
+			return the_kip->ProcessorInfo.X.processors + 1;
+		default:
+			errno = EINVAL;
+			return -1;
+	}
+}
+
+
+int sched_getcpu(void) {
+	return L4_ProcessorNo();
 }
