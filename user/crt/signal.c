@@ -38,7 +38,7 @@ int kill(int pid, int signum)
 {
 	int n = __proc_kill(__the_sysinfo->api.proc, pid, signum);
 	if(likely(n == 0)) {
-		if(pid == getpid()) __sig_bottom();
+		if(signum != 0 && pid == getpid()) __sig_bottom();
 		return 0;
 	} else if(n < 0) {
 		errno = -n;
