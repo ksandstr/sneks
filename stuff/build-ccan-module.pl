@@ -1,7 +1,13 @@
 #!/usr/bin/perl
 use Modern::Perl '2017';
+
+# local packages also plz
+use FindBin qw($Bin);
+use lib "$Bin/perl5";
+
 use File::Temp qw/tempdir/;
 use Cwd;
+use Jobserver;
 
 my $VERBOSE = $ENV{VERBOSE} // 0;
 my $opt_add_host = $ENV{HOSTSUITE} // 0;
@@ -23,20 +29,23 @@ my $dir = tempdir(CLEANUP => 1);
 print STDERR "tempdir=`$dir'\n" if $VERBOSE;
 chdir $dir;
 
+my $jobs = Jobserver->new;	# per St. Jobs and his Vitamin Cure
 my @objs;
 for(@sources) {
 	my ($m, $s) = /([^\/]+)\/([^\/]+)$/;
 	my $o = $s;
 	$o =~ s/\.c$/.o/;
-	print "  CC ccan/$m/$o <ccan>\n";
+	print "  CC ccan/$m/$o <ccan" . ($opt_add_host ? "/host" : "") . ">\n";
 	my $opath = $dir . "/" . $o;
-	system "$ENV{CC} -c '$_' -o '$opath' " . join(" ", @cflags);
-	if(!-f $opath) {
-		print STDERR "*** compiler didn't output $opath!\n";
+	$jobs->spawn("$ENV{CC} -c '$_' -o '$opath' " . join(" ", @cflags));
+	push @objs, $o;
+}
+$jobs->waitall;
+for(@objs) {
+	if(!-f $_) {
+		print STDERR "*** compiler didn't output $_!\n";
 		exit 1;
 	}
-	push @objs, $o;
-	die unless -f $o;
 }
 
 print "  AR $outnam <ccan>\n";

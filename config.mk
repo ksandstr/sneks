@@ -43,7 +43,7 @@ ccan-%.o ::
 # also complex CCAN modules. build-ccan-module.pl emits CC lines as
 # appropriate.
 ccan-%.a ::
-	@$(CFGDIR)/stuff/build-ccan-module.pl $(CCAN_DIR)/ccan/$* \
+	+@$(CFGDIR)/stuff/build-ccan-module.pl $(CCAN_DIR)/ccan/$* \
 		$(CFLAGS) -nostartfiles -nodefaultlibs
 
 
