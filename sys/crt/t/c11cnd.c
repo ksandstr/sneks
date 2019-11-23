@@ -106,9 +106,6 @@ END_TEST
 
 /* similar to the single-thread signal test, but with many threads and using
  * cnd_broadcast().
- *
- * TODO: this won't terminate if both cnd_signal() and cnd_broadcast() are
- * stubs.
  */
 START_TEST(broadcast)
 {
@@ -142,11 +139,17 @@ START_TEST(broadcast)
 	ok(L4_IpcFailed(tag) && L4_ErrorCode() == 3,
 		"timed out before broadcast");
 
+	for(int i=0; i < n_threads; i++) {
+		// diag("taking lock, i=%d, m=%p...", i, &ps[i]->m);
+		mtx_lock(&ps[i]->m);
+	}
+	// diag("broadcasting");
 	int n = cnd_broadcast(cond);
 	if(!ok(n == thrd_success, "cnd_broadcast()")) {
 		/* do the same thing manually. */
 		for(int i=0; i < n_threads; i++) cnd_signal(cond);
 	}
+	for(int i=0; i < n_threads; i++) mtx_unlock(&ps[i]->m);
 
 	int n_got = 0;
 	while(n_got < n_threads) {
