@@ -6,6 +6,9 @@
 #include <threads.h>
 #include <ccan/likely/likely.h>
 
+#include <l4/types.h>
+#include <l4/schedule.h>
+
 #include "epoch.h"
 
 
@@ -40,4 +43,15 @@ void *e_ext_get(size_t size, void (*dtor_fn)(void *ptr))
 	}
 
 	return ptr;
+}
+
+
+int sched_yield(void)
+{
+	/* in sys/crt sched_yield() should drop thread priority to the slopsucker
+	 * level, ThreadSwitch to let other threads at that level have a go, then
+	 * reëlevate priority. since priorities aren't done, this'll do.
+	 */
+	L4_ThreadSwitch(L4_nilthread);
+	return 0;
 }
