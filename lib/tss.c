@@ -35,23 +35,37 @@ struct tss_dtors {
 };
 
 
-static struct tss_dtors *_Atomic current_dtors;
-
-
-/* NOTE: this function is the sole thing in this module that's allowed to
- * touch current_dtors without an open epoch bracket. that's because it is the
- * only routine that can free an old version of the array, so it may instead
- * exclude concurrent instances of itself. we do this to prevent indefinite
- * mutual recursion between this and e_begin() (via e_ext_get()).
+/* NOTE: because of a recursion hazard from e_begin(), write access to
+ * current_dtors is restricted with a makeshift spinlock. this is used from
+ * tss_create() and tss_delete(), and nowhere else.
  */
+static struct tss_dtors *_Atomic current_dtors;
+static _Atomic int current_dtors_lock = 0;
+
+
+static inline void lock_current_dtors(void)
+{
+	int old = 0;
+	while(!atomic_compare_exchange_weak_explicit(&current_dtors_lock, &old, 1,
+		memory_order_acquire, memory_order_relaxed))
+	{
+		/* please wait warmly */
+		L4_ThreadSwitch(L4_nilthread);
+		old = 0;
+	}
+}
+
+
+static inline void unlock_current_dtors(void) {
+	int old = atomic_exchange_explicit(&current_dtors_lock, 0,
+		memory_order_release);
+	assert(old == 1);
+}
+
+
 int tss_create(tss_t *key, tss_dtor_t dtor)
 {
-	static atomic_flag lock = ATOMIC_FLAG_INIT;
-	while(!atomic_flag_test_and_set_explicit(&lock, memory_order_acquire)) {
-		/* spin */
-		L4_ThreadSwitch(L4_nilthread);
-	}
-
+	lock_current_dtors();
 	struct tss_dtors *old = atomic_load(&current_dtors), *new = NULL;
 	do {
 		free(new);
@@ -71,11 +85,11 @@ int tss_create(tss_t *key, tss_dtor_t dtor)
 		new->dtors[*key] = dtor;
 	} while(!atomic_compare_exchange_strong(&current_dtors, &old, new));
 	if(old != NULL) e_free(old);
-	atomic_flag_clear(&lock);
+	unlock_current_dtors();
 	return thrd_success;
 
 nomem:
-	atomic_flag_clear(&lock);
+	unlock_current_dtors();
 	return thrd_nomem;
 }
 
@@ -85,6 +99,7 @@ nomem:
  */
 void tss_delete(tss_t key)
 {
+	lock_current_dtors();
 	int eck = e_begin();
 	struct tss_dtors *old = atomic_load(&current_dtors), *new = NULL;
 	do {
@@ -102,6 +117,7 @@ void tss_delete(tss_t key)
 	} while(!atomic_compare_exchange_strong(&current_dtors, &old, new));
 	e_free(old);
 	e_end(eck);
+	unlock_current_dtors();
 }
 
 
@@ -142,7 +158,7 @@ void __tss_on_exit(void)
 	if(blk == NULL) return;
 
 	assert(blk->ptrs[0] == NULL);
-	int eck = e_begin();
+	e_begin();
 	struct tss_dtors *dtors = atomic_load_explicit(&current_dtors,
 		memory_order_relaxed);
 	assert(blk->max_tss < dtors->length);
