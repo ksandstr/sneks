@@ -34,7 +34,7 @@ sub BUILD {
 	}
 	if(!$args->{dryrun}) {
 		$args->{dryrun} = ((split /\s/, $ENV{MAKEFLAGS})[0] =~ /n/);
-	};
+	}
 	if($jobserver && $conc) {
 		$self->_set_concurrency($conc);
 		$self->_jobr(IO::Handle->new_from_fd($jobserver->[0], 'r'));
@@ -88,9 +88,9 @@ sub get_token {
 			last;
 		}
 	}
-	if($self->implicit == 0) {
-		# implicit slot was released during wait
-		die if $token;
+	if($self->implicit == 0 && !$token) {
+		# implicit slot was released during wait, and an actual token not yet
+		# assigned; use the implicit slot.
 		return [];
 	}
 	return $token;
