@@ -9,6 +9,7 @@
 
 #include <stddef.h>
 #include <stdarg.h>
+#include <sys/types.h>
 
 
 #define EOF (-1)
@@ -58,13 +59,11 @@ extern FILE *stdin, *stdout, *stderr;
 /* stream operations. */
 
 #ifdef _GNU_SOURCE
-/* FIXME: returned longs should be __ssize_t */
-typedef long (cookie_read_function_t)(void *cookie, char *buf, size_t size);
-typedef long (cookie_write_function_t)(
+typedef ssize_t (cookie_read_function_t)(void *cookie, char *buf, size_t size);
+typedef ssize_t (cookie_write_function_t)(
 	void *cookie, const char *buf, size_t size);
-/* FIXME: @offset should be an __off64_t */
 typedef int (cookie_seek_function_t)(
-	void *cookie, long long *offset, int whence);
+	void *cookie, off64_t *offset, int whence);
 typedef int (cookie_close_function_t)(void *cookie);
 
 typedef struct {

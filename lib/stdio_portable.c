@@ -340,7 +340,7 @@ char *fgets(char *s, int size, FILE *stream)
  * module, but so could a lot of stdio.
  */
 
-static long mof_read(void *cookie, char *buf, size_t size)
+static ssize_t mof_read(void *cookie, char *buf, size_t size)
 {
 	struct memopenf *mof = cookie;
 	size = min(size, mof->size - mof->pos);
@@ -353,7 +353,7 @@ static long mof_read(void *cookie, char *buf, size_t size)
 }
 
 
-static long mof_write(void *cookie, const char *buf, size_t size)
+static ssize_t mof_write(void *cookie, const char *buf, size_t size)
 {
 	struct memopenf *mof = cookie;
 	size = min(size, mof->size - mof->pos);
@@ -366,7 +366,7 @@ static long mof_write(void *cookie, const char *buf, size_t size)
 }
 
 
-static int mof_seek(void *cookie, long long *offset, int whence)
+static int mof_seek(void *cookie, off64_t *offset, int whence)
 {
 	struct memopenf *mof = cookie;
 	switch(whence) {

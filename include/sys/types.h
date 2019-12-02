@@ -8,7 +8,7 @@
 
 #include <stdint.h>
 
-typedef int ssize_t;
+typedef long ssize_t;
 
 typedef uint32_t mode_t;
 typedef int32_t pid_t;
@@ -16,6 +16,8 @@ typedef int32_t pid_t;
 typedef int32_t idtype_t, id_t;
 
 typedef uint32_t __uid_t, __gid_t;
+
+typedef int64_t off64_t;
 
 /* ... and others */
 
