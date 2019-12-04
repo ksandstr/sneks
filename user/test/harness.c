@@ -67,14 +67,10 @@ static int cmp_utest_ptr(const void *ap, const void *bp)
 }
 
 
-void exit_on_fail(void)
+void done_testing(void)
 {
-	/* TODO: track and forcequit accessory threads as well. right now ones
-	 * that aren't controlled by fixtures will be left hanging, which may
-	 * compromise the test process under !do_fork.
-	 */
-	exit(1);
-	abort();
+	close_no_plan();
+	exit(exit_status());
 }
 
 
@@ -422,7 +418,7 @@ static void run(const struct utest *t, int iter, bool redo_fixtures)
 		tap_reset();
 		(*t->fn)(iter);
 		/* TODO: teardown checked fixtures */
-		exit(exit_status());
+		done_testing();
 	}
 	int st, pid = waitpid(child, &st, 0);
 	if(pid < 0) {

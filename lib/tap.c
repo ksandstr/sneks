@@ -42,7 +42,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdnoreturn.h>
 #include <stdarg.h>
+#include <assert.h>
 #include <ccan/likely/likely.h>
 
 #include <sneks/test.h>
@@ -61,7 +63,7 @@ struct saved_ctx
 	struct saved_ctx *next;
 	int depth;
 
-	bool no_plan, have_plan, skip_all, todo, test_died;
+	bool no_plan, have_plan, skip_all, todo, test_died, no_plan_closed;
 	int num_tests_run, expected_tests, failed_tests;
 	char *todo_msg;
 
@@ -69,7 +71,7 @@ struct saved_ctx
 };
 
 
-static bool no_plan, have_plan, skip_all, todo, test_died;
+static bool no_plan, have_plan, skip_all, todo, test_died, no_plan_closed;
 static int num_tests_run, expected_tests, failed_tests;
 static char *todo_msg = NULL;		/* must be valid on first reset */
 static struct saved_ctx *save_stack = NULL;		/* for subtests */
@@ -81,6 +83,7 @@ static void reset_state(void)
 {
 	/* (yeah, I know) */
 	no_plan = have_plan = skip_all = todo = test_died = false;
+	no_plan_closed = false;
 	num_tests_run = expected_tests = failed_tests = 0;
 }
 
@@ -122,6 +125,7 @@ void subtest_start(const char *fmt, ...)
 	c->expected_tests = expected_tests;
 	c->failed_tests = failed_tests;
 	c->todo_msg = todo_msg;
+	c->no_plan_closed = no_plan_closed;
 	todo_msg = c->todo_msg != NULL ? strdup(c->todo_msg) : NULL;
 
 	c->next = save_stack;
@@ -138,6 +142,7 @@ char *subtest_pop(int *rc_p, void **freeptr_p)
 		abort();
 	}
 
+	close_no_plan();
 	int exst = exit_status();
 	struct saved_ctx *c = save_stack;
 	save_stack = c->next;
@@ -151,6 +156,7 @@ char *subtest_pop(int *rc_p, void **freeptr_p)
 	num_tests_run = c->num_tests_run;
 	expected_tests = c->expected_tests;
 	failed_tests = c->failed_tests;
+	no_plan_closed = c->no_plan_closed;
 	free(todo_msg); todo_msg = c->todo_msg;
 
 	int ret = exst == 0;
@@ -180,26 +186,47 @@ static void print_sub_prefix(void)
 }
 
 
+noreturn void vbail(const char *fmt, va_list args)
+{
+	fflush(stdout);
+	/* NOTE: bailouts don't get a subtest prefix. (maybe they ought to? at
+	 * least for forked subtests?)
+	 */
+	printf("Bail out!  "); vfprintf(stdout, fmt, args); printf("\n");
+	fflush(stdout);
+	exit(255);
+}
+
+
+noreturn void bail(const char *fmt, ...)
+{
+	va_list al;
+	va_start(al, fmt);
+	vbail(fmt, al);
+	/* look mum, no hands */
+}
+
+
 #ifndef __KERNEL__
 void _fail_unless(
 	int result,
-	const char *file,
-	int line,
-	const char *expr,
-	...)
+	const char *file, int line, const char *expr,
+	const char *fmt, ...)
 {
 	if(unlikely(!result)) {
-		va_list ap;
-		char buf[512];
-		va_start(ap, expr);
-		const char *msg = va_arg(ap, char *);
-		if(msg == NULL) msg = expr;
-		vsnprintf(buf, sizeof(buf), msg, ap);
-		va_end(ap);
-		/* NOTE: bailouts don't get a subtest prefix. */
-		printf("Bail out!  %s (`%s' in %s:%d)\n", buf, expr, file, line);
+		if(fmt == NULL) {
+			printf("Bail out!  `%s' failed in %s:%d", expr, file, line);
+		} else {
+			va_list ap;
+			va_start(ap, fmt);
+			char buf[512];
+			vsnprintf(buf, sizeof buf, fmt, ap);
+			va_end(ap);
+			printf("Bail out!  %s: `%s' in %s:%d", buf, expr, file, line);
+		}
 
-		exit_on_fail();
+		/* fail_if() and fail_unless() have assert nature, so abort() it is. */
+		abort();
 	}
 }
 #endif
@@ -293,7 +320,7 @@ void plan_no_plan(void)
 }
 
 
-void plan_skip_all(const char *reason)
+static void plan_skip_all_v(const char *fmt, va_list al)
 {
 	TRY_INIT;
 	if(have_plan) {
@@ -307,12 +334,24 @@ void plan_skip_all(const char *reason)
 
 	print_sub_prefix();
 	printf("1..0");
-	if(reason != NULL) printf(" # Skip %s", reason);
+	if(fmt != NULL) {
+		printf(" # Skip ");
+		vfprintf(stdout, fmt, al);
+	}
 	printf("\n");
 
 	/* FIXME: do a longjmp-equivalent to the top level. or exit the thread. or
 	 * something.
 	 */
+}
+
+
+void plan_skip_all(const char *fmt, ...)
+{
+	va_list al;
+	va_start(al, fmt);
+	plan_skip_all_v(fmt, al);
+	va_end(al);
 }
 
 
@@ -338,15 +377,36 @@ void plan_tests(unsigned int num_tests)
 }
 
 
+void planf(int tests, const char *fmt, ...)
+{
+	if(tests >= 0) plan_tests(tests);
+	else if(tests == NO_PLAN) plan_no_plan();
+	else {
+		assert(tests == SKIP_ALL);
+		va_list al;
+		va_start(al, fmt);
+		plan_skip_all_v(fmt, al);
+		va_end(al);
+	}
+}
+
+
 int diag(const char *fmt, ...)
 {
-	print_sub_prefix();
 	va_list al;
 	va_start(al, fmt);
 	char msg[512];
 	vsnprintf(msg, sizeof(msg), fmt, al);
-	fprintf(stderr, "# %s\n", msg);
 	va_end(al);
+
+	char *s = msg, *lf;
+	do {
+		lf = strchr(s, '\n');
+		if(lf != NULL) *lf = '\0';
+		print_sub_prefix();
+		fprintf(stderr, "# %s\n", s);
+		if(lf != NULL) s = lf + 1;
+	} while(lf != NULL);
 
 	return 0;
 }
@@ -408,6 +468,23 @@ int exit_status(void)
 		/* failed + didn't run */
 		return failed_tests + expected_tests - num_tests_run;
 	}
+}
+
+
+void close_no_plan(void)
+{
+	if(no_plan_closed) return;
+	if(!have_plan || no_plan) {
+		print_sub_prefix();
+		printf("1..%d\n", num_tests_run);
+		expected_tests = num_tests_run;
+		if(!have_plan) {
+			/* discourage an implicit lazy plan */
+			diag("    No plan until end of test?");
+			have_plan = true;	/* shouldn't plan again. */
+		}
+	}
+	no_plan_closed = true;
 }
 
 #endif

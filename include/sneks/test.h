@@ -7,6 +7,7 @@
 
 #include <stdbool.h>
 #include <stdnoreturn.h>
+#include <stdarg.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -134,15 +135,22 @@ AUTODATA_TYPE(all_utest_specs, struct utest_spec);
 
 #define fail_unless(expr, ...) \
 	_fail_unless((expr), __FILE__, __LINE__, \
-		"Assertion `" #expr "' failed", ## __VA_ARGS__, NULL)
+		#expr, "" __VA_ARGS__, NULL)
 
 #define fail_if(expr, ...) \
 	_fail_unless(!(expr), __FILE__, __LINE__, \
-		"Failure `" #expr "' occurred", ## __VA_ARGS__, NULL)
+		"!(" #expr ")", "" __VA_ARGS__, NULL)
 
+/* explicit bails inspired by other TAP implementations. bails abort the
+ * entire test; a bail() in a forked subtest will also bail the parent (and so
+ * on) at join. this applies to the code part of the lives/dies tests as well
+ * since they sugar over the forked subtest syntax.
+ */
+extern noreturn void bail(const char *fmt, ...);
+extern noreturn void vbail(const char *fmt, va_list args);
 
-/* internal API for test exit from _fail_unless() */
-extern noreturn void exit_on_fail(void);
+#define BAIL_OUT(...) bail("" __VA_ARGS__, NULL)
+
 
 /* same for test from __assert_failure() */
 extern bool in_test(void);
@@ -152,18 +160,36 @@ extern bool in_test(void);
 
 extern void _fail_unless(
 	int result, const char *file, int line,
-	const char *expr, ...);
+	const char *expr, const char *fmt, ...);
 
 extern int _gen_result(
 	bool ok,
 	const char *func, const char *file, unsigned int line,
-	const char *test_name, ...);
+	const char *test_name, ...)
+		__attribute__((format(printf, 5, 6)));
 
 extern void tap_reset(void);	/* called by the test harness */
 
 extern void plan_no_plan(void);
-extern void plan_skip_all(const char *reason);
+extern void plan_skip_all(const char *reason_fmt, ...)
+	__attribute__((format(printf, 1, 2)));
 extern void plan_tests(unsigned int num_tests);
+
+/* short-form plan() inspired by libtap. @tests is either the number of tests,
+ * NO_PLAN, or SKIP_ALL, with the same effect as plan_tests(), plan_no_plan(),
+ * and plan_skip_all() respectively. also done_testing() to exit a test
+ * routine early (completing a lazy plan), available in user/test and nowhere
+ * else.
+ *
+ * NOTE: planf() can't take a printf attribute because of the extra NULL at
+ * the end, which the compiler will whine about.
+ */
+extern void planf(int tests, const char *fmt, ...);
+
+#define plan(...) planf(__VA_ARGS__, NULL)
+
+#define NO_PLAN -1
+#define SKIP_ALL -2
 
 extern int diag(const char *fmt, ...);
 extern int skip(unsigned int num_skip, const char *reason, ...);
@@ -175,6 +201,9 @@ extern int subtest_end(void);
 extern char *subtest_pop(int *rc_p, void **freeptr_p);
 
 extern int exit_status(void);
+extern noreturn void done_testing(void);
+
+extern void close_no_plan(void);	/* for harness.c impls */
 
 /* forked subtests. obviously not available under sys/test .
  * #include <sys/wait.h> to make these compile.
@@ -196,23 +225,58 @@ extern int exit_status(void);
 		__stc; \
 	})
 
-/* returns the waitpid() status, for WIFEXITED() and the like. */
+/* returns the waitpid() status, for WIFEXITED() and the like. when exit
+ * status is 255, propagates bail-out by exit(255)'ing.
+ */
 #define fork_subtest_join(_child) ({ \
 		int __st, __dead = waitpid((_child), &__st, 0); \
 		fail_unless(__dead == (_child)); \
+		if(WIFEXITED(__st) && WEXITSTATUS(__st) == 255) { \
+			exit(255); \
+		} \
 		__st; \
 	})
 
 /* joins the forked subtest as a test point in the parent. will eventually
- * print the test name in the ok-line. returns like ok1().
+ * print the test name in the ok-line. returns like ok1(), bails like
+ * fork_subtest_join().
  */
 #define fork_subtest_ok1(_child) ({ \
-		int __st, __dead = waitpid((_child), &__st, 0), \
-			_ok = ok(__dead == (_child) \
-					&& WIFEXITED(__st) && WEXITSTATUS(__st) == 0, \
-				"unknown subtest"); 	/* press f to pay respects */ \
-		_ok; \
+		int __st, __dead = waitpid((_child), &__st, 0); \
+		if(WIFEXITED(__st) && WEXITSTATUS(__st) == 255) { \
+			exit(255); \
+		} \
+		ok(__dead == (_child) \
+			&& WIFEXITED(__st) && WEXITSTATUS(__st) == 0, \
+			"unknown subtest"); 	/* press f to pay respects */ \
 	})
+
+/* inspired by liptap: dies_ok() and lives_ok().
+ *
+ * TODO: add some kind of a proper died() predicate to these; plain
+ * WIFEXITED() is surely insufficient and the status could be reported to a
+ * greater extent.
+ */
+#define dies_ok(code, fmt, ...) ({ \
+		int _child = fork_subtest_start((fmt), ##__VA_ARGS__) { \
+			(code); \
+			exit(0); \
+		} fork_subtest_end; \
+		int _status = fork_subtest_join(_child); \
+		ok(!WIFEXITED(_status), (fmt), ##__VA_ARGS__); \
+	})
+
+#define lives_ok(code, fmt, ...) ({ \
+		int _child = fork_subtest_start((fmt), ##__VA_ARGS__) { \
+			(code); \
+			exit(0); \
+		} fork_subtest_end; \
+		int _status = fork_subtest_join(_child); \
+		ok(WIFEXITED(_status), (fmt), ##__VA_ARGS__); \
+	})
+
+#define dies_ok1(code) dies_ok((code), #code " dies")
+#define lives_ok1(code) lives_ok((code), #code " lives")
 
 
 #ifndef __sneks__

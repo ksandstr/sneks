@@ -59,17 +59,6 @@ static int cmp_systest_ptr(const void *ap, const void *bp)
 }
 
 
-void exit_on_fail(void)
-{
-	/* TODO: track and forcequit accessory threads as well. right now ones
-	 * that aren't controlled by fixtures will be left hanging, which may
-	 * compromise the test process under !do_fork.
-	 */
-	thrd_exit(1);
-	abort();
-}
-
-
 bool in_test(void) {
 	return tss_get(in_test_key) == (void *)IN_TEST_MAGIC;
 }
