@@ -83,6 +83,7 @@ static bool sig_default(struct process *p, int sig)
 	switch(sig) {
 		case SIGCHLD: goto ignore;
 		case SIGSEGV: goto core;
+		case SIGABRT: goto core;
 		default:
 			/* FIXME: add the rest and remove this */
 			printf("%s: ignoring sig=%d by default (perhaps wrongly)\n",
@@ -119,9 +120,7 @@ void sig_send(struct process *p, int sig, bool self)
 		assert((p->pending_set & sig_bit) == 0);
 		if((p->dfl_set & sig_bit) != 0) {
 			assert((p->ign_set & sig_bit) == 0);
-			if(sig_default(p, sig)
-				&& pidof_NP(muidl_get_sender()) == ra_ptr2id(ra_process, p))
-			{
+			if(sig_default(p, sig) && self) {
 				muidl_raise_no_reply();
 			}
 		} else if((p->ign_set & sig_bit) == 0) {
