@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+#include <signal.h>
+#include <setjmp.h>
 #include <sys/wait.h>
 
 #include <sneks/test.h>
@@ -88,3 +90,109 @@ START_LOOP_TEST(return_value, iter, 0, 1)
 END_TEST
 
 DECLARE_TEST("process:wait", return_value);
+
+
+/* check that a child process calling abort() breaks and returns
+ * WTERMSIG=SIGABRT under default signal disposition.
+ *
+ * variables:
+ *   - block SIGABRT or not.
+ */
+START_LOOP_TEST(aborting_child, iter, 0, 1)
+{
+	const bool block_abrt = !!(iter & 1);
+	diag("block_abrt=%s", btos(block_abrt));
+	plan_tests(2);
+#ifdef __sneks__
+	todo_start("woop shoop");
+#endif
+
+	int child = fork();
+	fail_if(child < 0);
+	if(child == 0) {
+		struct sigaction act = { .sa_handler = SIG_DFL };
+		int n = sigaction(SIGABRT, &act, NULL);
+		if(n < 0) diag("child: sigaction failed, errno=%d", errno);
+
+		sigset_t abrt_set;
+		sigemptyset(&abrt_set);
+		sigaddset(&abrt_set, SIGABRT);
+		n = sigprocmask(block_abrt ? SIG_BLOCK : SIG_UNBLOCK,
+			&abrt_set, NULL);
+		if(n < 0) diag("child: sigprocmask failed, errno=%d", errno);
+
+#ifndef __sneks__
+		abort();
+#else
+		exit(0);
+#endif
+	}
+	int st, dead = waitpid(child, &st, 0);
+	fail_if(dead != child);
+
+	ok1(WIFSIGNALED(st));
+	imply_ok1(WIFSIGNALED(st), WTERMSIG(st) == SIGABRT);
+}
+END_TEST
+
+DECLARE_TEST("process:wait", aborting_child);
+
+
+static jmp_buf on_abrt_jmp;
+static bool longjmp_out;
+
+static void sigabrt_fn(int signum) {
+	if(longjmp_out) longjmp(on_abrt_jmp, 1);	/* yump */
+}
+
+
+/* handle SIGABRT within an aborting child to see what happens.
+ * variables:
+ *   - catching or ignoring
+ *   - longjmp out or not
+ */
+START_LOOP_TEST(catch_or_ignore_aborting_child, iter, 0, 3)
+{
+	const bool catching = !!(iter & 1);
+	longjmp_out = !!(iter & 2);
+	diag("catching=%s, longjmp_out=%s", btos(catching), btos(longjmp_out));
+	plan_tests(2);
+#ifdef __sneks__
+	todo_start("not gonna work this way");
+#endif
+
+	int child = fork();
+	fail_if(child < 0);
+	if(child == 0) {
+		if(setjmp(on_abrt_jmp)) {
+			diag("child in positive setjmp clause");
+			exit(2);
+		}
+
+		struct sigaction act = {
+			.sa_handler = catching ? &sigabrt_fn : SIG_IGN,
+		};
+		int n = sigaction(SIGABRT, &act, NULL);
+		if(n < 0) diag("child: sigaction failed, errno=%d", errno);
+
+#ifndef __sneks__
+		abort();
+#else
+		exit(0);
+#endif
+	}
+
+	int st, dead = waitpid(child, &st, 0);
+	fail_if(dead < 0);
+	diag("st: %s, val=%d",
+		WIFEXITED(st) ? "exited" : (WIFSIGNALED(st) ? "signaled" : "other"),
+		WIFEXITED(st) ? WEXITSTATUS(st) : (WIFSIGNALED(st) ? WTERMSIG(st) : 0));
+
+	imply_ok1(catching && longjmp_out,
+		WIFEXITED(st) && WEXITSTATUS(st) == 2);
+	imply_ok1(!catching || !longjmp_out,
+		WIFSIGNALED(st) && WTERMSIG(st) == SIGABRT);
+}
+END_TEST
+
+DECLARE_TEST("process:wait", catch_or_ignore_aborting_child);
