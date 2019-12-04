@@ -36,16 +36,6 @@ void __return_from_main(int status)
 }
 
 
-void abort(void)
-{
-	L4_KDB_PrintString("aborted!");
-	for(;;) {
-		asm volatile ("int $70");
-		L4_Sleep(L4_TimePeriod(10000));
-	}
-}
-
-
 void __assert_failure(
 	const char *cond,
 	const char *file, unsigned int line, const char *fn)

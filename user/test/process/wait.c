@@ -103,9 +103,6 @@ START_LOOP_TEST(aborting_child, iter, 0, 1)
 	const bool block_abrt = !!(iter & 1);
 	diag("block_abrt=%s", btos(block_abrt));
 	plan_tests(2);
-#ifdef __sneks__
-	todo_start("woop shoop");
-#endif
 
 	int child = fork();
 	fail_if(child < 0);
@@ -121,11 +118,7 @@ START_LOOP_TEST(aborting_child, iter, 0, 1)
 			&abrt_set, NULL);
 		if(n < 0) diag("child: sigprocmask failed, errno=%d", errno);
 
-#ifndef __sneks__
 		abort();
-#else
-		exit(0);
-#endif
 	}
 	int st, dead = waitpid(child, &st, 0);
 	fail_if(dead != child);
@@ -157,9 +150,6 @@ START_LOOP_TEST(catch_or_ignore_aborting_child, iter, 0, 3)
 	longjmp_out = !!(iter & 2);
 	diag("catching=%s, longjmp_out=%s", btos(catching), btos(longjmp_out));
 	plan_tests(2);
-#ifdef __sneks__
-	todo_start("not gonna work this way");
-#endif
 
 	int child = fork();
 	fail_if(child < 0);
@@ -175,11 +165,7 @@ START_LOOP_TEST(catch_or_ignore_aborting_child, iter, 0, 3)
 		int n = sigaction(SIGABRT, &act, NULL);
 		if(n < 0) diag("child: sigaction failed, errno=%d", errno);
 
-#ifndef __sneks__
 		abort();
-#else
-		exit(0);
-#endif
 	}
 
 	int st, dead = waitpid(child, &st, 0);

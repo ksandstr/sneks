@@ -52,6 +52,36 @@ int kill(int pid, int signum)
 }
 
 
+int raise(int signum) {
+	return kill(getpid(), signum);
+}
+
+
+void abort(void)
+{
+	/* unblock SIGABRT and raise it. */
+	sigset_t abrt_set;
+	sigemptyset(&abrt_set);
+	sigaddset(&abrt_set, SIGABRT);
+	sigprocmask(SIG_UNBLOCK, &abrt_set, NULL);
+	raise(SIGABRT);
+
+	/* it was ignored, or caught and the handler returned; restore default
+	 * disposition and raise it again.
+	 */
+	struct sigaction act = { .sa_handler = SIG_DFL };
+	sigaction(SIGABRT, &act, NULL);
+	sigprocmask(SIG_UNBLOCK, &abrt_set, NULL);
+	raise(SIGABRT);
+
+	/* long shot: pop an invalid interrupt to force abnormal kernel entry. */
+	for(;;) {
+		asm volatile ("int $70");
+		L4_Sleep(L4_TimePeriod(10000));
+	}
+}
+
+
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset)
 {
 	uint64_t or = 0, and = ~0ull;

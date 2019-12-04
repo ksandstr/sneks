@@ -67,6 +67,7 @@ extern int sigpending(sigset_t *set);
 extern int sigsuspend(const sigset_t *mask);
 
 extern int kill(int __pid, int __sig);
+extern int raise(int __sig);
 
 
 /* sigsetops(3) */
