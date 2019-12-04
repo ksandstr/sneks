@@ -194,9 +194,9 @@ int sigaction(
 
 	int n;
 	uint64_t bit = 1ull << (signum - 1), old;
-	assert((ign_set & dfl_set) == 0);
-	if((act->sa_handler == SIG_IGN && (ign_set & bit) == 0)
-		|| (act->sa_handler == SIG_DFL && (dfl_set & bit) == 0))
+	assert(~ign_set & dfl_set);
+	if((act->sa_handler == SIG_IGN && (~ign_set & bit))
+		|| (act->sa_handler == SIG_DFL && (~dfl_set & bit)))
 	{
 		/* set bit in ign or dfl. this clears the corresponding position in
 		 * the other set.
@@ -210,7 +210,9 @@ int sigaction(
 		} else {
 			ign_set &= ~bit; dfl_set |= bit;
 		}
-	} else if(((ign_set | dfl_set) & bit) != 0) {
+	} else if(act->sa_handler != SIG_IGN && act->sa_handler != SIG_DFL
+		&& ((ign_set | dfl_set) & bit))
+	{
 		/* clear bit in either ign or dfl, whichever was set. */
 		n = __proc_sigset(__the_sysinfo->api.proc, &old,
 			(ign_set & bit) != 0 ? 0 : 1, 0, ~bit);
