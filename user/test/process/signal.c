@@ -13,6 +13,7 @@
 #include <stdbool.h>
 #include <stdatomic.h>
 #include <signal.h>
+#include <setjmp.h>
 #include <unistd.h>
 #include <errno.h>
 #include <sched.h>
@@ -732,3 +733,78 @@ START_LOOP_TEST(errno_preservation, iter, 0, 1)
 END_TEST
 
 DECLARE_TEST("process:signal", errno_preservation);
+
+
+static volatile int n_sigs_handled = 0;
+static jmp_buf longjmp_target;
+
+static void longjmp_once_fn(int signum) {
+	diag("%s: signum=%d", __func__, signum);
+	if(++n_sigs_handled == 1) longjmp(longjmp_target, signum);
+}
+
+
+/* arrange for simultaneous delivery of multiple signals. longjmp out of the
+ * first handler. result should be that 1) setjmp returns with longjmp'd value
+ * (signal number of first to handler), and 2) handler is run for both
+ * signals.
+ *
+ * this is why we can't have nice things.
+ *
+ * variables:
+ *   - [from_child] send signals from a child process, or locally
+ *   - TODO: [jmp_on_second] longjmp() on first/second signal
+ */
+START_LOOP_TEST(longjmp_interference, iter, 0, 1)
+{
+	const bool from_child = !!(iter & 1);
+	diag("from_child=%s", btos(from_child));
+	plan_tests(3);
+
+	int value;
+	volatile int jmp_got = -1, n_jmps = 0;
+	if((value = setjmp(longjmp_target)) != 0) {
+		diag("setjmp returned %d", value);
+		if(++n_jmps == 1) jmp_got = value;
+	} else {
+		sigset_t pair, oldset;
+		sigemptyset(&pair);
+		sigaddset(&pair, SIGUSR1);
+		sigaddset(&pair, SIGUSR2);
+		int n = sigprocmask(SIG_BLOCK, &pair, &oldset);
+		if(n != 0) BAIL_OUT("sigprocmask failed, errno=%d", errno);
+
+		struct sigaction act = { .sa_handler = &longjmp_once_fn };
+		n = sigaction(SIGUSR1, &act, NULL);
+		if(n == 0) n = sigaction(SIGUSR2, &act, NULL);
+		if(n != 0) BAIL_OUT("sigaction failed, errno=%d", errno);
+
+		if(from_child) {
+			int parent = getpid();
+			int child = fork();
+			if(child == 0) {
+				kill(parent, SIGUSR1);
+				kill(parent, SIGUSR2);
+				exit(0);
+			}
+			int st, dead = waitpid(child, &st, 0);
+			if(dead != child || !WIFEXITED(st)) BAIL_OUT("child fuckup");
+		} else {
+			raise(SIGUSR1);
+			raise(SIGUSR2);
+		}
+
+		/* thar she blows!! */
+		n = sigprocmask(SIG_SETMASK, &oldset, NULL);
+		if(n != 0) BAIL_OUT("sigprocmask failed, errno=%d", errno);
+		pause();
+		BAIL_OUT("should not be reached!");
+	}
+
+	ok1(n_sigs_handled == 2);
+	ok1(n_jmps == 1);
+	ok1(jmp_got == SIGUSR1 || jmp_got == SIGUSR2);
+}
+END_TEST
+
+DECLARE_TEST("process:signal", longjmp_interference);
