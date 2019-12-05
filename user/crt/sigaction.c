@@ -187,14 +187,14 @@ int sigaction(
 		assert(sig_delivery_page != NULL);
 	}
 
-	if((act->sa_flags & SA_SIGINFO) != 0) {
+	if(act->sa_flags & SA_SIGINFO) {
 		fprintf(stderr, "%s: SA_SIGINFO not supported (yet)\n", __func__);
 		goto Enosys;
 	}
 
 	int n;
 	uint64_t bit = 1ull << (signum - 1), old;
-	assert(~ign_set & dfl_set);
+	assert((ign_set & dfl_set) == 0);
 	if((act->sa_handler == SIG_IGN && (~ign_set & bit))
 		|| (act->sa_handler == SIG_DFL && (~dfl_set & bit)))
 	{
@@ -204,7 +204,7 @@ int sigaction(
 		n = __proc_sigset(__the_sysinfo->api.proc, &old,
 			act->sa_handler == SIG_IGN ? 0 : 1, bit, ~0ull);
 		if(n != 0) goto sigsetfail;
-		assert((old & bit) == 0);
+		assert(~old & bit);
 		if(act->sa_handler == SIG_IGN) {
 			dfl_set &= ~bit; ign_set |= bit;
 		} else {
@@ -217,7 +217,7 @@ int sigaction(
 		n = __proc_sigset(__the_sysinfo->api.proc, &old,
 			(ign_set & bit) != 0 ? 0 : 1, 0, ~bit);
 		if(n != 0) goto sigsetfail;
-		assert((old & bit) != 0);
+		assert(old & bit);
 		ign_set &= ~bit; dfl_set &= ~bit;
 	}
 	assert((ign_set & dfl_set) == 0);
