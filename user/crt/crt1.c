@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <assert.h>
 #include <errno.h>
+#include <sched.h>
 #include <ccan/array_size/array_size.h>
 
 #include <l4/types.h>
@@ -59,6 +60,18 @@ long sysconf(int name)
 		case _SC_NPROCESSORS_ONLN: return 1;	/* FIXME: get from KIP! */
 		default: errno = EINVAL; return -1;
 	}
+}
+
+
+/* TODO: move this wherever */
+int sched_yield(void) {
+	L4_ThreadSwitch(L4_nilthread);
+	return 0;
+}
+
+
+int sched_getcpu(void) {
+	return L4_ProcessorNo();
 }
 
 
