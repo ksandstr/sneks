@@ -182,6 +182,10 @@ int sigaction(
 	const struct sigaction *act,
 	struct sigaction *oldact)
 {
+	if(unlikely(signum < 1 || signum > sizeof ign_set * 8)) {
+		errno = EINVAL;
+		return -1;
+	}
 	if(unlikely(sig_delivery_page == NULL)) {
 		setup_delivery_page();
 		assert(sig_delivery_page != NULL);
