@@ -139,7 +139,7 @@ DECLARE_TEST("process:fork", access_mmap_memory);
 
 static int last_fork_child = 0;
 static bool fork_first_st_ok = true, fork_later_st_ok = true;
-static sig_atomic_t last_child_signaled = 0;
+static volatile sig_atomic_t last_child_signaled = 0;
 
 /* forking within a signal handler is one of those ``through the looking
  * glass'' things of POSIX.

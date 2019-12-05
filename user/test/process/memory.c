@@ -167,7 +167,7 @@ END_TEST
 DECLARE_TEST("process:memory", mmap_fixed);
 
 
-static sig_atomic_t poked = 0;
+static volatile sig_atomic_t poked = 0;
 
 static void sync_poke(int signum) {
 	poked = 1;

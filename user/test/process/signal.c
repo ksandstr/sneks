@@ -25,8 +25,8 @@
 #include <sneks/test.h>
 
 
-static sig_atomic_t chld_got = 0, int_got = 0, handler_calls = 0,
-	int_max_depth = 0;
+static volatile sig_atomic_t chld_got = 0, int_got = 0,
+	handler_calls = 0, int_max_depth = 0;
 
 #ifdef __l4x2__
 static L4_ThreadId_t chld_handler_tid = { .raw = 0 },

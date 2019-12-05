@@ -9,7 +9,7 @@
 
 
 typedef uint64_t sigset_t;
-typedef volatile int sig_atomic_t;
+typedef int sig_atomic_t;
 typedef void (*__sighandler_t)(int);
 typedef __sighandler_t sighandler_t;
 
