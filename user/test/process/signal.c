@@ -15,6 +15,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include <errno.h>
+#include <sched.h>
 #include <sys/wait.h>
 #include <sys/types.h>
 #include <ccan/minmax/minmax.h>
@@ -642,3 +643,92 @@ START_LOOP_TEST(sigsuspend_multiple, iter, 0, 1)
 END_TEST
 
 DECLARE_TEST("process:signal", sigsuspend_multiple);
+
+
+static volatile sig_atomic_t handler_ran = 0;
+
+static void errno_smashing_handler_fn(int signum)
+{
+	handler_ran = 1;
+	/* hypothetically, if writing errno in userspace were considered not
+	 * signal-safe, a host might not restore errno unless it was overwritten
+	 * in a signal handler by an errno producer, so manually assigning it
+	 * would leave the existing value smashed. just for that case we'll have
+	 * a library call smash it for us.
+	 */
+	struct sigaction act = { .sa_handler = &errno_smashing_handler_fn };
+	int n = sigaction(123, &act, NULL);
+	if(n == 0 || errno != EINVAL) {
+		diag("%s: unexpected sigaction n=%d, errno=%d", __func__, n, errno);
+	}
+}
+
+
+/* test that errno is preserved when signals occur over a function that's not
+ * specified to set EINTR when signaled (i.e. sched_yield(2)). this test is
+ * structurally very similar to the l4x2_vregs_preservation test, the major
+ * difference being that this one has the portable bits and the other has
+ * __l4x2__ specific preserved bits.
+ *
+ * variables:
+ *   - async or sync signaling, i.e. from a child process into a
+ *     while-sched_yield loop, or mask-raise-unmask.
+ */
+START_LOOP_TEST(errno_preservation, iter, 0, 1)
+{
+	const bool do_async = !!(iter & 1);
+	diag("do_async=%s", btos(do_async));
+	plan_tests(2);
+	todo_start("under development");
+
+	struct sigaction act = {
+		.sa_handler = &errno_smashing_handler_fn,
+	};
+	int n = sigaction(SIGUSR1, &act, NULL);
+	fail_if(n != 0, "sigaction failed, errno=%d", errno);
+
+	/* TODO: move this, and the similar block in l4x2_vregs_preservation, into
+	 * a common function returning `child' & filling in `oldmask'.
+	 */
+	sigset_t oldmask;
+	int child = -1;
+	if(do_async) {
+		int parent = getpid();
+		child = fork_subtest_start("signal sender") {
+			plan(1);
+			/* clumsy spin-based handshake necessitated by sigsuspend()'s
+			 * propensity to also smash errno
+			 */
+			usleep(10 * 1000);
+			n = kill(parent, SIGUSR1);
+			if(!ok(n == 0, "kill(parent, SIGUSR1)")) diag("errno=%d", errno);
+		} fork_subtest_end;
+	} else {
+		sigset_t block;
+		sigemptyset(&block);
+		sigaddset(&block, SIGUSR1);
+		n = sigprocmask(SIG_BLOCK, &block, &oldmask);
+		if(n != 0) BAIL_OUT("sigprocmask failed, errno=%d", errno);
+		raise(SIGUSR1);
+	}
+
+	diag("waiting for handler...");
+	errno = 12345;
+
+	if(!do_async) {
+		n = sigprocmask(SIG_SETMASK, &oldmask, NULL);
+		if(n != 0) BAIL_OUT("sigprocmask failed, errno=%d", errno);
+	}
+
+	while(handler_ran == 0) sched_yield();
+
+	if(!ok(errno == 12345, "errno was preserved")) {
+		diag("abnormal errno=%d", errno);
+	}
+
+	if(do_async) fork_subtest_ok1(child);
+	else skip(1, "no subtest in this iteration");
+}
+END_TEST
+
+DECLARE_TEST("process:signal", errno_preservation);
