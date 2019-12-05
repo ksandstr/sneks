@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdarg.h>
+#include <stdnoreturn.h>
 #include <string.h>
 #include <threads.h>
 #include <unistd.h>
@@ -78,7 +79,7 @@ static struct htable pre_sysmem_resv = HTABLE_INITIALIZER(
 	pre_sysmem_resv, &hash_raw_word, NULL);
 
 
-extern NORETURN void panic(const char *msg);
+extern noreturn void panic(const char *msg);
 
 
 static size_t hash_raw_word(const void *ptr, void *priv) {

@@ -1,6 +1,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdnoreturn.h>
 #include <assert.h>
 #include <threads.h>
 #include <errno.h>
@@ -78,7 +79,7 @@ int *__errno_location(void)
 }
 
 
-void NORETURN panic(const char *msg)
+noreturn void panic(const char *msg)
 {
 	printf("!!! PANIC: %s\n", msg);
 	for(;;) { L4_Sleep(L4_Never); }

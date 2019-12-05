@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdalign.h>
+#include <stdnoreturn.h>
 #include <string.h>
 #include <errno.h>
 #include <ccan/list/list.h>
@@ -12,7 +13,6 @@
 #include <ccan/minmax/minmax.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/container_of/container_of.h>
-#include <ccan/compiler/compiler.h>
 
 #include <sneks/rbtree.h>
 #include <sneks/mm.h>
@@ -182,7 +182,7 @@ void abort(void) {
 }
 
 
-NORETURN void panic(const char *msg) {
+noreturn void panic(const char *msg) {
 	printf("sysmem: PANIC! %s\n", msg);
 	abort();
 }
@@ -704,6 +704,7 @@ static bool interim_fault(L4_MsgTag_t tag, L4_ThreadId_t peer)
 }
 
 
+#if !1
 static void abend_helper_thread(void)
 {
 	for(;;) {
@@ -729,9 +730,10 @@ static void abend_helper_thread(void)
 		}
 	}
 }
+#endif
 
 
-static COLD void start_abend_helper(void)
+static void start_abend_helper(void)
 {
 /* disabled for being fundamentally unworkable. should be replaced with
  * explicit creation of helper threads by root during sysmem initialization,

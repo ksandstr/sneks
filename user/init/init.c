@@ -1,6 +1,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdnoreturn.h>
 #include <string.h>
 #include <assert.h>
 #include <unistd.h>
@@ -13,7 +14,6 @@
 #include <ccan/minmax/minmax.h>
 #include <ccan/darray/darray.h>
 #include <ccan/array_size/array_size.h>
-#include <ccan/compiler/compiler.h>
 #include <ccan/opt/opt.h>
 
 
@@ -43,7 +43,7 @@ static darray(struct inittab *) inittab = darray_new();
 static darray(char *) setenvs = darray_new();	/* X=Y */
 
 
-static void PRINTF_FMT(2, 3) NORETURN syntax(
+static void PRINTF_FMT(2, 3) noreturn syntax(
 	const struct inittab *t,
 	const char *fmt, ...)
 {
@@ -227,7 +227,7 @@ static void chld_handler(int signum)
 }
 
 
-static NORETURN void init_main(void)
+static noreturn void init_main(void)
 {
 	struct sigaction act = { .sa_handler = &chld_handler };
 	int n = sigaction(SIGCHLD, &act, NULL);

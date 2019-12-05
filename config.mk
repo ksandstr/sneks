@@ -7,7 +7,7 @@ LFHT_DIR=$(CFGDIR)/../lfht
 LD=ld.gold
 
 # TODO: become independent of the mung includes
-CFLAGS=-O2 -Wall -march=native -std=gnu99 \
+CFLAGS=-O2 -Wall -march=native -std=gnu11 \
 	-m32 -mno-avx -mno-sse2 \
 	-I $(CFGDIR)/include -I $(MUNG_DIR)/include \
 	-I . -I $(MUIDL_DIR)/include -I $(LFHT_DIR) -I $(CCAN_DIR) \

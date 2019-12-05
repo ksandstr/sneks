@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdnoreturn.h>
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
@@ -32,7 +33,7 @@ void __assert_failure(
 }
 
 
-void NORETURN panic(const char *msg)
+void noreturn panic(const char *msg)
 {
 	printf("!!! PANIC: %s\n", msg);
 	for(;;) { L4_Sleep(L4_Never); }

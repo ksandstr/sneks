@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdatomic.h>
+#include <stdnoreturn.h>
 #include <string.h>
 #include <errno.h>
 #include <assert.h>
@@ -370,7 +371,7 @@ void zombify(struct process *p)
 	struct process *parent = get_process(p->ppid);
 	if(parent == NULL) {
 		/* FIXME holy shit move this into a header */
-		extern NORETURN void panic(const char *croak);
+		extern noreturn void panic(const char *croak);
 		int pid = ra_ptr2id(ra_process, p);
 		if(pid == 1) {
 			printf("init died? exitcode=%#08x\n", p->code);
@@ -1217,7 +1218,7 @@ int uapi_loop(void *param_ptr)
 }
 
 
-COLD void uapi_init(void)
+void uapi_init(void)
 {
 	utcb_size_log2 = size_to_shift(L4_UtcbSize(the_kip));
 	assert(1 << utcb_size_log2 >= L4_UtcbSize(the_kip));

@@ -6,10 +6,10 @@
 #define __SNEKS_TEST_H__
 
 #include <stdbool.h>
+#include <stdnoreturn.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <ccan/compiler/compiler.h>
 #include <ccan/autodata/autodata.h>
 
 
@@ -142,7 +142,7 @@ AUTODATA_TYPE(all_utest_specs, struct utest_spec);
 
 
 /* internal API for test exit from _fail_unless() */
-extern NORETURN void exit_on_fail(void);
+extern noreturn void exit_on_fail(void);
 
 /* same for test from __assert_failure() */
 extern bool in_test(void);

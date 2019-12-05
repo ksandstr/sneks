@@ -2,10 +2,8 @@
 #ifndef _ASSERT_H
 #define _ASSERT_H
 
-#include <ccan/compiler/compiler.h>
 
-
-extern NORETURN void __assert_failure(
+extern _Noreturn void __assert_failure(
 	const char *condition,
 	const char *file,
 	unsigned int line,

@@ -24,9 +24,10 @@
 #include <errno.h>
 #include <signal.h>
 #include <sys/mman.h>
+#include <ccan/likely/likely.h>
+#include <ccan/compiler/compiler.h>
 #include <ccan/minmax/minmax.h>
 #include <ccan/array_size/array_size.h>
-#include <ccan/likely/likely.h>
 #include <ccan/container_of/container_of.h>
 #include <ccan/darray/darray.h>
 #include <ccan/bitmap/bitmap.h>
