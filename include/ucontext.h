@@ -7,7 +7,19 @@
 
 /* TODO: get this from an arch-specific header. */
 typedef struct {
-	uint32_t eax, ebx, ecx, edx, esi, edi, ebp, esp, eip;
+	/* format details follow __invoke_sig_slow()'s convenience. IPC-written
+	 * registers (MRs, vs/as, ir, ec, tw[01], and CPU registers except %edi
+	 * and %eip) are not preserved when signal handling is entered by
+	 * interrupting a waiting IPC, since the kernel was already given
+	 * permission to smash them.
+	 *
+	 * the foocontext family save and restore only callee-saved registers. the
+	 * restoring side also sets BR0 accept untyped words only.
+	 */
+	uint32_t mrs[64], brs[33];
+	uint32_t tw0, tw1, vsas, ir, xferto, ec, cpe;	/* UTCB vregs */
+	uint32_t edi, esi, ebp, dummy_esp, ebx, edx, ecx, eax; /* pushal result */
+	uint32_t _errno, eflags, eip;
 } __attribute__((__packed__)) mcontext_t;
 
 

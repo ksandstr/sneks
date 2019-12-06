@@ -672,7 +672,6 @@ START_LOOP_TEST(errno_preservation, iter, 0, 1)
 	const bool do_async = !!(iter & 1);
 	diag("do_async=%s", btos(do_async));
 	plan_tests(2);
-	todo_start("under development");
 
 	struct sigaction act = {
 		.sa_handler = &errno_smashing_handler_fn,
@@ -779,7 +778,6 @@ START_LOOP_TEST(l4x2_vregs_preservation, iter, 0, 1)
 	const bool do_async = !!(iter & 1);
 	diag("do_async=%s", btos(do_async));
 	plan_tests(6);
-	todo_start("expected to fail");
 
 	struct sigaction act = { .sa_handler = &l4x2_vregs_smashing_fn };
 	int n = sigaction(SIGUSR1, &act, NULL);

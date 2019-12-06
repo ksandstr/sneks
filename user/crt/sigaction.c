@@ -76,7 +76,8 @@ void __sig_bottom(void)
 			 * until the handler has run (unless blocked). fortunately
 			 * function calls are just as good.
 			 */
-			__sig_invoke(sig + 1);
+			extern void __attribute__((regparm(3))) __invoke_sig_sync(int);
+			__invoke_sig_sync(sig + 1);
 			continue;
 		}
 
