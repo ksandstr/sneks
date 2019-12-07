@@ -15,6 +15,7 @@
 #include <signal.h>
 #include <setjmp.h>
 #include <unistd.h>
+#include <assert.h>
 #include <errno.h>
 #include <sched.h>
 #include <sys/wait.h>
@@ -25,6 +26,7 @@
 #include <l4/types.h>
 #include <l4/ipc.h>
 #include <l4/syscall.h>
+#include <l4/vregs.h>
 #endif
 
 #include <sneks/test.h>
@@ -736,6 +738,121 @@ DECLARE_TEST("process:signal", errno_preservation);
 
 
 static volatile int n_sigs_handled = 0;
+
+
+#ifdef __l4x2__
+static void l4x2_vregs_smashing_fn(int signum)
+{
+	n_sigs_handled++;
+
+	L4_ThreadId_t dne = L4_GlobalId(L4_ThreadNo(L4_Myself()),
+		(L4_Version(L4_Myself()) ^ 0x3f) | signum);
+	assert(!L4_IsLocalId(dne));
+
+	L4_Set_VirtualSender(dne);
+	L4_Set_XferTimeouts(L4_Timeouts(L4_ZeroTime, L4_Never));
+	/* TODO: change CopFlags, PreemptFlags as well */
+	L4_VREG(__L4_Get_UtcbAddress(), L4_TCR_THREADWORD0) = 0xdeadbeef;
+	L4_VREG(__L4_Get_UtcbAddress(), L4_TCR_THREADWORD1) = 0xc0def007 ^ signum;
+
+	/* alter ErrorCode as well. we have two modes: one for generating ec=2
+	 * (invalid tid to ExchangeRegisters), another for ec=4 (non-existing
+	 * partner in Ipc send phase).
+	 */
+	L4_Word_t old_ec = L4_ErrorCode();
+	if(old_ec != 2) {
+		L4_ThreadId_t nil = L4_LocalIdOf(dne);
+		assert(L4_IsNilThread(nil));
+		assert(L4_ErrorCode() == 2);
+	} else {
+		L4_ThreadId_t dummy;
+		L4_Ipc(dne, L4_nilthread,
+			L4_Timeouts(L4_ZeroTime, L4_ZeroTime), &dummy);
+		assert(L4_ErrorCode() == 4);
+	}
+	assert(L4_ErrorCode() != old_ec);
+}
+#endif
+
+
+/* whether L4.X2 vregs are preserved in such a way that doesn't forbid IPC
+ * setup and decoding in non-annotated sections of userspace.
+ *
+ * variables:
+ *   - whether signal is processed asynchronously (from child, during
+ *     sched_yield() loop), or synchronously (mask-raise-unmask).
+ */
+START_LOOP_TEST(l4x2_vregs_preservation, iter, 0, 1)
+{
+#ifndef __l4x2__
+	diag("iter=%d", iter);	/* touch-a my spaghetti */
+	plan(SKIP_ALL, "not applicable to non-L4.X2 platforms");
+	done_testing();
+#else
+	const bool do_async = !!(iter & 1);
+	diag("do_async=%s", btos(do_async));
+	plan_tests(6);
+	todo_start("expected to fail");
+
+	struct sigaction act = { .sa_handler = &l4x2_vregs_smashing_fn };
+	int n = sigaction(SIGUSR1, &act, NULL);
+	if(n != 0) BAIL_OUT("sigaction failed, errno=%d", errno);
+
+	sigset_t oldmask;
+	int child = -1;
+	if(do_async) {
+		int parent = getpid();
+		child = fork_subtest_start("signal sender") {
+			plan(1);
+			/* clumsy spin-based handshake necessitated by sigsuspend()'s
+			 * propensity to also smash MRs and named vregs
+			 */
+			usleep(10 * 1000);
+			n = kill(parent, SIGUSR1);
+			if(!ok(n == 0, "kill(parent, SIGUSR1)")) diag("errno=%d", errno);
+		} fork_subtest_end;
+	} else {
+		sigset_t block;
+		sigemptyset(&block);
+		sigaddset(&block, SIGUSR1);
+		n = sigprocmask(SIG_BLOCK, &block, &oldmask);
+		if(n != 0) BAIL_OUT("sigprocmask failed, errno=%d", errno);
+		raise(SIGUSR1);
+	}
+
+	assert(n_sigs_handled == 0);
+	L4_Set_VirtualSender(L4_Myself());
+	assert(L4_SameThreads(L4_ActualSender(), L4_Myself()));
+	L4_Word_t tos = L4_Timeouts(L4_TimePeriod(12345), L4_TimePeriod(66642));
+	L4_Set_XferTimeouts(tos);
+	L4_Word_t old_ec = L4_ErrorCode();
+	L4_VREG(__L4_Get_UtcbAddress(), L4_TCR_THREADWORD0) = 0x70a57b07;
+	L4_VREG(__L4_Get_UtcbAddress(), L4_TCR_THREADWORD1) = 0xaa60a75e;
+
+	if(!do_async) {
+		n = sigprocmask(SIG_SETMASK, &oldmask, NULL);
+		if(n != 0) BAIL_OUT("sigprocmask failed, errno=%d", errno);
+	}
+
+	while(n_sigs_handled == 0) sched_yield();
+
+	ok(L4_ActualSender().raw == L4_Myself().raw, "vs/as");
+	ok(old_ec == L4_ErrorCode(), "ec");
+	ok(L4_XferTimeouts() == tos, "xfertos");
+	ok(L4_VREG(__L4_Get_UtcbAddress(), L4_TCR_THREADWORD0) == 0x70a57b07,
+		"threadword0");
+	ok(L4_VREG(__L4_Get_UtcbAddress(), L4_TCR_THREADWORD1) == 0xaa60a75e,
+		"threadword1");
+
+	if(do_async) fork_subtest_ok1(child);
+	else skip(1, "no subtest in this iteration");
+#endif
+}
+END_TEST
+
+DECLARE_TEST("process:signal", l4x2_vregs_preservation);
+
+
 static jmp_buf longjmp_target;
 
 static void longjmp_once_fn(int signum) {
