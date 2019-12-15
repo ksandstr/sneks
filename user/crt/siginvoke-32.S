@@ -40,6 +40,7 @@ __invoke_sig_fast:
 # user context.
 __invoke_sig_slow:	# (sig, flags, ip)
 	pushal
+	addl $12, 12(%esp)	# remove params from pushed %esp
 	movl %gs:0, %ebx	# UTCB
 	# stash errno in the signum position, put signum in first regparm.
 	call __errno_location
@@ -62,7 +63,11 @@ __invoke_sig_slow:	# (sig, flags, ip)
 	leal -192(%ebx), %esi	# address of BR32..BR0
 	movl $33, %ecx
 	rep movsl (%esi), (%edi)
+	# rest of ucontext_t
+	pushl $0	# ->link
+	movl %esp, %edx	# second regparm: ucontext_t ptr
 	call __sig_invoke
+	addl $4, %esp
 	# restore MRs and BRs.
 	# NOTE: retention of UTCB pointer in %ebx means that userspace threads
 	# may not return from __sig_invoke on a different kernel thread than
@@ -87,7 +92,23 @@ __invoke_sig_slow:	# (sig, flags, ip)
 	movl 32(%esp), %esi
 	call __errno_location
 	movl %esi, (%eax)
+	# conditionally load ucontext %esp
+	movl 12(%esp), %eax
+	leal 44(%esp), %ecx
+	cmpl %eax, %ecx	# changed by handler?
+	jne 1f		# yes: take even slower still a path
 	popal
-	addl $4, %esp	# drop sig (errno)
+	addl $4, %esp	# no: drop errno
+	popf
+	ret
+1:	# construct flags,eip in ucontext %esp
+	subl $8, %eax
+	movl 36(%esp), %ecx
+	movl %ecx, (%eax)
+	movl 40(%esp), %ecx
+	movl %ecx, 4(%eax)
+	movl %eax, 32(%esp)	# reuse sig/errno for incoming %esp
+	popal
+	popl %esp
 	popf
 	ret

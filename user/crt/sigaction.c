@@ -3,8 +3,11 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdatomic.h>
+#include <stdnoreturn.h>
 #include <string.h>
 #include <signal.h>
+#include <setjmp.h>
+#include <ucontext.h>
 #include <unistd.h>
 #include <assert.h>
 #include <errno.h>
@@ -18,13 +21,41 @@
 #include "private.h"
 
 
+#define SIGQBITS 4
+#define QSBLKMAX ((1 << SIGQBITS) - 1)
+
+
+/* "queued signals' block", simple mode. should change heavily once siginfo_t
+ * reception comes along.
+ */
+struct qsblk {
+	_Atomic uint32_t rtsigs;
+};
+
+
 typedef void (*handler_bottom_fn)(void);
 
 
 static void *sig_delivery_page = NULL;
-static uint64_t ign_set = 0, dfl_set = ~0ull, block_set = 0, defer_set = 0;
+static uint64_t ign_set = 0, dfl_set = ~0ull, block_set = 0;
 static struct sigaction sig_actions[64];
 static bool recv_break_ok = false;
+
+/* process-wide signal queue.
+ *
+ * sigq_status is split into fields indicating location of head and tail
+ * within sigq[], so as to allocate qsblk at the tail and consume at the head.
+ * headptr is the first SIGQBITS, tailptr is the next SIGQBITS. QSBLKMAX may
+ * be used to mask them off. when headptr=tailptr, insertion occurs at the
+ * currently active head (such as when empty). the high 32 bits are a mask of
+ * the POSIX reliable (non-realtime) signals.
+ */
+static struct qsblk sigq[QSBLKMAX + 1];
+static _Atomic uint64_t sigq_status = 0;
+
+/* per-thread state (TODO: move into per-thread segment when available) */
+static jmp_buf *signal_jmp = NULL;
+static ucontext_t *signal_uctx = NULL;
 
 
 void __permit_recv_interrupt(void)
@@ -41,6 +72,106 @@ void __forbid_recv_interrupt(void)
 }
 
 
+/* fetch next signal from sigqueue. returns signums of reliable signals first,
+ * and thereafter realtime signals in ascending order per level, advancing
+ * headptr as zeroes are encountered, or 0 when the queue is empty.
+ *
+ * TODO: change the rtsig stuff to proceed in signal order for hypothetical
+ * L1i advantage, and POSIX compliance.
+ */
+static int next_signal(void)
+{
+	int got;
+	uint64_t oldst = atomic_load_explicit(&sigq_status,
+		memory_order_relaxed), newst;
+	do {
+		got = ffsl(oldst >> 32);
+		if(got > 0) {
+			/* caught a regular POSIX reliable signal. */
+			newst = oldst & ~(1ull << (got + 31));
+			assert(ffsl(newst >> 32) != got);
+		} else {
+			/* dequeue a realtime signal. */
+			int headptr = oldst & QSBLKMAX,
+				tailptr = (oldst >> SIGQBITS) & QSBLKMAX;
+			/* find a subqueue that's not empty, and load its mask. */
+			uint32_t sigs;
+			while(sigs = atomic_load_explicit(
+					&sigq[headptr].rtsigs, memory_order_relaxed),
+				sigs == 0)
+			{
+				if(headptr == tailptr) return 0;	/* empty */
+				headptr = (headptr + 1) & QSBLKMAX;
+			}
+			/* take one bit. */
+			do {
+				got = ffsl(sigs);
+			} while(got > 0
+				&& !atomic_compare_exchange_strong_explicit(
+					&sigq[headptr].rtsigs, &sigs, sigs & ~(1ul << (got - 1)),
+					memory_order_relaxed, memory_order_relaxed));
+			if(got == 0) {
+				/* reload sigq_status to avoid consuming per stale headptr, which
+				 * may occur when the asynchronous signal handling mechanism is
+				 * interrupted with another signal.
+				 */
+				oldst = atomic_load_explicit(&sigq_status, memory_order_relaxed);
+			} else {
+				got += __SIGRTMIN - 1;
+				assert((oldst >> 32) == 0);
+				newst = headptr | tailptr << SIGQBITS;
+			}
+		}
+	} while(got == 0 || (newst != oldst
+		&& !atomic_compare_exchange_strong_explicit(
+			&sigq_status, &oldst, newst,
+			memory_order_release, memory_order_relaxed)));
+	return got;
+}
+
+
+/* discards an indeterminate fraction of input @sigs on -EAGAIN.
+ *
+ * prefers to add realtime signals to the queue tail, even if they'd fit (all
+ * at once or eventually) in earlier slots also. it could be changed to start
+ * from headptr and work its way towards headptr-1, and then update tailptr to
+ * allow next_signal() to detect an empty queue; this could even be optimized
+ * with some sort of a map that tells us how deep the signals are stacked. we
+ * could even store some kind of a "turns off" bit instead of 1 for stored, 0
+ * for clear.
+ *
+ * however, all of that is a bit too precious while the current implementation
+ * remains mildly fuckered; for now, if one repeated signal ends up consuming
+ * all the queue space, then at least one of every other signal can be added,
+ * and that seems like it could well be enough.
+ */
+static int queue_signals(uint64_t sigs)
+{
+	uint64_t oldst = atomic_load_explicit(&sigq_status,
+		memory_order_relaxed), newst;
+	do {
+		newst = ((oldst >> 32) | (sigs & 0xffffffff)) << 32;
+
+		uint32_t rtsigs = sigs >> 32;
+		int headptr = oldst & QSBLKMAX,
+			tailptr = (oldst >> SIGQBITS) & QSBLKMAX;
+		while(rtsigs &= atomic_fetch_or_explicit(
+				&sigq[tailptr].rtsigs, rtsigs, memory_order_relaxed),
+			rtsigs != 0)
+		{
+			/* advance tailptr to deposit again. */
+			tailptr = (tailptr + 1) & QSBLKMAX;
+			if(tailptr == headptr) return -EAGAIN; /* can't */
+		}
+		newst |= headptr | tailptr << SIGQBITS;
+	} while(newst != oldst
+		&& !atomic_compare_exchange_strong_explicit(
+			&sigq_status, &oldst, newst,
+			memory_order_release, memory_order_relaxed));
+	return 0;
+}
+
+
 void __sig_bottom(void)
 {
 	extern void __invoke_sig_slow(), __invoke_sig_fast();
@@ -48,39 +179,64 @@ void __sig_bottom(void)
 	printf("%s: called in tid=%lu:%lu!\n", __func__,
 		L4_ThreadNo(L4_MyGlobalId()), L4_Version(L4_MyGlobalId()));
 #endif
-	const bool in_main = L4_SameThreads(L4_Myself(), __main_tid);
 
+	/* get pending signals, or cause async invocation threadlet exit where
+	 * applicable.
+	 */
 	uint64_t pending;
-	int n = __proc_sigset(__the_sysinfo->api.proc, &pending, 4, 0, 0);
+	int call = 0,
+		n = __proc_sigset(__the_sysinfo->api.proc, &pending, 4, 0, 0);
 	if(n != 0) {
 		printf("%s: Proc::sigset failed, n=%d\n", __func__, n);
 		/* spin */
-		return;
+		goto end;
 	}
+	assert((pending & ign_set) == 0);
+	assert((pending & dfl_set) == 0);
 
-	while(pending > 0) {
-		int sig = ffsll(pending) - 1;
+	/* __sig_bottom() runs from either the signal invocation helper threadlet,
+	 * or from a synchronous signal delivery callsite (such as kill(2) or
+	 * sigprocmask(2)). the former may start while the latter is executing, so
+	 * we attempt to make recursion safe with a three-state "please call
+	 * sigset again" atomic counter.
+	 *
+	 * TODO: this would be per-thread in a threaded crt.
+	 * TODO: and i wonder what this'll do when the handler forks. oh boy.
+	 */
+	static _Atomic int n_calls = 0;
+	int sig = 0;
+	call = atomic_fetch_add_explicit(&n_calls, 1, memory_order_relaxed);
+	if(call == 0 && (pending & ~block_set)) {
+		/* process at most one directly. */
+		sig = ffsll(pending & ~block_set) - 1;
 		uint64_t bit = 1ull << sig;
-		assert((pending & bit) != 0);
+		assert(pending & bit);
+		assert(~block_set & bit);
 		pending &= ~bit;
-
-		if((block_set & bit) != 0) {
-			defer_set |= bit;
-			continue;
+	}
+	/* put rest in queue. */
+	if(pending > 0) {
+		n = queue_signals(pending);
+		if(unlikely(n != 0)) {
+			fprintf(stderr, "warning: queue_signals(%#lx) failed, n=%d\n",
+				(unsigned long)pending, n);
 		}
+	}
+	if(sig == 0) goto end;
 
-		if(in_main) {
-			/* called in the thread that'd be exregs'd into sighandler land,
-			 * which it can't do to itself. this happens when kill(2) signals
-			 * the calling process itself; in that case kill(2) mustn't return
-			 * until the handler has run (unless blocked). fortunately
-			 * function calls are just as good.
-			 */
-			extern void __attribute__((regparm(3))) __invoke_sig_sync(int);
-			__invoke_sig_sync(sig + 1);
-			continue;
-		}
-
+	int inner;
+	const bool in_main = L4_SameThreads(L4_Myself(), __main_tid);
+	if(in_main) {
+		/* called from outside the invocation threadlet, so that e.g. kill(2)
+		 * returns only after the handler has run (unless blocked), and
+		 * similar for sigprocmask(2) that unmasks pending signals. permit
+		 * threadlet invocation and invoke handler synchronously.
+		 */
+		assert(call == 0);
+		inner = atomic_exchange_explicit(&n_calls, 0, memory_order_relaxed);
+		__invoke_sig_sync(sig + 1);
+		if(inner > 1) __sig_bottom();
+	} else {
 		/* H to halt the thread;
 		 * S to interrupt a send phase;
 		 * [R to interrupt a receive phase] if applicable;
@@ -135,12 +291,19 @@ void __sig_bottom(void)
 			abort();
 		}
 		assert((ctl_out & 0x001) != 0);	/* must have been halted. */
+
+end:
+		assert(call == 0);
+		inner = atomic_exchange_explicit(&n_calls, 0, memory_order_relaxed);
+		if(inner > 1) __sig_bottom();
 	}
 }
 
 
 static void setup_delivery_page(void)
 {
+	for(int i=0; i <= QSBLKMAX; i++) assert(sigq[i].rtsigs == 0);
+
 	int pagesz = sysconf(_SC_PAGESIZE);
 	sig_delivery_page = aligned_alloc(pagesz, pagesz);
 	if(sig_delivery_page == NULL) {
@@ -246,13 +409,24 @@ Enosys:
 }
 
 
-/* called from siginvoke.o, which is machine code. */
-void __attribute__((regparm(3))) __sig_invoke(int sig)
+/* handle @sig and drain the signal queue. called in a normal userspace thread
+ * via siginvoke.o, which is machine code.
+ */
+void __attribute__((regparm(3))) __sig_invoke(int sig, ucontext_t *uctx)
 {
-	uint64_t defers = 0;
+	assert(sig > 0);
+
+	/* set signal_uctx so that the first __sig_invoke() re-/sets it and
+	 * inner handlers share that pointer.
+	 */
+	ucontext_t *oldctx = NULL;
+	atomic_compare_exchange_strong_explicit(&signal_uctx, &oldctx, uctx,
+		memory_order_relaxed, memory_order_relaxed);
+	atomic_signal_fence(memory_order_release);
+
+	jmp_buf sigjmpbuf;
 	do {
-		defers &= ~(1ull << (sig - 1));
-		struct sigaction *act = &sig_actions[sig - 1];
+		const struct sigaction *act = &sig_actions[sig - 1];
 
 		/* FIXME: handle these. they'll appear when a dfl/ign signal appears
 		 * in a handler's sa_mask and are raised during its execution, so they
@@ -261,50 +435,83 @@ void __attribute__((regparm(3))) __sig_invoke(int sig)
 		assert(act->sa_handler != SIG_IGN);
 		assert(act->sa_handler != SIG_DFL);
 
-		/* apply act->sa_mask, reset `masked' afterward */
-		uint64_t masked,
-			old = atomic_load(&block_set),
-			eff_mask = act->sa_mask;
-		if((act->sa_flags & SA_NODEFER) == 0) {
-			eff_mask |= 1ull << (sig - 1);
-		}
+		/* apply act->sa_mask, reset only `masked' afterward to enable clean
+		 * recursion.
+		 */
+		volatile uint64_t masked;
+		uint64_t old = atomic_load(&block_set), eff_mask = act->sa_mask;
+		if(~act->sa_flags & SA_NODEFER) eff_mask |= 1ull << (sig - 1);
 		do {
 			masked = eff_mask & ~old;
-		} while(!atomic_compare_exchange_weak(
-			&block_set, &old, old | eff_mask));
+		} while(!atomic_compare_exchange_strong_explicit(
+			&block_set, &old, old | eff_mask,
+			memory_order_relaxed, memory_order_relaxed));
+		atomic_signal_fence(memory_order_release);
 
-		if((act->sa_flags & SA_SIGINFO) != 0) {
-			/* FIXME */
-			fprintf(stderr,
-				"%s: sig=%d specifies SA_SIGINFO, which we don't handle\n",
-				__func__, sig);
+		jmp_buf *volatile old_jmp;
+		if(setjmp(sigjmpbuf) == 0) {
+			/* set signal_jmp recursively. */
+			old_jmp = atomic_exchange_explicit(&signal_jmp, &sigjmpbuf,
+				memory_order_relaxed);
+			atomic_signal_fence(memory_order_release);
+			if(act->sa_flags & SA_SIGINFO) {
+				/* FIXME */
+				fprintf(stderr,
+					"%s: sig=%d specifies SA_SIGINFO, which we don't handle\n",
+					__func__, sig);
+			} else {
+				(*act->sa_handler)(sig);
+			}
 		} else {
-			(*act->sa_handler)(sig);
+			/* signal handler exited by longjmp(), which ended up in uctx.
+			 * proceed to the next signal before reactivating it.
+			 */
+			atomic_signal_fence(memory_order_acquire);
 		}
+
+		jmp_buf *my_jmp = &sigjmpbuf;
+		bool ok = atomic_compare_exchange_strong_explicit(
+			&signal_jmp, &my_jmp, old_jmp,
+			memory_order_relaxed, memory_order_relaxed);
+		assert(ok);
 
 		/* TODO: do something about SA_RESTART */
 		/* FIXME: restore SIG_DFL disposition if SA_RESETHAND set */
 
-		/* grab defers that occurred */
-		uint64_t newdefers;
-		old = atomic_load(&defer_set);
-		do {
-			newdefers = old & masked;
-		} while(newdefers > 0 &&
-			!atomic_compare_exchange_weak(&defer_set, &old, old & ~masked));
-		/* (note that the extra invocations of defers & newdefers are lost.) */
-		defers |= newdefers;
-
-		/* unmask the previous mask */
+		/* clear block_mask bits previously set per act->sa_mask */
 		old = atomic_load(&block_set);
 		do {
 			assert((old & masked) == masked);
-		} while(!atomic_compare_exchange_weak(
-			&block_set, &old, old & ~masked));
+		} while(!atomic_compare_exchange_strong_explicit(
+			&block_set, &old, old & ~masked,
+			memory_order_relaxed, memory_order_relaxed));
+	} while(sig = next_signal(), sig != 0);
 
-		/* process deferred signals in lowest-first order. */
-		if(defers > 0) sig = ffsll(defers);
-	} while(defers > 0);
+	if(oldctx == NULL) {
+		oldctx = uctx;
+		atomic_compare_exchange_strong_explicit(&signal_uctx, &oldctx, NULL,
+			memory_order_relaxed, memory_order_relaxed);
+	}
+}
+
+
+noreturn void longjmp(jmp_buf env, int val)
+{
+	if(val == 0) val = 1;
+	if(signal_jmp != NULL) {
+		assert(signal_uctx != NULL);
+		mcontext_t *m = &signal_uctx->mcontext;
+		m->eax = val;
+		m->ebx = env->regs[0];
+		m->esi = env->regs[1];
+		m->edi = env->regs[2];
+		m->ebp = env->regs[3];
+		m->eip = env->regs[4];
+		m->esp = env->regs[5] + 4;
+		__longjmp_actual(*signal_jmp, 1);
+	} else {
+		__longjmp_actual(env, val);
+	}
 }
 
 

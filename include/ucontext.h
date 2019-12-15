@@ -18,7 +18,7 @@ typedef struct {
 	 */
 	uint32_t mrs[64], brs[33];
 	uint32_t tw0, tw1, vsas, ir, xferto, ec, cpe;	/* UTCB vregs */
-	uint32_t edi, esi, ebp, dummy_esp, ebx, edx, ecx, eax; /* pushal result */
+	uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax; /* pushal order */
 	uint32_t _errno, eflags, eip;
 } __attribute__((__packed__)) mcontext_t;
 

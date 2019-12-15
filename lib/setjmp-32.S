@@ -18,10 +18,10 @@ setjmp:
 	ret
 
 
-	.global longjmp
-	.type longjmp, @function
+	.global __longjmp_actual
+	.type __longjmp_actual, @function
 	.align 16,0
-longjmp:
+__longjmp_actual:
 	movl 4(%esp), %ecx	# context
 	movl 16(%ecx), %edx	# return address
 	movl 8(%esp), %eax	# setjmp return value

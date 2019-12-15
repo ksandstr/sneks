@@ -6,6 +6,9 @@
 #ifndef _SNEKS_USER_CRT_PRIVATE_H
 #define _SNEKS_USER_CRT_PRIVATE_H
 
+#include <stdnoreturn.h>
+#include <setjmp.h>
+#include <ucontext.h>
 #include <l4/types.h>
 #include <l4/kip.h>
 
@@ -41,7 +44,8 @@ extern void __file_init(struct sneks_fdlist *fdlist);
 
 /* from sigaction.c */
 extern void __sig_bottom(void);
-extern void __attribute__((regparm(3))) __sig_invoke(int sig);
+extern void __attribute__((regparm(3))) __sig_invoke(
+	int sig, ucontext_t *uctx);
 /* used from syscall wrappers that may wait on a receive phase for an extended
  * period and have an useful rollback path (waitid(2) under ~WNOHANG), or
  * require receive-phase signal interrupts as part of normal operation
@@ -57,6 +61,14 @@ extern void __forbid_recv_interrupt(void);
 
 /* from uid.c */
 extern void __init_crt_cached_creds(void);
+
+
+/* from setjmp-32.S */
+extern noreturn void __longjmp_actual(jmp_buf, int);
+
+
+/* from siginvoke-32.S */
+extern void __attribute__((regparm(3))) __invoke_sig_sync(int);
 
 
 #endif

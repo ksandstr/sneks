@@ -2,7 +2,9 @@
 /* odds and ends without a great enough theme to warrant a module. */
 
 #include <stdlib.h>
+#include <stdnoreturn.h>
 #include <string.h>
+#include <setjmp.h>
 #include <threads.h>
 #include <errno.h>
 #include <assert.h>
@@ -80,4 +82,11 @@ int spawn_NP(const char *filename, char *const argv[], char *const envp[])
 	}
 
 	return pid;
+}
+
+
+noreturn void longjmp(jmp_buf env, int val)
+{
+	extern noreturn void __longjmp_actual(jmp_buf, int);
+	__longjmp_actual(env, val);
 }

@@ -129,7 +129,7 @@ int sigsuspend(const sigset_t *mask)
 	__forbid_recv_interrupt();
 	if(n == 0) {
 		/* got one signal immediately. */
-		__sig_invoke(sig);
+		__invoke_sig_sync(sig);
 		errno = EINTR;
 		return -1;
 	} else if(n == 6 || n == 7) {
