@@ -62,6 +62,7 @@ void __permit_recv_interrupt(void)
 {
 	assert(!recv_break_ok);
 	recv_break_ok = true;
+	atomic_signal_fence(memory_order_acq_rel);
 }
 
 
@@ -69,6 +70,7 @@ void __forbid_recv_interrupt(void)
 {
 	assert(recv_break_ok);
 	recv_break_ok = false;
+	atomic_signal_fence(memory_order_acq_rel);
 }
 
 

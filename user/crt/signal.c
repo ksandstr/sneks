@@ -1,11 +1,11 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 #include <signal.h>
 #include <unistd.h>
 #include <assert.h>
 #include <errno.h>
-#include <ccan/likely/likely.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -16,6 +16,7 @@
 
 int pause(void)
 {
+	atomic_signal_fence(memory_order_acq_rel);
 	bool warned = false;
 	L4_MsgTag_t tag;
 	do {
@@ -37,8 +38,11 @@ int pause(void)
 int kill(int pid, int signum)
 {
 	int n = __proc_kill(__the_sysinfo->api.proc, pid, signum);
-	if(likely(n == 0)) {
-		if(signum != 0 && pid == getpid()) __sig_bottom();
+	if(n == 0) {
+		if(signum != 0 && pid == getpid()) {
+			atomic_signal_fence(memory_order_acq_rel);
+			__sig_bottom();
+		}
 		return 0;
 	} else if(n < 0) {
 		errno = -n;
@@ -102,7 +106,10 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *oldset)
 		return -1;
 	}
 
-	if(how == SIG_UNBLOCK || how == SIG_SETMASK) __sig_bottom();
+	if(how == SIG_UNBLOCK || how == SIG_SETMASK) {
+		atomic_signal_fence(memory_order_acq_rel);
+		__sig_bottom();
+	}
 
 	return 0;
 }
