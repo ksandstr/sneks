@@ -1,10 +1,13 @@
 
-/* tests on POSIX signaling: sigaction, kill, and so forth.
+/* tests on POSIX signaling:
+ *   - portable interface: sigaction, kill, sigsuspend, sigprocmask, etc.
+ *   - handler semantics: preservation of state (errno, L4.X2 vregs, etc.),
+ *     longjmp and ucontext interactions, etc.
+ *   - etc.
+ *   - BUT NOT tests on preservation of signal handling state (procmask,
+ *     handlers, etc.) across fork().
  *
- * NOTE: most of these tests should be also compiled for the host system and
- * executed to determine that they can return all green on a mature,
- * well-supported platform. that'll require a L4.X2 adaptation layer for e.g.
- * thread ID checks and L4_Sleep(), but that's simple enough.
+ * TODO: there may be a few of the latter in here. move them out.
  */
 
 #include <stdbool.h>
@@ -193,7 +196,6 @@ START_TEST(sigaction_recur)
 END_TEST
 
 DECLARE_TEST("process:signal", sigaction_recur);
-
 
 
 static void defer_sigint_handler(int signum)

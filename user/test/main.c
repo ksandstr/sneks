@@ -56,8 +56,6 @@ static const struct opt_table opts[] = {
 
 int main(int argc, char *argv[], char *envp[])
 {
-	printf("hello, world!\n");
-
 	/* FIXME: remove the #ifdef once sneks gets setvbuf(3) */
 #ifndef __sneks__
 	setvbuf(stdout, NULL, _IONBF, 0);

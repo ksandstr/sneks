@@ -15,9 +15,9 @@
 #include <sneks/test.h>
 
 
-#ifdef __sneks__
 START_LOOP_TEST(fork_basic, iter, 0, 1)
 {
+#ifdef __l4x2__
 	const bool active_exit = (iter & 1) != 0;
 	diag("active_exit=%s", btos(active_exit));
 	plan_tests(3);
@@ -46,11 +46,14 @@ START_LOOP_TEST(fork_basic, iter, 0, 1)
 	if(!active_exit) L4_Sleep(L4_TimePeriod(10 * 1000));
 	int st, pid = wait(&st);
 	ok(pid > 0 && pid == child, "child was waited on");
+#else
+	plan(SKIP_ALL, "requires L4.X2 Ipc",
+		iter /* this shuts up the compiler */);
+#endif
 }
 END_TEST
 
 DECLARE_TEST("process:fork", fork_basic);
-#endif
 
 
 /* tests that it's possible to fork a bunch of times concurrently, without
@@ -172,7 +175,7 @@ static void forking_handler(int signum)
 		}
 		int n = fork();
 		if(n == 0) {
-			/* that them thur though */
+			/* wasn't long for this world. oh well */
 			exit(0);
 		} else {
 			last_fork_child = n;
@@ -187,7 +190,10 @@ static void forking_handler(int signum)
 }
 
 
-/* what happens to naughty children who fork in a signal handler? */
+/* see comment above. doing any of this in production code may lead to
+ * surprisingly unorthodox control flow and (more importantly) is very
+ * naughty, so don't do it lest the local tailor have your thumbs off.
+ */
 START_TEST(from_signal_handler)
 {
 	plan_tests(6);
@@ -224,7 +230,7 @@ START_TEST(from_signal_handler)
 	ok(dead > 0, "waitpid(2)");
 	ok1(dead != sigint_child);
 	ok1(dead == last_fork_child);
-	ok1(WEXITSTATUS(st) == 0);
+	ok1(WIFEXITED(st) && WEXITSTATUS(st) == 0);
 	ok(fork_first_st_ok, "first rc correct");
 	ok(fork_later_st_ok, "later rc correct");
 }
