@@ -56,6 +56,10 @@ struct sigaction
 #define SIG_UNBLOCK 1			/* remove from block set & trigger pending */
 #define SIG_SETMASK 2			/* set mask & trigger pending if unblocked */
 
+/* realtime signals. */
+#define SIGRTMIN __SIGRTMIN
+#define SIGRTMAX __SIGRTMAX
+
 
 extern int sigaction(int signum,
 	const struct sigaction *act, struct sigaction *oldact);
