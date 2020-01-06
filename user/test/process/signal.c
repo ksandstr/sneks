@@ -39,75 +39,63 @@ static volatile sig_atomic_t chld_got = 0, int_got = 0,
 
 
 #ifdef __l4x2__
-static L4_ThreadId_t chld_handler_tid = { .raw = 0 },
-	int_handler_tid = { .raw = 0 };
+static volatile L4_ThreadId_t chld_handler_tid = { .raw = 0 },
+	int_handler_tid = { .raw = 0 },
+	sig_handler_tid;
 #endif
 
 
-static void basic_sigchld_handler(int signum)
-{
+static void sig_basic_handler_fn(int signum) {
+	diag("%s: signum=%d", __func__, signum);
 #ifdef __l4x2__
-	chld_handler_tid = L4_MyGlobalId();
+	sig_handler_tid = L4_MyGlobalId();
 #endif
-	for(;;) {
-		int st, dead = waitpid(-1, &st, WNOHANG);
-		if(dead <= 0) break;
-		chld_got++;
-	}
+	sig_got++;
 }
 
 
+/* test basic sigaction(2) handling using both kinds of signal, sent from a
+ * child process.
+ *
+ * variables:
+ *   - [realtime] use a reliable/realtime signal
+ */
 START_LOOP_TEST(sigaction_basic, iter, 0, 1)
 {
-	const bool sleep_in_recv = !!(iter & 1);
-	diag("sleep_in_recv=%s", btos(sleep_in_recv));
+	const bool realtime = !!(iter & 1);
+	diag("realtime=%s", btos(realtime));
 	plan_tests(4);
+	const int signum = realtime ? SIGRTMIN+17 : SIGUSR1;
+	assert(signum <= SIGRTMAX);
+	diag("signum=%d (rt=[%d..%d])", signum, SIGRTMIN, SIGRTMAX);
 
-	chld_got = 0;
-	struct sigaction act = { .sa_handler = &basic_sigchld_handler };
-	int n = sigaction(SIGCHLD, &act, NULL);
+#ifdef __l4x2__
+	sig_handler_tid = L4_nilthread;
+#endif
+	sig_got = 0;
+
+	struct sigaction act = { .sa_handler = &sig_basic_handler_fn };
+	int n = sigaction(signum, &act, NULL);
 	if(!ok(n == 0, "sigaction")) diag("errno=%d", errno);
-	int child = fork();
-	if(child == 0) {
-		/* ensure that the parent gets to a sleep.
-		 *
-		 * TODO: the no-sleep case is contained in the uninterruptible receive
-		 * case, but should be provoked explicitly as well.
-		 */
+	int parent = getpid(), child = fork_subtest_start("helper child") {
+		plan(1);
+		/* ensure that the parent gets to a sleep. */
 		usleep(2 * 1000);
-		exit(0);
-	}
-	if(!ok(child > 0, "fork")) diag("errno=%d", errno);
+		n = kill(parent, signum);
+		ok1(n == 0);
+	} fork_subtest_end;
 
 	const int timeout_us = 5000;
 	int iters = 5;
-	while(child > 0 && chld_got < 1 && --iters) {
-#ifndef __l4x2__
+	while(child > 0 && sig_got < 1 && --iters) {
 		if(usleep(timeout_us) < 0) {
 			diag("usleep(3) failed, errno=%d (not an error)", errno);
 		}
-#else
-		L4_Time_t iter_timeout = L4_TimePeriod(timeout_us);
-		L4_MsgTag_t tag;
-		L4_ThreadId_t dummy;
-		if(sleep_in_recv) {
-			tag = L4_Ipc(L4_nilthread, L4_Myself(),
-				L4_Timeouts(L4_ZeroTime, iter_timeout), &dummy);
-		} else {
-			tag = L4_Ipc(L4_Myself(), L4_nilthread,
-				L4_Timeouts(iter_timeout, L4_ZeroTime), &dummy);
-		}
-		if(L4_IpcFailed(tag) && (L4_ErrorCode() & ~1ul) != 2) {
-			diag("sleep failed, ec=%lu (not an error)", L4_ErrorCode());
-		}
-#endif
 	}
-	if(!ok(iters > 0, "signal was processed") && child > 0) {
-		int st, dead = wait(&st);
-		diag("waited for dead=%d (child=%d)", dead, child);
-	}
+	ok(iters > 0, "signal was processed");
+	fork_subtest_ok1(child);
 #ifdef __l4x2__
-	ok(L4_SameThreads(L4_Myself(), chld_handler_tid),
+	ok(L4_SameThreads(L4_Myself(), sig_handler_tid),
 		"current thread was used");
 #else
 	skip(1, "no emulation of L4_SameThreads() yet");
@@ -116,7 +104,6 @@ START_LOOP_TEST(sigaction_basic, iter, 0, 1)
 END_TEST
 
 DECLARE_TEST("process:signal", sigaction_basic);
-
 
 
 static void recur_sigchld_handler(int signum)
