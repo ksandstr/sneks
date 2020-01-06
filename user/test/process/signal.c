@@ -32,8 +32,11 @@
 #include <sneks/test.h>
 
 
+/* assorted globals, semantics per handler */
 static volatile sig_atomic_t chld_got = 0, int_got = 0,
-	handler_calls = 0, int_max_depth = 0;
+	handler_calls = 0, int_max_depth = 0,
+	n_sigs_handled = 0, sig_got = 0;
+
 
 #ifdef __l4x2__
 static L4_ThreadId_t chld_handler_tid = { .raw = 0 },
@@ -737,9 +740,6 @@ END_TEST
 DECLARE_TEST("process:signal", errno_preservation);
 
 
-static volatile int n_sigs_handled = 0;
-
-
 #ifdef __l4x2__
 static void l4x2_vregs_smashing_fn(int signum)
 {
@@ -925,3 +925,70 @@ START_LOOP_TEST(longjmp_interference, iter, 0, 1)
 END_TEST
 
 DECLARE_TEST("process:signal", longjmp_interference);
+
+
+static void squashing_handler_fn(int signum) {
+	sig_got = signum;
+	n_sigs_handled++;
+}
+
+/* test the squashing behaviour of reliable and realtime signals.
+ *
+ * variables:
+ *   - [from_child] raise, or kill from child
+ *   - [dupe] different/same signal
+ *   - [realtime] reliable/realtime
+ */
+START_LOOP_TEST(squashing, iter, 0, 7)
+{
+	const bool from_child = !!(iter & 1), dupe = !!(iter & 2),
+		realtime = !!(iter & 4);
+	diag("from_child=%s, dupe=%s, realtime=%s",
+		btos(from_child), btos(dupe), btos(realtime));
+	plan_tests(2);
+#ifdef __sneks__
+	if(dupe && realtime) todo_start("pending signal queuing in UAPI");
+#endif
+
+	int sig1 = realtime ? SIGRTMIN+0 : SIGUSR1,
+		sig2 = dupe ? sig1 : (realtime ? SIGRTMIN+1 : SIGUSR2);
+	diag("sig1=%d, sig2=%d", sig1, sig2);
+
+	sigset_t pair, oldset;
+	sigemptyset(&pair);
+	sigaddset(&pair, sig1);
+	sigaddset(&pair, sig2);
+	int n = sigprocmask(SIG_BLOCK, &pair, &oldset);
+	if(n != 0) BAIL_OUT("sigprocmask failed, errno=%d", errno);
+
+	struct sigaction act = { .sa_handler = &squashing_handler_fn };
+	n = sigaction(sig1, &act, NULL);
+	if(n == 0 && sig1 != sig2) n = sigaction(sig2, &act, NULL);
+	if(n != 0) BAIL_OUT("sigaction failed, errno=%d", errno);
+
+	if(from_child) {
+		int parent = getpid();
+		int child = fork();
+		if(child == 0) {
+			kill(parent, sig1);
+			kill(parent, sig2);
+			exit(0);
+		}
+		int st, dead = waitpid(child, &st, 0);
+		if(dead != child || !WIFEXITED(st)) BAIL_OUT("child fuckup");
+	} else {
+		raise(sig1);
+		raise(sig2);
+	}
+
+	/* thar she blows!! */
+	n = sigprocmask(SIG_SETMASK, &oldset, NULL);
+	if(n != 0) BAIL_OUT("sigprocmask failed, errno=%d", errno);
+
+	atomic_signal_fence(memory_order_acq_rel);
+	iff_ok1(n_sigs_handled == 2, !dupe || realtime);
+	ok1(sig_got == sig1 || sig_got == sig2);
+}
+END_TEST
+
+DECLARE_TEST("process:signal", squashing);
