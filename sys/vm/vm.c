@@ -1018,7 +1018,7 @@ static int vm_mmap(
 		offset = 0;
 	}
 	*mm = (struct lazy_mmap){
-		.flags = flags | (prot_to_l4_rights(prot) << 16),
+		.flags = prot_to_l4_rights(prot) << 16 | (flags & ~MAP_FIXED),
 		.fd_serv.raw = fd_serv, .ino = fd, .offset = offset >> PAGE_BITS,
 	};
 	int n = reserve_mmap(mm, sp, *addr_ptr,
@@ -1028,6 +1028,7 @@ static int vm_mmap(
 		goto end;
 	}
 
+	assert(~mm->flags & MAP_FIXED);
 	*addr_ptr = mm->addr;
 
 end:
@@ -1537,7 +1538,7 @@ static int vm_upload_page(
 		return -ENOMEM;
 	}
 	*mm = (struct lazy_mmap){
-		.flags = flags | (VP_RIGHTS(v) << 16),
+		.flags = VP_RIGHTS(v) << 16 | (flags & ~MAP_FIXED),
 		.fd_serv = L4_MyGlobalId(),
 		.ino = atomic_fetch_add(&next_anon_ino, 1),
 	};
@@ -1548,6 +1549,7 @@ static int vm_upload_page(
 		return n;
 	}
 	assert(mm->addr == addr && mm->length == PAGE_SIZE);
+	assert(~mm->flags & MAP_FIXED);
 
 	size_t hash = int_hash(addr);
 	struct vp *old = htable_get(&sp->pages, hash, &cmp_vp_to_vaddr, &addr);
