@@ -1623,18 +1623,21 @@ static L4_Fpage_t pf_cow(struct vp *virt)
 	/* is @virt the sole owner of the page? */
 	size_t hash = int_hash(virt->status);
 	if(primary != virt) {
-		/* unshare the secondary. */
+		/* our share was secondary; remove it. */
 		bool ok = htable_del(&share_table, hash, virt);
 		if(!ok) {
 			printf("%s: expected share, wasn't found???\n", __func__);
 			abort();
 		}
 	}
-	if((primary == virt && !has_shares(hash, virt->status, 1))
-		|| (primary == NULL && !has_shares(hash, virt->status, 2)))
+	if(VP_IS_ANON(virt)
+		&& ((primary == virt && !has_shares(hash, virt->status, 1))
+			|| (primary == NULL && !has_shares(hash, virt->status, 2))))
 	{
 		/* it is. take ownership. */
+		assert(primary == NULL || atomic_load(&phys->owner) == virt);
 		if(primary == NULL) {
+			/* take primary share. */
 			atomic_store_explicit(&phys->owner, virt, memory_order_relaxed);
 		}
 		virt->vaddr &= ~VPF_COW;
@@ -1642,6 +1645,7 @@ static L4_Fpage_t pf_cow(struct vp *virt)
 	} else {
 		/* no. make a copy. */
 		if(primary == virt) {
+			/* drop primary share. */
 			atomic_store_explicit(&phys->owner, NULL, memory_order_relaxed);
 		}
 		struct pl *newpl = get_free_pl();
@@ -1649,8 +1653,8 @@ static L4_Fpage_t pf_cow(struct vp *virt)
 			(void *)((uintptr_t)virt->status << PAGE_BITS),
 			PAGE_SIZE);
 		virt->status = newpl->page_num;
-		virt->vaddr &= ~VPF_COW;
-		virt->vaddr |= L4_Writable;
+		virt->vaddr &= ~(VPF_COW | VPF_SHARED);
+		virt->vaddr |= L4_Writable | VPF_ANON;
 		atomic_store_explicit(&pl2pp(newpl)->owner, virt,
 			memory_order_release);
 		push_page(&page_active_list, newpl);
