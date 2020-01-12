@@ -346,6 +346,13 @@ noreturn void longjmp(jmp_buf env, int val)
 }
 
 
+/* used by pc_invariants() */
+static int cmp_vp_by_status(const void *a, const void *b) {
+	return (long)(*(const struct vp **)a)->status
+		- (long)(*(const struct vp **)b)->status;
+}
+
+
 static bool vp_invariants(INVCTX_ARG,
 	struct vp *virt, struct pp *phys, struct pl *link)
 {
@@ -507,6 +514,70 @@ inv_fail:
 }
 
 
+static bool pc_invariants(INVCTX_ARG,
+	struct vp *const *all_vps, size_t n_all_vps)
+{
+	struct vp **vps = malloc(sizeof *vps * n_all_vps);
+	memcpy(vps, all_vps, sizeof *vps * n_all_vps);
+	qsort(vps, n_all_vps, sizeof *vps, &cmp_vp_by_status);
+	inv_ok1(n_all_vps < 2 || vps[0]->status <= vps[1]->status);
+
+	for(int i=0; i < n_pc_buckets; i++) {
+		struct nbsl *list = &pc_buckets[i];
+		struct nbsl_iter it;
+		for(struct nbsl_node *cur = nbsl_first(list, &it);
+			cur != NULL;
+			cur = nbsl_next(list, &it))
+		{
+			struct pl *link = container_of(cur, struct pl, nn);
+			if(atomic_load(&link->status) == 0) continue;	/* skip garbage */
+			size_t hash = int_hash(link->page_num);
+			inv_push("link=%p: ->page_num=%#x [pl]->owner=%p",
+				link, link->page_num, pl2pp(link)->owner);
+
+			/* geez. wish there were a macro to make the pointer stuff pop
+			 * warnings when misused (such as by too few dereferences along
+			 * the way).
+			 */
+			struct vp key = { .status = link->page_num }, *keyptr = &key,
+				**vpp = bsearch(&keyptr, vps, n_all_vps, sizeof *vps,
+					&cmp_vp_by_status);
+			inv_imply1(vpp == NULL, pl2pp(link)->owner == NULL);
+			inv_imply1(vpp == NULL, !has_shares(hash, link->page_num, 1));
+			inv_imply1(vpp != NULL,
+				pl2pp(link)->owner == *vpp
+					|| has_shares(hash, link->page_num, 1));
+			if(vpp != NULL) {
+				/* wind it back. */
+				struct vp *virt = *vpp;
+				while(vpp > vps && vpp[-1]->status == virt->status) {
+					virt = *--vpp;
+				}
+
+				/* then iterate them all. */
+				int nth = 0;
+				do {
+					inv_log("virt[%d]=%p, ->vaddr=%#x, ->status=%#x",
+						nth++, virt, virt->vaddr, virt->status);
+					inv_ok1(!VP_IS_ANON(virt));
+					inv_ok1(VP_IS_SHARED(virt));
+				} while(vpp < vps + n_all_vps
+					&& (virt = *++vpp, vpp[-1]->status == virt->status));
+			}
+
+			inv_pop();
+		}
+	}
+
+	free(vps);
+	return true;
+
+inv_fail:
+	free(vps);
+	return false;
+}
+
+
 static bool invariants(void)
 {
 	INV_CTX;
@@ -588,6 +659,8 @@ static bool invariants(void)
 	}
 
 	inv_ok1(share_table_invariants(INV_CHILD, all_vps.item, all_vps.size));
+	inv_ok1(pc_buckets == NULL
+		|| pc_invariants(INV_CHILD, all_vps.item, all_vps.size));
 
 	e_end(eck);
 	free(phys_seen);
