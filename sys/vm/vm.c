@@ -1049,6 +1049,8 @@ end:
 
 static int vm_brk(L4_Word_t addr)
 {
+	assert(invariants());
+
 	int sender_pid = pidof_NP(muidl_get_sender());
 	if(unlikely(sender_pid >= SNEKS_MAX_PID)) return -EINVAL;
 
@@ -1062,9 +1064,7 @@ static int vm_brk(L4_Word_t addr)
 	uintptr_t newhi = (addr + PAGE_SIZE - 1) & ~PAGE_MASK;
 	if(newhi < sp->brk_hi) {
 		int eck = e_begin();
-		assert(invariants());
-		munmap_space(sp, newhi, newhi - sp->brk_hi);
-		assert(invariants());
+		munmap_space(sp, newhi, sp->brk_hi - newhi);
 		e_end(eck);
 	} else if(newhi > sp->brk_hi
 		&& first_lazy_mmap(sp, sp->brk_hi, newhi - sp->brk_hi) != NULL)
@@ -1073,6 +1073,7 @@ static int vm_brk(L4_Word_t addr)
 		return -ENOMEM;
 	}
 
+	assert(invariants());
 	sp->brk_hi = newhi;
 	return 0;
 }
