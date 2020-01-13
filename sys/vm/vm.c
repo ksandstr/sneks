@@ -93,9 +93,12 @@ typedef darray(struct pl *) plbuf;
 #define PL_FSID(pl) ((pl)->fsid_ino >> 48)
 #define PL_INO(pl) ((pl)->fsid_ino & ~0xffff000000000000ull)
 #define PL_IS_PRIVATE(pl) ((pl)->fsid_ino == 0)
+#define PL_IS_ANON(pl) (PL_FSID((pl)) == anon_fsid)
 
 /* definition of the brk bloom filter in <struct vm_space>. */
 #define BRK_BLOOM_WORDS (64 / sizeof(L4_Word_t))	/* one cacheline. */
+
+#define IS_ANON_MMAP(mm) (((mm)->flags & MAP_ANONYMOUS) && ((mm)->flags & MAP_SHARED))
 
 
 struct vp;
@@ -227,15 +230,18 @@ struct as_free {
 
 
 static size_t hash_vp_by_phys(const void *ptr, void *priv);
+static size_t hash_lazy_mmap_by_ino(const void *ptr, void *priv);
 static void remove_vp(struct vp *vp, plbuf *plbuf);
 static void remove_active_pls(struct pl **pls, int n_pls);
 static struct lazy_mmap *find_lazy_mmap(struct vm_space *sp, uintptr_t addr);
+static void free_page(struct pl *link0, plbuf *plbuf);
 
 static size_t pp_first, pp_total;
 static struct rangealloc *pp_ra, *vm_space_ra;
 static L4_Word_t user_addr_max;
 
 static _Atomic unsigned long next_anon_ino = 1;
+static unsigned short anon_fsid;	/* pidof_NP(L4_MyGlobalId()) */
 
 /* all of these contain <struct pl> alone. */
 static struct nbsl page_free_list = NBSL_LIST_INIT(page_free_list),
@@ -248,6 +254,12 @@ static struct nbsl page_free_list = NBSL_LIST_INIT(page_free_list),
  */
 static struct htable share_table = HTABLE_INITIALIZER(
 	share_table, &hash_vp_by_phys, NULL);
+/* similar but for ino of shared anonymous memory, i.e. PL_IS_ANON() of links
+ * found in the page cache. mandatory for IS_ANON_MMAP(), forbidden to every
+ * other lazy_mmap.
+ */
+static struct htable anon_mmap_table = HTABLE_INITIALIZER(
+	anon_mmap_table, &hash_lazy_mmap_by_ino, NULL);
 
 /* pagecache. */
 static uint32_t pc_salt[4];	/* init-once salt for hash_cached_page() */
@@ -283,6 +295,12 @@ static size_t hash_vp_by_phys(const void *ptr, void *priv) {
 }
 
 
+static size_t hash_lazy_mmap_by_ino(const void *ptr, void *priv) {
+	const struct lazy_mmap *mm = ptr;
+	return int_hash(mm->ino & 0xffffffff) ^ int_hash(mm->ino >> 32);
+}
+
+
 /* FIXME: this should assert that the pp's link field points to @link. a
  * conditional version can return NULL if it doesn't (i.e. to spot when the
  * physical page's ownership was contested, and the caller lost.)
@@ -305,6 +323,7 @@ static struct pp *get_pp(uint32_t page_num) {
  */
 static bool has_shares(size_t hash, uint32_t page_num, int count)
 {
+	assert(count > 0);
 	struct htable_iter it;
 	for(struct vp *cur = htable_firstval(&share_table, &it, hash);
 		cur != NULL;
@@ -314,6 +333,25 @@ static bool has_shares(size_t hash, uint32_t page_num, int count)
 	}
 	return false;
 }
+
+
+#ifdef DEBUG_ME_HARDER
+/* similar, but for anon_mmap_table, and computes hash by itself. */
+static bool has_anon_mmaps(uint64_t ino, int count)
+{
+	assert(count > 0);
+	struct lazy_mmap key = { .ino = ino };
+	size_t hash = hash_lazy_mmap_by_ino(&key, NULL);
+	struct htable_iter it;
+	for(struct lazy_mmap *cur = htable_firstval(&anon_mmap_table, &it, hash);
+		cur != NULL;
+		cur = htable_nextval(&anon_mmap_table, &it, hash))
+	{
+		if(cur->ino == ino && --count <= 0) return true;
+	}
+	return false;
+}
+#endif
 
 
 static int cmp_ptrs(const void *a, const void *b) {
@@ -535,10 +573,11 @@ static bool pc_invariants(INVCTX_ARG,
 			inv_push("link=%p: ->page_num=%#x [pl]->owner=%p",
 				link, link->page_num, pl2pp(link)->owner);
 
-			/* geez. wish there were a macro to make the pointer stuff pop
-			 * warnings when misused (such as by too few dereferences along
-			 * the way).
+			/* anon+shared pages should be removed eagerly as lazy_mmaps get
+			 * removed or reshaped.
 			 */
+			inv_imply1(PL_IS_ANON(link), has_anon_mmaps(PL_INO(link), 1));
+
 			struct vp key = { .status = link->page_num }, *keyptr = &key,
 				**vpp = bsearch(&keyptr, vps, n_all_vps, sizeof *vps,
 					&cmp_vp_by_status);
@@ -768,7 +807,8 @@ static struct pl *find_cached_page(
 		cur = nbsl_next(bucket, &it))
 	{
 		struct pl *cand = container_of(cur, struct pl, nn);
-		if(PL_INO(cand) == mm->ino
+		if(atomic_load_explicit(&cand->status, memory_order_acquire) > 0
+			&& PL_INO(cand) == mm->ino
 			&& cand->offset == mm->offset + bump
 			&& PL_FSID(cand) == pidof_NP(mm->fd_serv))
 		{
@@ -949,56 +989,64 @@ static L4_Word_t get_as_free(struct vm_space *sp, size_t length)
 }
 
 
+/* remove @mm's contents from the page cache that lie between [first, last).
+ * to remove it entirely, pass first=0 ∧ last=0. @mm will not be removed from
+ * anon_mmap_table.
+ *
+ * NOTE: this should go away along with all its callsites when page
+ * replacement comes in. at that point anon+shared pages in the page cache
+ * will be cleaned up lazily based on anon_mmap_table, which is so cool as
+ * to permit an interim bruteforce solution for passing invariant checks.
+ */
+static void cut_anon_mmap(
+	struct lazy_mmap *mm, size_t hash, uintptr_t first, uintptr_t last)
+{
+	assert(IS_ANON_MMAP(mm));
+	assert(hash == hash_lazy_mmap_by_ino(mm, NULL));
+
+	if(last == first) last = mm->addr + mm->length - 1;
+	else last = min(mm->addr + mm->length - 1, last);
+	first = max(mm->addr, first);
+
+	/* brute force. 's cool */
+	plbuf pls = darray_new();
+	for(int page=0; page < (last - first + 1) >> PAGE_BITS; page++) {
+		struct nbsl_node *top;
+		struct pl *link = find_cached_page(&top, mm, mm->offset + page);
+		if(link == NULL) continue;
+
+		/* is this one covered by the remaining anon mmaps on this ino? */
+		bool cover = false;
+		struct htable_iter it;
+		for(struct lazy_mmap *oth = htable_firstval(&anon_mmap_table, &it, hash);
+			oth != NULL;
+			oth = htable_nextval(&anon_mmap_table, &it, hash))
+		{
+			if(oth->ino != mm->ino || oth == mm) continue;
+			if(OVERLAP_EXCL(first + page * PAGE_SIZE, PAGE_SIZE,
+				oth->addr, oth->length))
+			{
+				cover = true;
+				break;
+			}
+		}
+
+		if(!cover) {
+			assert(!has_shares(int_hash(link->page_num), link->page_num, 1));
+			assert(pl2pp(link)->owner == NULL);
+			free_page(link, &pls);
+		}
+	}
+	flush_plbuf(&pls);
+}
+
+
 /* split and remove lazy mmaps and vpages covered by @addr:@size. */
 static void munmap_space(struct vm_space *sp, L4_Word_t addr, size_t size)
 {
 	assert(e_inside());
 	assert(((addr | size) & PAGE_MASK) == 0);
 	assert(VALID_ADDR_SIZE(addr, size));
-
-	/* carve up lazy mmaps */
-	for(struct lazy_mmap *cur = first_lazy_mmap(sp, addr, size), *next;
-		cur != NULL;
-		cur = next)
-	{
-		next = container_of_or_null(__rb_next(&cur->rb),
-			struct lazy_mmap, rb);
-		assert(cur->addr >= addr || cur->addr + cur->length > addr);
-		if(cur->addr >= addr + size) break;
-		if(cur->addr >= addr && cur->addr + cur->length <= addr + size) {
-			/* lazy_mmap entirely within range. remove it outright. */
-			__rb_erase(&cur->rb, &sp->maps);
-			e_free(cur);
-			continue;
-		} else if(cur->addr < addr && cur->addr + cur->length > addr + size) {
-			/* the other way around; shorten and add fragment for tail. */
-			struct lazy_mmap *tail = malloc(sizeof *tail);
-			if(tail == NULL) {
-				/* FIXME: handle this by popping ENOMEM and doing the virtual
-				 * page removal step for the range that was actually covered
-				 * in this loop.
-				 */
-				printf("vm:%s: out of memory\n", __func__);
-				abort();
-			}
-			*tail = *cur;	/* TODO: duplicate fds? */
-			tail->addr = addr + size;
-			tail->length = cur->length - (tail->addr - cur->addr);
-			cur->length = addr - cur->addr;
-			struct lazy_mmap *old = insert_lazy_mmap(sp, tail);
-			assert(old == NULL);
-		} else if(cur->addr < addr) {
-			/* overlap on the left. shorten existing map. */
-			assert(addr < cur->addr + cur->length);
-			cur->length = addr - cur->addr;
-		} else {
-			/* overlap on the right. move existing map up. */
-			assert(cur->addr + cur->length > addr + size);
-			assert(cur->addr < addr + size);
-			cur->length -= addr + size - cur->addr;
-			cur->addr = addr + size;
-		}
-	}
 
 	/* remove virtual pages. */
 	plbuf pls = darray_new();
@@ -1015,7 +1063,73 @@ static void munmap_space(struct vm_space *sp, L4_Word_t addr, size_t size)
 	}
 	flush_plbuf(&pls);
 
+	/* carve up lazy mmaps */
+	for(struct lazy_mmap *cur = first_lazy_mmap(sp, addr, size), *next;
+		cur != NULL;
+		cur = next)
+	{
+		next = container_of_or_null(__rb_next(&cur->rb),
+			struct lazy_mmap, rb);
+		assert(cur->addr >= addr || cur->addr + cur->length > addr);
+		if(cur->addr >= addr + size) break;
+		size_t hash = hash_lazy_mmap_by_ino(cur, NULL);
+		if(cur->addr >= addr && cur->addr + cur->length <= addr + size) {
+			/* lazy_mmap entirely within range. remove it outright. */
+			if(IS_ANON_MMAP(cur)) {
+				cut_anon_mmap(cur, hash, 0, 0);
+				if(!htable_del(&anon_mmap_table, hash, cur)) {
+					printf("vm:%s: lazy mmap mm=%p not in htable?\n",
+						__func__, cur);
+				}
+			}
+			__rb_erase(&cur->rb, &sp->maps);
+			e_free(cur);
+			continue;
+		} else if(cur->addr < addr && cur->addr + cur->length > addr + size) {
+			/* the other way around; shorten and add fragment for tail. */
+			struct lazy_mmap *tail = malloc(sizeof *tail);
+			if(tail == NULL) goto Enomem;
+			*tail = *cur;	/* TODO: duplicate fds? */
+			tail->addr = addr + size;
+			tail->length = cur->length - (tail->addr - cur->addr);
+			cur->length = addr - cur->addr;
+			struct lazy_mmap *old = insert_lazy_mmap(sp, tail);
+			assert(old == NULL);
+			if(IS_ANON_MMAP(cur)) {
+				cut_anon_mmap(cur, hash, cur->addr + cur->length, tail->addr - 1);
+				bool ok = htable_add(&anon_mmap_table, hash, tail);
+				if(!ok) goto Enomem;
+			}
+		} else if(cur->addr < addr) {
+			/* overlap on the left. shorten existing map. */
+			assert(addr < cur->addr + cur->length);
+			cur->length = addr - cur->addr;
+			if(IS_ANON_MMAP(cur)) {
+				cut_anon_mmap(cur, hash, cur->addr,
+					cur->addr + cur->length - 1);
+			}
+		} else {
+			/* overlap on the right. move existing map up. */
+			assert(cur->addr + cur->length > addr + size);
+			assert(cur->addr < addr + size);
+			if(IS_ANON_MMAP(cur)) {
+				cut_anon_mmap(cur, hash, cur->addr, addr - 1);
+			}
+			cur->length -= addr + size - cur->addr;
+			cur->addr = addr + size;
+		}
+	}
+
 	assert(first_lazy_mmap(sp, addr, size) == NULL);
+	return;
+
+Enomem:
+	/* FIXME: handle this by propagating ENOMEM to the caller. the goal is
+	 * idempotence but not atomicity; the caller is expected to resolve this
+	 * by suspending execution until more heap space becomes available.
+	 */
+	printf("vm:%s: out of memory\n", __func__);
+	abort();
 }
 
 
@@ -1045,6 +1159,12 @@ static int reserve_mmap(
 	{
 		/* bad hint. bad! */
 		if(fixed) return -EEXIST; else address = 0;
+	}
+
+	if(IS_ANON_MMAP(mm)) {
+		bool ok = htable_add(&anon_mmap_table,
+			hash_lazy_mmap_by_ino(mm, NULL), mm);
+		if(!ok) return -ENOMEM;
 	}
 
 	struct lazy_mmap *old;
@@ -1101,10 +1221,13 @@ static int vm_mmap(
 
 	struct lazy_mmap *mm = malloc(sizeof *mm);
 	if(mm == NULL) return -ENOMEM;
-	if(flags & MAP_ANONYMOUS) {
+	if((flags & MAP_ANONYMOUS) && (flags & MAP_SHARED)) {
+		/* (error if fd_serv != nil?) */
 		fd_serv = L4_MyGlobalId().raw;
 		fd = atomic_fetch_add(&next_anon_ino, 1);
 		offset = 0;
+	} else if((~flags & MAP_ANONYMOUS) && fd_serv != L4_nilthread.raw) {
+		/* TODO: validate fd_serv somehow */
 	}
 	*mm = (struct lazy_mmap){
 		.flags = prot_to_l4_rights(prot) << 16 | (flags & ~MAP_FIXED),
@@ -1174,23 +1297,13 @@ static int vm_erase(unsigned short target_pid)
 
 	int eck = e_begin();
 
-	/* toss lazy mmaps */
-	RB_FOREACH_SAFE(cur, &sp->maps) {
-		struct lazy_mmap *mm = rb_entry(cur, struct lazy_mmap, rb);
-		if(!L4_IsNilThread(mm->fd_serv)
-			&& mm->fd_serv.raw != L4_MyGlobalId().raw)
-		{
-			/* TODO: unref the inode */
-		}
-		__rb_erase(&mm->rb, &sp->maps);
-		free(mm);
-	}
-	/* and free address space tracking bits */
+	/* toss free address space tracking bits */
 	RB_FOREACH_SAFE(cur, &sp->as_free) {
 		__rb_erase(cur, &sp->as_free);
 		free(rb_entry(cur, struct as_free, rb));
 	}
-	/* finally all the virtual memory. */
+
+	/* and the process virtual memory */
 	L4_Fpage_t fps[64];
 	int n_fps = 0;
 	plbuf pls = darray_new();
@@ -1228,6 +1341,26 @@ static int vm_erase(unsigned short target_pid)
 	if(n_fps > 0) L4_UnmapFpages(n_fps, fps);
 	htable_clear(&sp->pages);
 	flush_plbuf(&pls);
+
+	/* and finally the lazy mmaps */
+	RB_FOREACH_SAFE(cur, &sp->maps) {
+		struct lazy_mmap *mm = rb_entry(cur, struct lazy_mmap, rb);
+		if(mm->fd_serv.raw == L4_MyGlobalId().raw) {
+			/* anonymous shared memory. */
+			assert(IS_ANON_MMAP(mm));
+			size_t hash = hash_lazy_mmap_by_ino(mm, NULL);
+			cut_anon_mmap(mm, hash, 0, 0);
+			if(!htable_del(&anon_mmap_table, hash, mm)) {
+				printf("vm:%s: anon shared mm=%p not in htable?\n",
+					__func__, mm);
+			}
+		} else if(!L4_IsNilThread(mm->fd_serv)) {
+			/* TODO: unref the inode on the filesystem, as appropriate */
+			assert(!IS_ANON_MMAP(mm));
+		}
+		__rb_erase(&mm->rb, &sp->maps);
+		e_free(mm);
+	}
 
 	sp->kip_area = sp->utcb_area = sp->sysinfo_area = L4_Nilpage;
 	ra_free(vm_space_ra, sp);
@@ -1379,16 +1512,23 @@ static int fork_maps(struct vm_space *src, struct vm_space *dest)
 	RB_FOREACH(cur, &src->maps) {
 		struct lazy_mmap *orig = container_of(cur, struct lazy_mmap, rb),
 			*copy = malloc(sizeof *copy);
-		if(copy == NULL) {
-			/* FIXME: cleanup! */
-			return -ENOMEM;
-		}
+		if(copy == NULL) goto Enomem;
 		*copy = *orig;
+		if(IS_ANON_MMAP(copy)) {
+			assert(copy->fd_serv.raw == L4_MyGlobalId().raw);
+			bool ok = htable_add(&anon_mmap_table,
+				hash_lazy_mmap_by_ino(copy, NULL), copy);
+			if(!ok) goto Enomem;
+		}
 		/* FIXME: duplicate file descriptors etc. */
 		void *dupe = insert_lazy_mmap(dest, copy);
 		assert(dupe == NULL);
 	}
 	return 0;
+
+Enomem:
+	/* FIXME: cleanup! */
+	return -ENOMEM;
 }
 
 
@@ -1428,8 +1568,8 @@ static int fork_pages(struct vm_space *src, struct vm_space *dest)
 		if(!VP_IS_ANON(cur)
 			&& (VP_IS_SHARED(cur) || (~VP_RIGHTS(cur) & L4_Writable)))
 		{
-			/* ignore private+file+ro or shared+file pages since they can be
-			 * found in the page cache.
+			/* ignore private+file+ro or shared pages since they'll be mapped
+			 * lazily using the page cache.
 			 */
 #ifdef TRACE_FORK
 			printf("vm: full pagecache page ignored at vaddr=%#x\n",
@@ -1437,7 +1577,11 @@ static int fork_pages(struct vm_space *src, struct vm_space *dest)
 #endif
 			continue;
 		} else if(VP_IS_SHARED(cur)) {
-			/* shared pages get another reference and the show goes on. */
+			/* shared pages get another reference and the show goes on.
+			 *
+			 * FIXME: this appears to be a dead case, since all pages shared
+			 * but not under copy-on-write are visible through the page cache.
+			 */
 #ifdef TRACE_FORK
 			printf("vm: forking shared page at vaddr=%#x\n",
 				cur->vaddr & ~PAGE_MASK);
@@ -1620,7 +1764,9 @@ static int vm_upload_page(
 	v->age = 1;
 	assert(VP_RIGHTS(v) == prot_to_l4_rights(prot));
 
-	/* insert lazy_mmap to maintain invariants. */
+	/* insert lazy_mmap to maintain "mmap or brk" invariants.
+	 * (i'm not sure if that's useful.)
+	 */
 	struct lazy_mmap *mm = malloc(sizeof *mm);
 	if(mm == NULL) {
 		free(v);
@@ -1628,8 +1774,6 @@ static int vm_upload_page(
 	}
 	*mm = (struct lazy_mmap){
 		.flags = VP_RIGHTS(v) << 16 | (flags & ~MAP_FIXED),
-		.fd_serv = L4_MyGlobalId(),
-		.ino = atomic_fetch_add(&next_anon_ino, 1),
 	};
 	int n = reserve_mmap(mm, sp, addr, PAGE_SIZE, true);
 	if(n < 0) {
@@ -2227,6 +2371,7 @@ static COLD void find_max_addr(void)
 int main(int argc, char *argv[])
 {
 	printf("vm sez hello!\n");
+	anon_fsid = pidof_NP(L4_MyGlobalId());
 	L4_ThreadId_t init_tid;
 	int n_phys = 0;
 	L4_Fpage_t *phys = init_protocol(&n_phys, &init_tid);
