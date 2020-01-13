@@ -45,6 +45,7 @@
 #include <sneks/process.h>
 #include <sneks/hash.h>
 #include <sneks/sysinfo.h>
+#include <sneks/sanity.h>
 
 #include "nbsl.h"
 #include "epoch.h"
@@ -761,6 +762,7 @@ static struct lazy_mmap *find_lazy_mmap(struct vm_space *sp, uintptr_t addr)
 static struct lazy_mmap *first_lazy_mmap(
 	struct vm_space *sp, uintptr_t addr, size_t sz)
 {
+	assert(VALID_ADDR_SIZE(addr, sz));
 	struct rb_node *n = sp->maps.rb_node;
 	struct lazy_mmap *cand = NULL;
 	while(n != NULL) {
@@ -875,6 +877,7 @@ static void munmap_space(struct vm_space *sp, L4_Word_t addr, size_t size)
 {
 	assert(e_inside());
 	assert(((addr | size) & PAGE_MASK) == 0);
+	assert(VALID_ADDR_SIZE(addr, size));
 	assert(invariants());
 
 	/* carve up lazy mmaps */
@@ -1283,6 +1286,7 @@ static int vm_munmap(L4_Word_t addr, uint32_t size)
 {
 	int sender_pid = pidof_NP(muidl_get_sender());
 	if(sender_pid == 0 || sender_pid > SNEKS_MAX_PID) return -EINVAL;
+	if(!VALID_ADDR_SIZE(addr, size)) return -EINVAL;
 	struct vm_space *sp = ra_id2ptr(vm_space_ra, sender_pid);
 	if(sp->kip_area.raw == 0) return -EINVAL;
 
