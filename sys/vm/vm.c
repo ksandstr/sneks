@@ -321,7 +321,11 @@ static int cmp_ptrs(const void *a, const void *b) {
 }
 
 
-/* structural invariant checks. */
+/* structural invariant checks.
+ *
+ * TODO: move these into invariant.c or some such, out of sight, and export
+ * all the static globals properly.
+ */
 
 #ifndef DEBUG_ME_HARDER
 #define invariants() true
@@ -508,9 +512,9 @@ static bool invariants(void)
 	INV_CTX;
 	int eck = e_begin();
 
-	/* TODO: wait until all other threads have completed or hit this point
-	 * also. but there ain't no whales so we tell tall tales and sing our
-	 * whaling tune.
+	/* TODO: wait until all other threads in sys/vm have gone idle or hit this
+	 * point also. but there ain't no whales so we tell tall tales and sing
+	 * our whaling tune.
 	 */
 
 	/* every physical page should be found exactly once in the free list,
@@ -878,7 +882,6 @@ static void munmap_space(struct vm_space *sp, L4_Word_t addr, size_t size)
 	assert(e_inside());
 	assert(((addr | size) & PAGE_MASK) == 0);
 	assert(VALID_ADDR_SIZE(addr, size));
-	assert(invariants());
 
 	/* carve up lazy mmaps */
 	for(struct lazy_mmap *cur = first_lazy_mmap(sp, addr, size), *next;
@@ -939,7 +942,6 @@ static void munmap_space(struct vm_space *sp, L4_Word_t addr, size_t size)
 	flush_plbuf(&pls);
 
 	assert(first_lazy_mmap(sp, addr, size) == NULL);
-	assert(invariants());
 }
 
 
@@ -1374,7 +1376,6 @@ static int fork_pages(struct vm_space *src, struct vm_space *dest)
 			};
 			bool ok = htable_add(&dest->pages, hash, copy);
 			if(!ok || !add_share(cur->status, copy)) goto Enomem;
-			assert(invariants());
 		} else {
 			/* anonymous and private pages get copy-on-write. this applies
 			 * even if said pages were read-only right now and made writable
@@ -1422,7 +1423,6 @@ static int fork_pages(struct vm_space *src, struct vm_space *dest)
 					unmap_pos = 0;
 				}
 			}
-			assert(invariants());
 		}
 
 		n_pages++; copy = NULL;
@@ -1770,7 +1770,7 @@ static int pf_mmap_shared(
 	const struct lazy_mmap *mm, L4_Word_t faddr, int fault_rwx)
 {
 	assert(e_inside());
-	assert(invariants());
+
 	struct nbsl_node *top;
 	int bump = ((faddr & ~PAGE_MASK) - mm->addr) >> PAGE_BITS;
 	struct pl *cached = find_cached_page(&top, mm, bump);
@@ -1837,7 +1837,6 @@ static int pf_mmap_shared(
 			mm->offset + bump);
 	}
 
-	assert(invariants());
 	vp->vaddr |= VPF_SHARED;
 	L4_Set_Rights(map_page_p, VP_RIGHTS(vp));
 	return 0;
@@ -1961,7 +1960,6 @@ static int brk_fastpath(
 
 static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 {
-	assert(invariants());
 	int n, pid = pidof_NP(muidl_get_sender());
 	if(unlikely(pid > SNEKS_MAX_PID)) {
 		printf("%s: fault from pid=%d (tid=%lu:%lu)?\n", __func__, pid,
@@ -1985,6 +1983,7 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 		(fault_rwx & L4_eXecutable) != 0 ? 'x' : '-');
 
 	int eck = e_begin();
+	assert(invariants());
 
 	L4_Fpage_t map_page;
 	L4_Word_t faddr_page = faddr & ~PAGE_MASK;
