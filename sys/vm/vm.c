@@ -938,6 +938,7 @@ static void munmap_space(struct vm_space *sp, L4_Word_t addr, size_t size)
 		if(v == NULL) continue;
 		htable_del(&sp->pages, hash, v);
 		remove_vp(v, &pls);
+		assert(htable_get(&sp->pages, hash, &cmp_vp_to_vaddr, &pos) == NULL);
 	}
 	flush_plbuf(&pls);
 
@@ -1635,7 +1636,6 @@ static L4_Fpage_t pf_cow(struct vp *virt)
 	struct pp *phys = get_pp(virt->status);
 	struct vp *primary = atomic_load_explicit(&phys->owner,
 		memory_order_relaxed);
-	/* is @virt the sole owner of the page? */
 	size_t hash = int_hash(virt->status);
 	if(primary != virt) {
 		/* our share was secondary; remove it. */
@@ -1645,6 +1645,7 @@ static L4_Fpage_t pf_cow(struct vp *virt)
 			abort();
 		}
 	}
+	/* is @virt the sole owner of the page, which isn't in the page cache? */
 	if(VP_IS_ANON(virt)
 		&& ((primary == virt && !has_shares(hash, virt->status, 1))
 			|| (primary == NULL && !has_shares(hash, virt->status, 2))))
@@ -1657,6 +1658,8 @@ static L4_Fpage_t pf_cow(struct vp *virt)
 		}
 		virt->vaddr &= ~VPF_COW;
 		virt->vaddr |= L4_Writable;
+		/* (shared anonymous memory is never COW.) */
+		assert(~virt->vaddr & VPF_SHARED);
 	} else {
 		/* no. make a copy. */
 		if(primary == virt) {
@@ -1838,7 +1841,6 @@ static int pf_mmap_shared(
 	}
 
 	vp->vaddr |= VPF_SHARED;
-	L4_Set_Rights(map_page_p, VP_RIGHTS(vp));
 	return 0;
 }
 
@@ -2061,6 +2063,7 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 				vp->vaddr &= ~L4_Writable;
 			}
 		}
+		assert(VP_IS_SHARED(vp));
 	} else if(mm->flags & MAP_ANONYMOUS) {
 		TRACE_FAULT("  mmap/anon\n");
 		struct pl *link;
