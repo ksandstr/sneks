@@ -4,9 +4,8 @@
 #include <signal.h>
 
 
-static bool sig_valid(int signum) {
-	if(signum <= 0 || signum > 63) return false;
-	return true;
+static inline bool sig_valid(int signum) {
+	return signum >= 1 && signum <= 64;
 }
 
 
@@ -19,7 +18,7 @@ int sigemptyset(sigset_t *set)
 
 int sigfillset(sigset_t *set)
 {
-	*set = ~0ull;	/* should we exclude invalid signals? */
+	*set = ~0ull;	/* all aboard, choo choo */
 	return 0;
 }
 
