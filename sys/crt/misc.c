@@ -9,18 +9,13 @@
 #include <errno.h>
 #include <assert.h>
 #include <sneks/process.h>
+#include <sneks/systask.h>
 
 #include "proc-defs.h"
+#include "private.h"
 
 
 #define RECSEP 0x1e	/* ASCII record separator control character. whee! */
-
-
-/* FIXME: __uapi_tid isn't stable before first call to thrd_create(). so all
- * of this may well fail badly. to correct, use a lazy-init macro for
- * __uapi_tid instead of the silly thrd_create() in spawn_NP().
- */
-extern L4_ThreadId_t __uapi_tid;
 
 
 static char *p_to_argbuf(char *const strp[])
@@ -44,35 +39,12 @@ static char *p_to_argbuf(char *const strp[])
 }
 
 
-static int nothing_fn(void *ptr) {
-	/* not strictly what it says on the tin, man */
-	return 0;
-}
-
-
-/* TODO: do away with this extremely silly thing once __uapi_tid gets
- * civilized (see comment earlier).
- */
-static L4_ThreadId_t get_uapi_tid(void)
-{
-	if(L4_IsNilThread(__uapi_tid)) {
-		thrd_t foo;
-		int n = thrd_create(&foo, &nothing_fn, NULL);
-		if(n == thrd_success) {
-			int res;
-			thrd_join(foo, &res);
-		}
-	}
-	return __uapi_tid;
-}
-
-
 int spawn_NP(const char *filename, char *const argv[], char *const envp[])
 {
 	char *args = p_to_argbuf(argv), *envs = p_to_argbuf(envp);
 	uint16_t pid = 0;
 	/* FIXME: pass stdfoo fds from somewhere... */
-	int n = __proc_spawn(get_uapi_tid(), &pid, filename, args, envs,
+	int n = __proc_spawn(__uapi_tid, &pid, filename, args, envs,
 		NULL, 0, NULL, 0, NULL, 0);
 	free(args);
 	free(envs);

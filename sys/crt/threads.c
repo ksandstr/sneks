@@ -17,14 +17,13 @@
 
 #include "proc-defs.h"
 #include "info-defs.h"
+#include "private.h"
 
 
 #define SYSCRT_THREAD_MAGIC 0xbea7deaf	/* not a drummer */
 
 
-L4_ThreadId_t __uapi_tid;
-
-static once_flag init_once = ONCE_FLAG_INIT;
+L4_ThreadId_t __uapi_tid = L4_anythread;
 
 
 static void thread_ctor(struct thrd *t, L4_ThreadId_t tid)
@@ -44,7 +43,7 @@ static struct thrd *thrd_in_stack(void *stkptr)
 }
 
 
-static void thrd_init(void)
+void __thrd_init(void)
 {
 	struct thrd *t = thrd_in_stack(&t);
 	thread_ctor(t, L4_Myself());
@@ -129,8 +128,6 @@ static void wrapper_fn(thrd_start_t fn, void *ptr) {
 
 int thrd_create(thrd_t *thread, thrd_start_t fn, void *param_ptr)
 {
-	call_once(&init_once, &thrd_init);
-
 	void *stkbase = aligned_alloc(STKSIZE, STKSIZE);
 	if(stkbase == NULL) return thrd_nomem;
 	struct thrd *t = thrd_in_stack(stkbase);

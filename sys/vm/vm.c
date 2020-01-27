@@ -46,6 +46,7 @@
 #include <sneks/hash.h>
 #include <sneks/sysinfo.h>
 #include <sneks/sanity.h>
+#include <sneks/systask.h>
 
 #include "nbsl.h"
 #include "epoch.h"
@@ -266,8 +267,6 @@ static uint32_t pc_salt[4];	/* init-once salt for hash_cached_page() */
 static struct nbsl *pc_buckets = NULL;
 static unsigned char n_pc_buckets_log2;
 #define n_pc_buckets (1u << n_pc_buckets_log2)
-
-L4_ThreadId_t __uapi_tid;
 
 
 /* vaddr & ~PAGE_MASK into sp->pages. */
@@ -2328,18 +2327,6 @@ segv:
 }
 
 
-static COLD void get_services(void)
-{
-	struct sneks_uapi_info u;
-	int n = __info_uapi_block(L4_Pager(), &u);
-	if(n != 0) {
-		printf("%s: can't get UAPI block, n=%d\n", __func__, n);
-		abort();
-	}
-	__uapi_tid.raw = u.service;
-}
-
-
 static COLD void find_max_addr(void)
 {
 	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
@@ -2381,7 +2368,6 @@ int main(int argc, char *argv[])
 	/* the rest of the owl */
 	find_max_addr();
 	vm_space_ra = RA_NEW(struct vm_space, SNEKS_MAX_PID + 1);
-	get_services();
 	assert(invariants());
 
 	L4_LoadMR(0, 0);

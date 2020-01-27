@@ -23,6 +23,7 @@
 #include "sysmem-defs.h"
 #include "info-defs.h"
 #include "kmsg-defs.h"
+#include "private.h"
 
 
 L4_ThreadId_t __rootfs_tid = { .raw = 0 };
@@ -255,6 +256,8 @@ int __crt1_entry(void)
 		/* blind dumb dead! */
 		return -n;
 	}
+
+	__thrd_init();
 
 	struct sneks_rootfs_info blk;
 	n = __info_rootfs_block(L4_Pager(), &blk);
