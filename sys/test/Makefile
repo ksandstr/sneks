@@ -31,8 +31,12 @@ distclean:
 	@rm -rf .deps $(OUTPUTS)
 
 
+harness.o: harness.c proc-defs.h
+
+
 systest: $(LDSCRIPT) systest.o harness.o $(TEST_OBJS) \
-		ccan-opt.a ccan-htable.o ccan-talloc.o ccan-autodata.o
+		ccan-opt.a ccan-htable.o ccan-talloc.o ccan-autodata.o \
+		proc-common.o proc-client.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T $(LDSCRIPT) \
 		$(filter %.o,$^) $(filter %.a,$^) $(LIBS) \

@@ -9,6 +9,11 @@
 
 module Sneks {
 
+/* FIXME: when Proc is compiled without BUILD_SELFTEST=1, it may be that the
+ * result is incompatible to Proc compiled with it, and the reverse. to fix,
+ * muidl's label assignment scheme would be made a function of names and types
+ * alone, and not the presence or absence of operations in the same interface.
+ */
 [StubPrefix(__proc), IfaceLabel(0xe801)]
 interface Proc
 {
@@ -164,6 +169,20 @@ interface Proc
 		in uid_t real_uid, in uid_t eff_uid, in uid_t saved_uid,
 		in gid_t real_gid, in gid_t eff_gid, in gid_t saved_gid)
 			raises(Posix::Errno);
+
+#ifdef BUILD_SELFTEST
+	/* for systest: list all systask threads so they can be probed for
+	 * selftesting. returns list of thread IDs in @tids for systasks whose
+	 * PID >= @min_pid, skipping @skip threads in the first matching systask.
+	 * return value is next value if @skip if end of @tids didn't fall on
+	 * process border.
+	 */
+	typedef sequence<L4X2::ThreadId, 63> tidlist;
+	[Label(0x1233)]		/* provisional, FIXME: see interface comment */
+	long get_systask_threads(
+		out tidlist tids,
+		in long min_pid, in long skip);
+#endif
 };
 
 

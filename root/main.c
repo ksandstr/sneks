@@ -1442,7 +1442,12 @@ static COLD void run_waitmods(struct htable *root_args, const char *stem)
 		do {
 			L4_Accept(L4_UntypedWordsAcceptor);
 			tag = L4_Receive(wm_tid);
-		} while(L4_IpcSucceeded(tag));
+			if(L4_IpcSucceeded(tag)) {
+				L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1, .X.label = 1 }.raw);
+				L4_LoadMR(1, EINVAL);
+				tag = L4_Reply(wm_tid);
+			}
+		} while(L4_IpcSucceeded(tag) || L4_ErrorCode() == 2);
 		if(L4_ErrorCode() != 5) {
 			printf("%swaitmod exit check failed, ec=%lu\n", stem, L4_ErrorCode());
 			abort();

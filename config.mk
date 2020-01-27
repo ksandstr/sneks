@@ -14,12 +14,15 @@ CFLAGS=-O2 -Wall -march=native -std=gnu11 \
 	-D_GNU_SOURCE \
 	-fno-pic -fuse-ld=gold -fno-builtin -nostdlib -ffreestanding \
 	-Wno-frame-address \
+	-DBUILD_SELFTEST=1 \
 	#-DDEBUG_ME_HARDER #-D_L4_DEBUG_ME_HARDER #-DCCAN_LIST_DEBUG
+	# (add -DNDEBUG for benchmarks without assert overhead)
 
 LDFLAGS=-L /usr/lib32 -L /usr/lib/i386-linux-gnu
 
 MUIDL:=$(abspath $(MUIDL_DIR)/muidl)
-MUIDLFLAGS=-I $(MUIDL_DIR)/share/idl -I $(MUNG_DIR)/idl -I $(CFGDIR)/idl
+MUIDLFLAGS=-I $(MUIDL_DIR)/share/idl -I $(MUNG_DIR)/idl -I $(CFGDIR)/idl \
+	$(filter -DNDEBUG,$(CFLAGS)) $(filter -DBUILD_%,$(CFLAGS))
 
 CLEAN_PATS=*-service.s *-client.s *-common.s *-defs.h ccan-*.a
 

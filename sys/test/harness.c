@@ -17,6 +17,7 @@
 #include <ccan/minmax/minmax.h>
 #include <ccan/darray/darray.h>
 #include <ccan/autodata/autodata.h>
+#include <ccan/array_size/array_size.h>
 
 #include <l4/types.h>
 #include <l4/thread.h>
@@ -24,13 +25,15 @@
 
 #include <sneks/test.h>
 
+#include "proc-defs.h"
+
 
 #define IN_TEST_MAGIC 0xB33B7007	/* quoth the butt canary */
 
 
 static tss_t in_test_key = ~0;
-
 static darray(struct systest *) all_systests = darray_new();
+static const struct systest *current_systest = NULL;
 
 
 /* TODO: move this into sys/test/util.c or some such. */
@@ -42,7 +45,7 @@ static int htable_dtor(struct htable *ht) {
 
 static int cmp_systest_ptr(const void *ap, const void *bp)
 {
-	/* fuck your yankee const correctness */
+	/* const correctness is a bourgeois concept */
 	const struct systest *a = *(struct systest **)ap,
 		*b = *(struct systest **)bp;
 
@@ -311,6 +314,185 @@ static struct systest *parse_systest(
 }
 
 
+#ifdef BUILD_SELFTEST
+
+struct selftest_info {
+	L4_ThreadId_t tid;
+};
+
+
+static void run_systask_selftest(int iter)
+{
+	struct selftest_info *inf = (void *)(current_systest + 1);
+	diag("[wrapper running `%s' on %lu:%lu]", current_systest->name,
+		L4_ThreadNo(inf->tid), L4_Version(inf->tid));
+	int name_words = (strlen(current_systest->name)
+		+ sizeof(L4_Word_t) - 1) / sizeof(L4_Word_t);
+	L4_LoadMR(0, (L4_MsgTag_t){
+		.X.u = 1 + name_words,
+		.X.label = 0xeffd }.raw);
+	L4_LoadMR(1, iter);
+	L4_LoadMRs(2, name_words, (const L4_Word_t *)current_systest->name);
+	L4_MsgTag_t tag = L4_Call(inf->tid);
+	if(L4_IpcFailed(tag) || L4_Label(tag) == 1) {
+		L4_Word_t code; L4_StoreMR(1, &code);
+		plan_skip_all("IPC failed, ec=%lu, code=%#lx",
+			L4_ErrorCode(), code);
+		return;
+	}
+
+	/* passthru I/O from test process. */
+	char iobuf[513];
+	L4_MsgBuffer_t msgbuf; L4_MsgBufferClear(&msgbuf);
+	L4_MsgBufferAppendSimpleRcvString(&msgbuf,
+		L4_StringItem(sizeof iobuf, iobuf));
+	bool running = true;
+	while(running) {
+		L4_AcceptStrings(L4_StringItemsAcceptor, &msgbuf);
+		tag = L4_Receive(inf->tid);
+		for(;;) {
+			if(L4_IpcFailed(tag)) {
+				diag("[wrapper IPC fail, ec=%lu]", L4_ErrorCode());
+				break;
+			} else if(L4_Label(tag) == 0xdead) {
+				L4_Word_t rc; L4_StoreMR(1, &rc);
+				diag("[wrapper exit, rc=%d]", (int)rc);
+				running = false;
+				break;
+			} else if(L4_Label(tag) != 0) {
+				diag("[wrapper got unknown label=%#lx]", L4_Label(tag));
+				break;
+			}
+
+			L4_Word_t fd; L4_StoreMR(1, &fd);
+			/* decodes the first substring of the first string item, which
+			 * must be simple.
+			 */
+			L4_StringItem_t si; L4_StoreMRs(2, 2, si.raw);
+			int len = si.X.string_length;
+			assert(len <= sizeof iobuf);
+			iobuf[min_t(int, len, sizeof iobuf - 1)] = '\0';
+			size_t n = fwrite(iobuf, 1, min_t(int, len, sizeof iobuf - 1),
+				fd == 1 ? stdout : stderr);
+			L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+			L4_LoadMR(1, n);
+			L4_ThreadId_t dummy;	/* my assclap keeps alerting the bees! */
+			L4_AcceptStrings(L4_StringItemsAcceptor, &msgbuf);
+			tag = L4_Ipc(inf->tid, inf->tid,
+				L4_Timeouts(L4_ZeroTime, L4_Never), &dummy);
+		}
+	}
+	L4_Accept(L4_UntypedWordsAcceptor);
+}
+
+
+union stdesc {
+	L4_Word_t raw[6];
+	struct {
+		char name[20];
+		L4_Word_t meta;
+	} body;
+};
+
+
+static struct systest *parse_stdesc(
+	void *tal, const char *prefix, const char *group,
+	const union stdesc *d, L4_ThreadId_t tid)
+{
+	struct systest *st = talloc_size(tal,
+		sizeof *st + sizeof(struct selftest_info));
+	*st = (struct systest){
+		.prefix = talloc_strdup(st, prefix),
+		.group = talloc_strdup(st, group),
+		.name = talloc_strndup(st, d->body.name, 20),
+		.low = (d->body.meta >> 2) & 0xff,
+		.high = (d->body.meta >> 10) & 0xffff,
+		.pri = (d->body.meta >> 26) & 0xff,
+		.fn = &run_systask_selftest,
+	};
+	struct selftest_info *inf = (void *)(st + 1);
+	*inf = (struct selftest_info){ .tid = tid };
+	assert(st->low <= st->high);
+	return st;
+}
+
+
+static bool query_selftests(void *tal, L4_ThreadId_t tid)
+{
+	char prefix[21], group[21];
+	int offset = 0, n_descs;
+	do {
+		L4_Accept(L4_UntypedWordsAcceptor);
+		L4_MsgTag_t tag = { .X.u = 1, .X.label = 0xeffe };
+		L4_LoadMR(0, tag.raw);
+		L4_LoadMR(1, offset);
+		/* TODO: replace receive timeout with ZeroTime once mung stops
+		 * breaking it immediately
+		 */
+		tag = L4_Call_Timeouts(tid, L4_TimePeriod(8000), L4_TimePeriod(5000));
+		if(L4_IpcFailed(tag) || L4_UntypedWords(tag) == 1) {
+			/* (error code in MR1. ignore it.) */
+			break;
+		}
+
+		union stdesc desc[10];
+		n_descs = min_t(int, L4_UntypedWords(tag) / 6, ARRAY_SIZE(desc));
+		L4_StoreMRs(1, n_descs * 6, desc[0].raw);
+		for(int i=0; i < n_descs; i++) {
+			switch(desc[i].body.meta & 3) {
+				case 0:
+					darray_push(all_systests,
+						parse_stdesc(tal, prefix, group, &desc[i], tid));
+					break;
+				case 1:
+					memcpy(prefix, desc[i].body.name, 20); prefix[20] = '\0';
+					continue;
+				case 2:
+					memcpy(group, desc[i].body.name, 20); group[20] = '\0';
+					continue;
+				case 3:
+					/* unused */
+					break;
+			}
+		}
+		offset += n_descs;
+	} while(n_descs == 10);
+
+	return offset > 0;
+}
+#endif
+
+
+/* get selftest metadata from systasks where applicable. */
+static void get_systask_selftests(void *tal)
+{
+#ifdef BUILD_SELFTEST
+	int last_pid = 0, skip, prev_pid = 0;
+	for(;;) {
+		extern L4_ThreadId_t __uapi_tid;	/* from sys/crt (?) */
+		L4_Word_t tidbuf[63];
+		unsigned n_tids = ARRAY_SIZE(tidbuf);
+		int n = __proc_get_systask_threads(__uapi_tid, &skip,
+			tidbuf, &n_tids, last_pid, skip);
+		if(n != 0) {
+			printf("%s: n=%d\n", __func__, n);
+			abort();
+		}
+		if(n_tids == 0) break;
+		L4_ThreadId_t tid = L4_nilthread;
+		for(int i=0; i < n_tids; i++) {
+			tid.raw = tidbuf[i];
+			if(pidof_NP(tid) < prev_pid) continue;
+			if(L4_SameThreads(L4_Myself(), tid)) continue;	/* oof! */
+			if(query_selftests(tal, tid)) prev_pid = pidof_NP(tid);
+		}
+		last_pid = pidof_NP(tid) + (skip > 0 ? 0 : 1);
+		//printf("%s: skip'=%d, last_pid'=%d\n", __func__, skip, last_pid);
+	}
+#endif
+}
+
+
 static struct systest **get_systests(size_t *num_p, bool want_ids)
 {
 	static void *tal = NULL; /* persistent; used for syntax. */
@@ -326,6 +508,7 @@ static struct systest **get_systests(size_t *num_p, bool want_ids)
 			darray_push(all_systests, parse_systest(tal, specs[i]));
 		}
 		assert(all_systests.size == n_specs);
+		get_systask_selftests(tal);
 		qsort(all_systests.item, all_systests.size,
 			sizeof(struct systest *), &cmp_systest_ptr);
 	}
@@ -409,7 +592,10 @@ static void run(const struct systest *t, int iter, bool redo_fixtures)
 	 * catching, enforce maximum test walltime, and so forth.
 	 */
 	bool failed = false;
+	assert(current_systest == NULL);
+	current_systest = t;
 	(*t->fn)(iter);
+	current_systest = NULL;
 	int rc = exit_status();
 	/* TODO: stop per-test fixtures */
 	if(failed) {

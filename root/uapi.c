@@ -574,6 +574,35 @@ static int uapi_remove_thread(L4_Word_t raw_tid, L4_Word_t utcb_addr)
 }
 
 
+#ifdef BUILD_SELFTEST
+/* NOTE: the next_skip stuff is very untested. */
+static int uapi_get_systask_threads(
+	L4_Word_t *tidlist_out, unsigned *tidlist_len_p,
+	int min_pid, int skip)
+{
+	*tidlist_len_p = 0;
+	int next_skip = 0;
+	struct ra_iter it;
+	for(struct systask *t = ra_first(ra_systask, &it);
+		t != NULL && *tidlist_len_p < 63;
+		t = ra_next(ra_systask, &it))
+	{
+		if(min_pid > SNEKS_MIN_SYSID + ra_ptr2id(ra_systask, t)) continue;
+		tidlist *tids = &t->task.threads;
+		next_skip = tids->size;
+		for(int i=0; i < tids->size && *tidlist_len_p < 63; i++) {
+			next_skip--;
+			if(skip-- > 0) continue;
+			tidlist_out[(*tidlist_len_p)++] = tids->item[i].raw;
+		}
+		skip = 0;
+	}
+
+	return next_skip;
+}
+#endif
+
+
 static int map_elf_image(
 	int target_pid, const char *filename,
 	L4_Word_t *lo_p, L4_Word_t *hi_p, L4_Word_t *start_addr_p)
@@ -1226,6 +1255,9 @@ int uapi_loop(void *param_ptr)
 		.sigsuspend = &root_uapi_sigsuspend,
 		.getresugid = &uapi_getresugid,
 		.setresugid = &uapi_setresugid,
+#ifdef BUILD_SELFTEST
+		.get_systask_threads = &uapi_get_systask_threads,
+#endif
 	};
 	for(;;) {
 		L4_Word_t st = _muidl_root_uapi_dispatch(&vtab);
