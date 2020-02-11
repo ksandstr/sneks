@@ -11,6 +11,7 @@ use Jobserver;
 
 my $VERBOSE = $ENV{VERBOSE} // 0;
 my $opt_add_host = $ENV{HOSTSUITE} // 0;
+$ENV{CC} //= 'cc';
 
 my $modname = shift @ARGV // die "needs module name!";
 my @cflags = @ARGV;

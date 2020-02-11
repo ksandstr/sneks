@@ -3,9 +3,10 @@ use Moo;
 use IO::Handle;
 use IO::Select;
 
-# NOTE: don't call system() while jobs are in flight. the SIGCHLD handler will
-# reap them and confuse the Perl runtime. also don't have jobs in flight on
-# multiple instances of Jobserver at once, for the same reason.
+# NOTE: don't call system() while jobs are in flight, i.e. until ->waitall has
+# returned. the SIGCHLD handler will reap them and confuse the Perl runtime.
+# also don't have jobs in flight on multiple instances of Jobserver at once,
+# for the same reason.
 
 # TODO: this doesn't return jobserver tokens on unexpected exit. that should
 # be set up for with SIGINT handlers and so forth, as described in the ``POSIX
@@ -122,8 +123,8 @@ sub spawn {
 			return $self->spawn(@_);
 		}
 		my $cs = $self->children;
-		if(!%$cs) {
-			# first child; replace chld handler
+		if(!%$cs && !$self->oldchld) {
+			# first child; replace chld handler. restored in ->waitall.
 			$self->oldchld($SIG{CHLD});
 			$SIG{CHLD} = sub { $self->chld(wait, $?); };
 		}
@@ -141,11 +142,11 @@ sub spawn {
 sub waitall {
 	my $self = shift;
 
+	$self->chld(wait, $?) while(%{$self->children});
 	if($self->oldchld) {
 		$SIG{CHLD} = $self->oldchld;
-		$self->oldchld(0);
+		$self->oldchld(undef);
 	}
-	$self->chld(wait, $?) while(%{$self->children});
 }
 
 
