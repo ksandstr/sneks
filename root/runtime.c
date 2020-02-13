@@ -33,7 +33,7 @@ void __assert_failure(
 }
 
 
-void noreturn panic(const char *msg)
+noreturn void panic(const char *msg)
 {
 	printf("!!! PANIC: %s\n", msg);
 	for(;;) { L4_Sleep(L4_Never); }
@@ -47,6 +47,13 @@ void malloc_panic(void) {
 
 void abort(void) {
 	panic("aborted");
+}
+
+
+noreturn void exit(int rc)
+{
+	printf("root: called exit(%d)??\n", rc);
+	abort();
 }
 
 

@@ -34,6 +34,7 @@
 #include <sneks/hash.h>
 #include <sneks/bitops.h>
 #include <sneks/process.h>
+#include <sneks/systask.h>
 #include <sneks/sysinfo.h>
 #include <sneks/rootserv.h>
 #include <sneks/console.h>
@@ -1456,6 +1457,34 @@ static COLD void run_waitmods(struct htable *root_args, const char *stem)
 }
 
 
+static int rootserv_loop(void *parameter)
+{
+	printf("*** root entering service mode in tid=%lu:%lu\n",
+		L4_ThreadNo(L4_Myself()), L4_Version(L4_Myself()));
+	static const struct root_serv_vtable vtab = {
+		.panic = &rs_panic,
+		.long_panic = &rs_long_panic,
+	};
+	for(;;) {
+		L4_Word_t status = _muidl_root_serv_dispatch(&vtab);
+		if(status != 0 && !MUIDL_IS_L4_ERROR(status)
+			&& selftest_handling(status))
+		{
+			/* das it mane */
+		} else if(status == MUIDL_UNKNOWN_LABEL) {
+			/* do nothing. */
+			L4_MsgTag_t tag = muidl_get_tag();
+			printf("rootserv: unknown message label=%#lx, u=%lu, t=%lu\n",
+				L4_Label(tag), L4_UntypedWords(tag), L4_TypedWords(tag));
+		} else if(status != 0 && !MUIDL_IS_L4_ERROR(status)) {
+			printf("rootserv: dispatch status %#lx (last tag %#lx)\n",
+				status, muidl_get_tag().raw);
+		}
+	}
+	assert(false);
+}
+
+
 int main(void)
 {
 	int n = sneks_setup_console_stdio();
@@ -1475,7 +1504,6 @@ int main(void)
 	parse_initrd_args(&root_args);
 
 	uapi_init();
-	rt_thrd_tests();
 	L4_ThreadId_t con_tid = console_init(&root_args);
 
 	/* configure sysinfo. */
@@ -1486,7 +1514,6 @@ int main(void)
 		abort();
 	}
 	put_sysinfo("kmsg:tid", 1, thrd_tidof_NP(kmsg).raw);
-	put_sysinfo("rootserv:tid", 1, L4_Myself().raw);
 	printf("sysmem was initialized w/ %d pages and %d own pages\n",
 		sysmem_pages, sysmem_self_pages);
 
@@ -1506,10 +1533,15 @@ int main(void)
 
 	put_sysinfo("uapi:tid", 1, thrd_tidof_NP(uapi).raw);
 	uapi_tid = thrd_tidof_NP(uapi);
-	/* TODO: move these into a root internal test setup, like mung has with
-	 * "ktest".
-	 */
-	rt_thrd_tests();
+
+	/* start the rootserv thread, for handling of panics and the like. */
+	thrd_t rootserv;
+	n = thrd_create(&rootserv, &rootserv_loop, NULL);
+	if(n != thrd_success) {
+		printf("can't start rootserv!\n");
+		abort();
+	}
+	put_sysinfo("rootserv:tid", 1, thrd_tidof_NP(rootserv).raw);
 
 	void *sip_mem = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
 	L4_Fpage_t sip_page = L4_FpageLog2((uintptr_t)sip_mem, PAGE_BITS);
@@ -1563,23 +1595,8 @@ int main(void)
 
 	run_waitmods(&root_args, "late");
 
-	printf("*** root entering service mode\n");
-	static const struct root_serv_vtable vtab = {
-		.panic = &rs_panic,
-		.long_panic = &rs_long_panic,
-	};
-	for(;;) {
-		L4_Word_t status = _muidl_root_serv_dispatch(&vtab);
-		if(status == MUIDL_UNKNOWN_LABEL) {
-			/* do nothing. */
-			L4_MsgTag_t tag = muidl_get_tag();
-			printf("rootserv: unknown message label=%#lx, u=%lu, t=%lu\n",
-				L4_Label(tag), L4_UntypedWords(tag), L4_TypedWords(tag));
-		} else if(status != 0 && !MUIDL_IS_L4_ERROR(status)) {
-			printf("rootserv: dispatch status %#lx (last tag %#lx)\n",
-				status, muidl_get_tag().raw);
-		}
+	for(;;) {	/* inhibit the silly english kaniggot */
+		L4_Sleep(L4_Never);
 	}
-
-	return 0;	/* but to whom? */
+	assert(false);
 }

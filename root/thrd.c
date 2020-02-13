@@ -12,6 +12,9 @@
 #include <l4/ipc.h>
 #include <l4/kip.h>
 
+#include <sneks/test.h>
+#include <sneks/systask.h>
+
 #include "defs.h"
 #include "epoch.h"
 #include "proc-defs.h"
@@ -251,33 +254,34 @@ COLD void rt_thrd_init(void)
 }
 
 
-/* selftests below this line. */
+#ifdef BUILD_SELFTEST
+#include <sneks/test.h>
+#include <sneks/systask.h>
 
-COLD int return_one_fn(void *param_ptr) {
+static int return_one_fn(void *param_ptr) {
 	return 1;
 }
 
 
-/* TODO: convert this to a bunch of tap tests, move into a formal test harness
- * for root-internal stuff. (like mung has "ktest".)
- */
-COLD void rt_thrd_tests(void)
+START_TEST(start_and_join)
 {
-	printf("rt_thrd self-test (uapi_tid=%lu:%lu)...\n",
-		L4_ThreadNo(uapi_tid), L4_Version(uapi_tid));
+	diag("uapi_tid=%lu:%lu", L4_ThreadNo(uapi_tid), L4_Version(uapi_tid));
+	plan(14 + 1);
 
 	/* basic create and join, seven times over. */
 	int total = 0;
 	for(int i=0; i < 7; i++) {
 		thrd_t t;
 		int n = thrd_create(&t, &return_one_fn, NULL);
-		assert(n == thrd_success);
+		ok(n == thrd_success, "created thread i=%d", i);
 		int res = -1;
 		n = thrd_join(t, &res);
-		assert(n == thrd_success);
+		ok(n == thrd_success, "joined thread i=%d", i);
 		total += res;
 	}
-	assert(total == 7);
-
-	printf("rt_thrd self-test OK!\n");
+	ok1(total == 7);
 }
+END_TEST
+
+SYSTASK_SELFTEST("root:thrd", start_and_join);
+#endif
