@@ -29,7 +29,6 @@
 #include <l4/kip.h>
 #include <l4/bootinfo.h>
 #include <l4/sigma0.h>
-#include <l4/kdebug.h>
 
 #include <sneks/mm.h>
 #include <sneks/hash.h>
@@ -1403,6 +1402,7 @@ static COLD L4_Fpage_t probe_root_utcb_area(void)
 
 static COLD void configure_uapi(L4_Fpage_t sm_kip, L4_Fpage_t sm_utcb)
 {
+	/* root */
 	int n = add_systask(SNEKS_MIN_SYSID,
 		L4_FpageLog2((L4_Word_t)the_kip, L4_KipAreaSizeLog2(the_kip)),
 		probe_root_utcb_area());
@@ -1411,6 +1411,7 @@ static COLD void configure_uapi(L4_Fpage_t sm_kip, L4_Fpage_t sm_utcb)
 		printf("add_systask() for root failed, n=%d\n", n);
 		abort();
 	}
+	/* sysmem */
 	n = add_systask(pidof_NP(sysmem_tid), sm_kip, sm_utcb);
 	assert(n < 0 || n == pidof_NP(sysmem_tid));
 	if(n < 0) {
@@ -1469,7 +1470,6 @@ int main(void)
 	parse_initrd_args(&root_args);
 
 	uapi_init();
-	configure_uapi(sm_kip, sm_utcb);
 	rt_thrd_tests();
 	L4_ThreadId_t con_tid = console_init(&root_args);
 
@@ -1486,6 +1486,7 @@ int main(void)
 		sysmem_pages, sysmem_self_pages);
 
 	/* launch the userspace API server. */
+	configure_uapi(sm_kip, sm_utcb);
 	thrd_t uapi;
 	n = thrd_create(&uapi, &uapi_loop, NULL);
 	if(n != thrd_success) {

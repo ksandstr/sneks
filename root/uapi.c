@@ -164,16 +164,20 @@ static struct task_common *get_task(int pid)
 }
 
 
+/* release with free(). */
+static bitmap *alloc_utcb_bitmap(L4_Fpage_t utcb_area) {
+	return bitmap_alloc1(1 << (L4_SizeLog2(utcb_area) - utcb_size_log2));
+}
+
+
 static bool task_common_ctor(
-	struct task_common *task,
-	L4_Fpage_t kip, L4_Fpage_t utcb)
+	struct task_common *task, L4_Fpage_t kip_area, L4_Fpage_t utcb_area)
 {
 	task->utcb_area = L4_Nilpage;
-	task->utcb_free = bitmap_alloc1(
-		1 << (L4_SizeLog2(utcb) - utcb_size_log2));
+	task->utcb_free = alloc_utcb_bitmap(utcb_area);
 	if(task->utcb_free == NULL) return false;
-	task->kip_area = kip;
-	task->utcb_area = utcb;
+	task->kip_area = kip_area;
+	task->utcb_area = utcb_area;
 	darray_init(task->threads);
 	return true;
 }
@@ -229,9 +233,19 @@ int add_systask(int pid, L4_Fpage_t kip, L4_Fpage_t utcb)
 		assert(!done);
 		done = true;
 
-		/* roottask initialization. */
-		darray_push(st->task.threads, L4_MyGlobalId());
-		bitmap_clear_bit(st->task.utcb_free, 0);
+		/* roottask initialization. this should execute in the thread that
+		 * enters main() and no other. (after it moves out of the forbidden
+		 * range, of course.)
+		 */
+		int tno = L4_ThreadNo(L4_MyGlobalId());
+		for(int i=0; i < next_early_utcb_slot; i++) {
+			L4_ThreadId_t tid = L4_GlobalId(tno + i,
+				L4_Version(L4_MyGlobalId()));
+			if(L4_IsNilThread(L4_LocalIdOf(tid))) continue;
+			assert(bitmap_test_bit(st->task.utcb_free, i));
+			bitmap_clear_bit(st->task.utcb_free, i);
+			darray_push(st->task.threads, tid);
+		}
 	} else if(pid == pidof_NP(L4_Pager())) {
 		static bool done = false;
 		assert(!done);
@@ -273,6 +287,9 @@ static bool tidlist_remove_from(tidlist *tids, L4_ThreadId_t tid)
 }
 
 
+/* TODO: drop @pid, replace with struct task_common ptr since all callers
+ * already have one.
+ */
 L4_ThreadId_t allocate_thread(int pid, void **utcb_loc_p)
 {
 	assert(utcb_loc_p != NULL);
@@ -506,9 +523,9 @@ static int uapi_create_thread(L4_Word_t *tid_ptr)
 	L4_Word_t res = L4_ThreadControl(tid, space, L4_Myself(), pager, utcb_loc);
 	if(res != 1) {
 		printf("%s: ThreadControl failed, ec=%lu\n", __func__, L4_ErrorCode());
-		printf("%s: ... tid=%lu:%lu, space=%lu:%lu\n", __func__,
+		printf("%s: ... tid=%lu:%lu, space=%lu:%lu, utcb_loc=%p\n", __func__,
 			L4_ThreadNo(tid), L4_Version(tid),
-			L4_ThreadNo(space), L4_Version(space));
+			L4_ThreadNo(space), L4_Version(space), utcb_loc);
 		abort();	/* FIXME: translate! */
 	}
 	*tid_ptr = tid.raw;
@@ -682,12 +699,6 @@ static struct process *alloc_process(int *pid_p)
 		}
 	}
 	return NULL;
-}
-
-
-/* release with free(). */
-static inline bitmap *alloc_utcb_bitmap(L4_Fpage_t utcb_area) {
-	return bitmap_alloc1(1 << (L4_SizeLog2(utcb_area) - utcb_size_log2));
 }
 
 
@@ -1184,9 +1195,23 @@ static int uapi_setresugid(
 }
 
 
+/* clear UTCB bit in root for this thread, because it won't have been covered
+ * in add_systask()
+ */
+static void reserve_utcb_for_uapi(void)
+{
+	struct systask *root = get_systask(pidof_NP(L4_Myself()));
+	int my_slot = ((L4_MyLocalId().raw & ~(L4_UtcbSize(the_kip) - 1))
+		- L4_Address(root->task.utcb_area)) >> L4_UtcbAlignmentLog2(the_kip);
+	assert(bitmap_test_bit(root->task.utcb_free, my_slot));
+	bitmap_clear_bit(root->task.utcb_free, my_slot);
+}
+
+
 int uapi_loop(void *param_ptr)
 {
 	uapi_tid = L4_Myself();
+	reserve_utcb_for_uapi();
 
 	static const struct root_uapi_vtable vtab = {
 		.create_thread = &uapi_create_thread,

@@ -34,6 +34,8 @@ struct rt_thread {
 
 static tss_t epoch_tss;
 
+int next_early_utcb_slot = 1;
+
 
 L4_ThreadId_t thrd_tidof_NP(thrd_t t) {
 	return (L4_ThreadId_t){ .raw = t };
@@ -115,7 +117,7 @@ int thrd_create(thrd_t *t, thrd_start_t fn, void *param_ptr)
 
 	if(L4_IsNilThread(uapi_tid)) {
 		static L4_Word_t utcb_base;
-		static int next_tid, next_utcb_slot = 1;
+		static int next_tid;
 		static bool first = true;
 		if(unlikely(first)) {
 			int u_align = 1 << L4_UtcbAlignmentLog2(the_kip);
@@ -125,12 +127,12 @@ int thrd_create(thrd_t *t, thrd_start_t fn, void *param_ptr)
 		}
 		tid = L4_GlobalId(next_tid, L4_Version(L4_Myself()));
 		L4_Word_t r = L4_ThreadControl(tid, L4_Myself(), L4_Myself(), L4_Pager(),
-			(void *)(utcb_base + next_utcb_slot * L4_UtcbSize(the_kip)));
+			(void *)(utcb_base + next_early_utcb_slot * L4_UtcbSize(the_kip)));
 		if(r == 0) {
 			printf("%s: threadctl failed, ec=%#lx\n", __func__, L4_ErrorCode());
 			return thrd_error;
 		}
-		next_utcb_slot++;
+		next_early_utcb_slot++;
 		next_tid++;
 	} else {
 		int n = __proc_create_thread(uapi_tid, &tid.raw);

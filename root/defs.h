@@ -84,6 +84,8 @@ extern void rt_thrd_tests(void);
 /* FIXME: rename this to match the one in sys/crt (& later, userspace) */
 extern L4_ThreadId_t thrd_tidof_NP(thrd_t t);
 
+extern int next_early_utcb_slot;	/* for add_systask() */
+
 
 /* from sig.c */
 /* may raise muidl::NoReply */
