@@ -32,7 +32,7 @@ vm: $(LDSCRIPT) vm.o boot.o $(IDL_OBJS) \
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T $(LDSCRIPT) \
 		$(filter %.o,$^) $(LIBS) \
-		-lsneks-systask -lsneks -ll4 -lm \
+		-lsneks-systask -lsneks -lsneks-systask -ll4 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 

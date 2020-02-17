@@ -376,14 +376,6 @@ static int cmp_ptrs(const void *a, const void *b) {
 #include <stdnoreturn.h>
 
 
-/* copypasta'd via sys/crt, which vm doesn't link */
-noreturn void longjmp(jmp_buf env, int val)
-{
-	extern noreturn void __longjmp_actual(jmp_buf, int);
-	__longjmp_actual(env, val);
-}
-
-
 /* used by pc_invariants() */
 static int cmp_vp_by_status(const void *a, const void *b) {
 	return (long)(*(const struct vp **)a)->status
