@@ -9,7 +9,7 @@ LDFLAGS:=$(LDFLAGS) -e_start -nostdlib -L $(MUNG_DIR)/user/lib/l4 \
 # the stack properly. FIXME: repair that, then remove -mstackrealign.
 CFLAGS:=$(CFLAGS) -D__KERNEL__ -D__sneks__=1 -D__l4x2__=1 -mstackrealign
 
-OUTPUTS=systest initrd_spawn_partner
+OUTPUTS=systest initrd_spawn_partner initrd_systask_partner
 
 # FIXME: this will cause the %.c->%.o recipe to print full paths. hack the
 # build scripts until they present a nicer "  CC sys/foo/t/c11sumthing.c"
@@ -57,9 +57,17 @@ initrd_spawn_partner: $(CFGDIR)/user/crt/static.ld spawn-partner.o
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
-test-initrd: initrd_spawn_partner
+initrd_systask_partner: $(LDSCRIPT) systask-partner.o
+	@echo "  LD $@"
+	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T $(LDSCRIPT) \
+		$(filter %.o,$^) $(filter %.a,$^) $(LIBS) \
+		-lsneks-systask -lsneks -lsneks-systask -ll4 -lm \
+		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
+
+
+test-initrd: initrd_spawn_partner initrd_systask_partner
 	@echo "hello, world" >$(INITRD)/hello.txt
-	@install initrd_spawn_partner $(INITRD)/
+	@install $^ $(INITRD)/
 
 
 include $(wildcard .deps/*.d)

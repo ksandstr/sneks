@@ -899,6 +899,57 @@ end:
 }
 
 
+/* same as the _mod variant, but @path is resolved entirely on the initrd
+ * server.
+ */
+L4_ThreadId_t spawn_systask_from_initrd(const char *path, ...)
+{
+	/* no implementation, jose */
+	return L4_nilthread;
+}
+
+
+/* TODO: move this into root/test.c, or to a module where the
+ * rootserv-exported spawn_systask_from_initrd() would go.
+ */
+#ifdef BUILD_SELFTEST
+
+#include <sneks/test.h>
+#include <sneks/systask.h>
+
+START_TEST(spawn_systask_from_initrd)
+{
+	plan(5);
+	todo_start("not ready for prime time");
+
+	L4_ThreadId_t task = spawn_systask_from_initrd(
+		"/initrd/systest/sys/test/initrd_systask_partner", NULL);
+	skip_start(!ok(!L4_IsNilThread(task), "task created"), 4, "no task") {
+		L4_Accept(L4_UntypedWordsAcceptor);
+		L4_LoadMR(0, 0);
+		L4_MsgTag_t tag = L4_Call_Timeouts(task,
+			L4_TimePeriod(20000), L4_TimePeriod(20000));
+		L4_Word_t mr1; L4_StoreMR(1, &mr1);
+		ok(L4_IpcSucceeded(tag), "partner answered");
+		ok1(mr1 == 0x87654321);
+
+		tag = L4_Receive_Timeout(task, L4_TimePeriod(20000));
+		L4_Word_t ec = L4_ErrorCode();
+		ok(L4_IpcFailed(tag), "partner didn't send");
+		if(ec == 3) todo_start("something should clean up dead systasks...");
+		if(!ok(ec == 5, "error is `non-existing partner in receive phase'")) {
+			diag("ec=%lu", ec);
+		}
+		if(ec == 3) todo_end();
+	} skip_end;
+}
+END_TEST
+
+SYSTASK_SELFTEST("root:elf", spawn_systask_from_initrd);
+
+#endif
+
+
 static int pump_sigma0(size_t *total_p, L4_Fpage_t *phys, int phys_len)
 {
 	L4_Word_t total = 0, n_phys = 0;
