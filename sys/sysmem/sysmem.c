@@ -653,6 +653,15 @@ static bool handle_pf(
 		phys->owner = lp;
 		put_lpage(task, lp);
 		list_add_tail(&active_page_list, &phys->link);
+	} else if(lp->p_addr == 0) {
+		struct p_page *phys = get_free_page();
+		lp->p_addr = phys->address;
+		/* FIXME: remove `lp' if ->flags is cleared by alter_flags while
+		 * ->p_addr == 0. this assert will blow as a reminder.
+		 */
+		assert(lp->flags != 0);
+		phys->owner = lp;
+		list_add_tail(&active_page_list, &phys->link);
 	} else if(lp->p_addr & LF_SWAP) {
 		struct p_page *phys = decompress(lp);
 		lp->p_addr = phys->address;
@@ -661,6 +670,7 @@ static bool handle_pf(
 	}
 
 	task->min_fault = min_t(L4_Word_t, task->min_fault, faddr & ~PAGE_MASK);
+	assert((lp->p_addr & ~PAGE_MASK) != 0);
 	L4_Fpage_t fp = L4_FpageLog2(lp->p_addr & ~PAGE_MASK, PAGE_BITS);
 	L4_Set_Rights(&fp, L4_FullyAccessible);
 	*page_ptr = L4_MapItem(fp, faddr & ~PAGE_MASK);
