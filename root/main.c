@@ -702,36 +702,65 @@ static char **break_argument_list(char *str, const char *delims)
 }
 
 
-/* launches a systask from a boot module recognized with @name, appending the
- * given NULL-terminated parameter list to that specified for the module.
+/* launches a systask from a boot module accessed by @fh, constructing a
+ * parameter page from @name, @args and @rest. returns nilthread on failure.
  */
-static L4_ThreadId_t spawn_systask(const char *name, ...)
+static L4_ThreadId_t spawn_systask(
+	FILE *fh, const char *name, char **args, va_list rest)
 {
 	assert(!L4_SameThreads(sigma0_tid, L4_Pager()));
 
-	L4_KernelInterfacePage_t *kip = the_kip;
-	char *rest = NULL;
-	L4_BootRec_t *mod = find_boot_module(kip, name, &rest);
-	printf("name=`%s', mod=%p, rest=`%s'\n", name, mod, rest);
-	char **args = break_argument_list(rest, NULL);
-
-	L4_Word_t start_addr = L4_Module_Start(mod);
-	const Elf32_Ehdr *ee = (void *)start_addr;
-	if(memcmp(ee->e_ident, ELFMAG, SELFMAG) != 0) {
-		printf("incorrect ELF magic in boot module `%s'\n", name);
+	/* TODO: increase root thread stack size and allocate this on it, rather
+	 * than statically. not that it makes a lot of difference here.
+	 */
+	static uint8_t buf[PAGE_SIZE];
+	int n = fread(buf, 1, sizeof buf, fh);
+	if(n == 0) {
+		fprintf(stderr, "%s: can't read ELF magic?\n", __func__);
 		abort();
 	}
+	const Elf32_Ehdr *ee = (void *)buf;
+	if(memcmp(ee->e_ident, ELFMAG, SELFMAG) != 0) {
+		fprintf(stderr, "%s: incorrect ELF magic\n", __func__);
+		return L4_nilthread;
+	}
 
-	/* place UTCB and KIP areas below the process image. (this helps with the
-	 * "smallspace" ASID emulation technique, which will matter one day.)
+	/* read and copy all the program headers. also get the lowest address of
+	 * any segment.
 	 */
+	int bufoff = 0, n_phdrs = ee->e_phnum, phentsize = ee->e_phentsize;
 	uintptr_t phoff = ee->e_phoff, lowest = ~0ul;
-	for(int i=0; i < ee->e_phnum; i++, phoff += ee->e_phentsize) {
-		const Elf32_Phdr *ep = (void *)(start_addr + phoff);
-		if(ep->p_type != PT_LOAD) continue;	/* skip the GNU stack thing */
+	Elf32_Phdr phdrs[n_phdrs];	/* FIXME: stack oof */
+	for(int i=0; i < ee->e_phnum; i++, phoff += phentsize) {
+		if(phoff + phentsize > (bufoff + 1) * sizeof buf
+			|| phoff < bufoff * sizeof buf)
+		{
+#if 0
+			fprintf(stderr, "%s: page now for %u\n",
+				__func__, (unsigned)phoff);
+#endif
+			n = fseek(fh, (phoff / sizeof buf) * sizeof buf, SEEK_SET);
+			if(n != 0) {
+				printf("%s: can't seek to page of %u?\n",
+					__func__, (unsigned)phoff);
+				abort();
+			}
+			bufoff = phoff / sizeof buf;
+			n = fread(buf, 1, sizeof buf, fh);
+			if(n != sizeof buf) {
+				printf("%s: short read? n=%d\n", __func__, n);
+				abort();
+			}
+		}
+		const Elf32_Phdr *ep = (void *)(buf + (phoff - bufoff * sizeof buf));
+		memcpy(&phdrs[i], ep, sizeof phdrs[i]);
+		if(ep->p_type != PT_LOAD) continue;	/* ignore the GNU stack thing */
 		lowest = min_t(uintptr_t, ep->p_vaddr, lowest);
 	}
 	lowest &= ~PAGE_MASK;
+	/* place UTCB and KIP areas below the process image. (this helps with the
+	 * "smallspace" ASID emulation technique, which will matter one day.)
+	 */
 	L4_Fpage_t kip_area, utcb_area;
 	int utcb_scale = min_t(int, MSB(lowest) - 1, 21);
 	L4_Word_t utcb_size = 1u << utcb_scale;
@@ -747,35 +776,46 @@ static L4_ThreadId_t spawn_systask(const char *name, ...)
 			PAGE_BITS);
 	}
 #if 0
-	printf("utcb_area=%#lx:%#lx, kip_area=%#lx:%#lx, lowest=%#x\n",
-		L4_Address(utcb_area), L4_Size(utcb_area),
+	printf("%s: utcb_area=%#lx:%#lx, kip_area=%#lx:%#lx, lowest=%#x\n",
+		__func__, L4_Address(utcb_area), L4_Size(utcb_area),
 		L4_Address(kip_area), L4_Size(kip_area), lowest);
 #endif
 
 	assert(!L4_IsNilThread(uapi_tid));
-	/* create the task w/ all of that shit & what-not. */
 	L4_ThreadId_t new_tid = create_systask(kip_area, utcb_area);
 
 	/* copy each page to a vmem buffer, then send_virt it over to the new
 	 * process at the correct address.
 	 */
 	void *copybuf = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
-	phoff = ee->e_phoff;
-	for(int i=0; i < ee->e_phnum; i++, phoff += ee->e_phentsize) {
-		const Elf32_Phdr *ep = (void *)(start_addr + phoff);
-		/* (`ep' is s0'd in the previous loop.) */
+	for(int i=0; i < n_phdrs; i++) {
+		const Elf32_Phdr *ep = &phdrs[i];
 		if(ep->p_type != PT_LOAD) continue;	/* skip the GNU stack thing */
 
-		void *src = (void *)start_addr + ep->p_offset;
 		for(size_t off = 0; off < ep->p_memsz; off += PAGE_SIZE) {
 			if(off < ep->p_filesz) {
-				memcpy(copybuf, src + off,
-					min_t(int, PAGE_SIZE, ep->p_filesz - off));
-				if(ep->p_filesz - off < PAGE_SIZE) {
-					memset(copybuf + ep->p_filesz - off, '\0',
-						PAGE_SIZE - (ep->p_filesz - off));
+				n = fseek(fh, ep->p_offset + off, SEEK_SET);
+				if(n != 0) {
+					fprintf(stderr, "%s: can't seek to %u?\n", __func__,
+						(unsigned)ep->p_offset);
+					abort();
+				}
+				int sz = min_t(int, PAGE_SIZE, ep->p_filesz - off);
+				n = fread(copybuf, 1, sz, fh);
+				if(n != sz) {
+					fprintf(stderr, "%s: EOF? wanted sz=%d, got n=%d\n",
+						__func__, sz, n);
+					abort();
+				}
+				if(sz < PAGE_SIZE) {
+					/* zero fill */
+					memset(copybuf + sz, '\0', PAGE_SIZE - sz);
 				}
 			} else {
+				/* the page should be written even when entirely zero since it
+				 * was previously either freshly allocated or snatched away by
+				 * Sysmem::send_virt.
+				 */
 				memset(copybuf, '\0', PAGE_SIZE);
 			}
 			uint16_t ret = 0;
@@ -790,12 +830,9 @@ static L4_ThreadId_t spawn_systask(const char *name, ...)
 	free(copybuf);
 
 	/* make us an argument page as well & map it in. */
-	va_list al;
-	va_start(al, name);
-	void *argpage = make_argpage(name, args, al);
-	va_end(al);
+	void *argpage = make_argpage(name, args, rest);
 	uint16_t ret;
-	int n = __sysmem_send_virt(sysmem_tid, &ret, (L4_Word_t)argpage,
+	n = __sysmem_send_virt(sysmem_tid, &ret, (L4_Word_t)argpage,
 		new_tid.raw, L4_Address(kip_area) - PAGE_SIZE);
 	if(n != 0 || ret != 0) {
 		printf("sysmem::send_virt failed on argpage, n=%d, ret=%u\n", n, ret);
@@ -803,7 +840,7 @@ static L4_ThreadId_t spawn_systask(const char *name, ...)
 	}
 	free(argpage);
 
-	/* allow get_shape(). */
+	/* enable get_shape(). */
 	n = __sysmem_set_kernel_areas(sysmem_tid, new_tid.raw,
 		utcb_area, kip_area);
 	if(n != 0) {
@@ -819,10 +856,46 @@ static L4_ThreadId_t spawn_systask(const char *name, ...)
 		abort();
 	}
 
-	free((void *)start_addr);	/* see get_boot_info() */
-	free(args);
-	free(rest);
 	return new_tid;
+}
+
+
+/* launches a systask from a boot module recognized with @name, appending the
+ * given NULL-terminated parameter list to that specified for the module.
+ */
+static L4_ThreadId_t spawn_systask_mod(const char *name, ...)
+{
+	char *rest = NULL;
+	L4_BootRec_t *mod = find_boot_module(the_kip, name, &rest);
+	printf("name=`%s', mod=%p, rest=`%s'\n", name, mod, rest);
+	if(mod == NULL) return L4_nilthread;
+	char **args = break_argument_list(rest, NULL);
+
+	void *start = (void *)L4_Module_Start(mod);
+	const Elf32_Ehdr *ee = start;
+	if(memcmp(ee->e_ident, ELFMAG, SELFMAG) != 0) {
+		printf("incorrect ELF magic in boot module `%s'\n", name);
+		abort();
+	}
+
+	L4_ThreadId_t res;
+	FILE *fh = fmemopen(start, L4_Module_Size(mod), "r");
+	if(fh == NULL) {
+		fprintf(stderr, "%s: fmemopen() failed?\n", __func__);
+		res = L4_nilthread;
+		goto end;
+	}
+
+	va_list al; va_start(al, name);
+	res = spawn_systask(fh, name, args, al);
+	va_end(al);
+
+end:
+	fclose(fh);
+	if(!L4_IsNilThread(res)) free((void *)start); /* see get_boot_info() */
+	free(rest);
+	free(args);
+	return res;
 }
 
 
@@ -925,7 +998,7 @@ static L4_ThreadId_t start_vm(uintptr_t sip_mem)
 {
 	assert((sip_mem & PAGE_MASK) == 0);
 
-	L4_ThreadId_t mem_tid = spawn_systask("vm", NULL);
+	L4_ThreadId_t mem_tid = spawn_systask_mod("vm", NULL);
 
 	/* portion memory out to sysmem, vm, and consumers of various special
 	 * ranges.
@@ -1035,7 +1108,7 @@ static L4_ThreadId_t mount_initrd(void)
 	char tid[32];
 	snprintf(tid, sizeof tid, "%lu:%lu",
 		L4_ThreadNo(self), L4_Version(self));
-	L4_ThreadId_t initrd_tid = spawn_systask("fs.squashfs",
+	L4_ThreadId_t initrd_tid = spawn_systask_mod("fs.squashfs",
 		"--boot-initrd", tid, NULL);
 	if(L4_IsNilThread(initrd_tid)) {
 		panic("can't start fs.squashfs to mount initrd!");
@@ -1436,7 +1509,7 @@ static COLD void run_waitmods(struct htable *root_args, const char *stem)
 	const char *waitmod = get_root_arg(root_args, arg);
 	if(waitmod == NULL) return;
 
-	L4_ThreadId_t wm_tid = spawn_systask(waitmod, NULL);
+	L4_ThreadId_t wm_tid = spawn_systask_mod(waitmod, NULL);
 	if(!L4_IsNilThread(wm_tid)) {
 		/* wait until it's been removed, indicating completion. */
 		L4_MsgTag_t tag;
