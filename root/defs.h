@@ -137,4 +137,17 @@ extern int uapi_loop(void *param_ptr);
 extern void uapi_init(void);
 
 
+/* from fsio.c */
+
+extern L4_ThreadId_t __get_rootfs(void);
+extern FILE *sfdopen_NP(L4_ThreadId_t server, L4_Word_t handle, const char *mode);
+
+/* NOTE: while these two are analoguous to fileno(3), they should instead
+ * convert POSIX fds to the values returned. however root isn't POSIX so this
+ * isn't much of an issue.
+ */
+extern L4_ThreadId_t fserver_NP(FILE *f);	/* these two are like fileno(3) */
+extern L4_Word_t fhandle_NP(FILE *f);
+
+
 #endif

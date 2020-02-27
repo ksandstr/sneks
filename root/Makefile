@@ -43,6 +43,7 @@ main.o: main.c sysmem-defs.h kmsg-defs.h rootserv-defs.h proc-defs.h \
 	bootcon-defs.h
 thrd.o: thrd.c proc-defs.h
 uapi.o: uapi.c root-uapi-defs.h proc-defs.h vm-defs.h fs-defs.h info-defs.h
+fsio.o: fsio.c fs-defs.h info-defs.h
 
 
 test-initrd:

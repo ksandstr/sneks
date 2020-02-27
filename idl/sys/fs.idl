@@ -39,13 +39,22 @@ interface Fs
 
 	/* simple synchronous I/O.
 	 *
+	 * (TODO: it'd be cool if we negative values of @position were interpret
+	 * relative to end of file, like fseek(..., -position, SEEK_END). this
+	 * requires an upgrade to sys/crt/fileio.c, though; and that's coming
+	 * anyway.
+	 *
+	 * TODO: elaborate the design again, how i'm replacing the "duplicated
+	 * positions" model with client-stored positions w/ cleverness for
+	 * EOF-relative access.)
+	 *
 	 * (this causes an extra copy compared to e.g. a vm op that'd copy stuff
-	 * into the client's memory. this is soluble, so we don't care about it
+	 * into the client's memory. that is soluble, so we don't care about it
 	 * for now.)
 	 */
 	void read(
 		out buffer data,
-		in handle fd, in off_t position, in size_t length)
+		in handle fd, in long position, in size_t length)
 			raises(Posix::Errno);
 };
 

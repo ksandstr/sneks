@@ -552,7 +552,7 @@ end:
 
 static int squashfs_read(
 	uint8_t *data_buf, unsigned *data_len_p,
-	L4_Word_t param_fd, uint32_t read_pos, uint32_t count)
+	L4_Word_t param_fd, int32_t read_pos, uint32_t count)
 {
 	int n = 0;
 
