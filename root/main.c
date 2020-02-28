@@ -904,8 +904,20 @@ end:
  */
 L4_ThreadId_t spawn_systask_from_initrd(const char *path, ...)
 {
-	/* no implementation, jose */
-	return L4_nilthread;
+	FILE *elf = fopen(path, "rb");
+	if(elf == NULL) {
+		fprintf(stderr, "%s: fopen failed, errno=%d\n", __func__, errno);
+		return L4_nilthread;
+	}
+
+	const char *name = strrchr(path, '/');
+	if(name == NULL) name = path; else name++;
+	va_list rest; va_start(rest, path);
+	char *noargs = NULL;
+	L4_ThreadId_t task = spawn_systask(elf, name, &noargs, rest);
+	va_end(rest);
+	fclose(elf);
+	return task;
 }
 
 
@@ -920,7 +932,6 @@ L4_ThreadId_t spawn_systask_from_initrd(const char *path, ...)
 START_TEST(spawn_systask_from_initrd)
 {
 	plan(5);
-	todo_start("not ready for prime time");
 
 	L4_ThreadId_t task = spawn_systask_from_initrd(
 		"/initrd/systest/sys/test/initrd_systask_partner", NULL);
