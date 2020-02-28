@@ -6,6 +6,7 @@
 #include <string.h>
 #include <errno.h>
 #include <ccan/autodata/autodata.h>
+#include <ccan/str/str.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -50,11 +51,11 @@ static void describe_selftests(L4_ThreadId_t sender, int offset)
 		char *path = strdup(specs[i]->path), *sep = strchr(path, ':');
 		if(sep != NULL) *sep = '\0';
 		if(strcmp(prefix, path) != 0) {
-			strncpy(prefix, path, sizeof prefix - 1); prefix[19] = '\0';
+			strncpy(prefix, path, sizeof prefix - 1); prefix[20] = '\0';
 			load_spec(&offset, &mrpos, prefix, 1);
 		}
 		if(sep != NULL && strcmp(group, sep + 1) != 0) {
-			strncpy(group, sep + 1, sizeof group - 1); group[19] = '\0';
+			strncpy(group, sep + 1, sizeof group - 1); group[20] = '\0';
 			load_spec(&offset, &mrpos, group, 2);
 		}
 		/* (priority is 0xff at bitpos 26) */
@@ -114,12 +115,13 @@ static int wrap_close(void *cookie)
 }
 
 
+/* finds first test whose name is a prefix of @name. */
 static const struct utest_spec *find_test(const char *name)
 {
 	size_t n_specs = 0;
 	struct utest_spec **specs = autodata_get(all_systask_selftests, &n_specs);
 	for(int i=0; i < n_specs; i++) {
-		if(strcmp(specs[i]->test->name, name) == 0) return specs[i];
+		if(strstarts(specs[i]->test->name, name)) return specs[i];
 	}
 	return NULL;
 }
@@ -179,7 +181,7 @@ bool selftest_handling(L4_Word_t status)
 			L4_Word_t iter; L4_StoreMR(1, &iter);
 			L4_Word_t name[L4_UntypedWords(tag)];
 			L4_StoreMRs(2, L4_UntypedWords(tag) - 1, name);
-			name[sizeof name - 1] = 0;
+			name[sizeof name / sizeof name[0] - 1] = 0;
 			run_selftest(sender, iter, (const char *)name);
 			return true;
 		}
