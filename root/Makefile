@@ -26,6 +26,7 @@ distclean: clean
 
 
 root: root.ld crt0.o main.o runtime.o thrd.o uapi.o sig.o mm.o ser_io.o \
+		fsio.o \
 		sysmem-common.o sysmem-client.o kmsg-common.o kmsg-service.o \
 		rootserv-service.o root-uapi-service.o bootcon-service.o \
 		proc-common.o proc-client.o vm-common.o vm-client.o \
@@ -42,6 +43,10 @@ main.o: main.c sysmem-defs.h kmsg-defs.h rootserv-defs.h proc-defs.h \
 	bootcon-defs.h
 thrd.o: thrd.c proc-defs.h
 uapi.o: uapi.c root-uapi-defs.h proc-defs.h vm-defs.h fs-defs.h info-defs.h
+
+
+test-initrd:
+	@echo "hello, root:fsio test" >$(INITRD)/fsiohello.txt
 
 
 # secret nazi forest

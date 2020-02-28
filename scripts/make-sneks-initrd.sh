@@ -7,7 +7,7 @@ TARGET=`mktemp -d /tmp/make-sneks-initrd.XXXXXX`
 # the systest directory, when not disabled.
 if [ -z "$DISABLE_TEST_OUTPUT" ]; then
     PARTS=""
-    for d in sys/*; do
+    for d in root sys/*; do
 	if [ -d "$d" ] && grep ^test-initrd "$d/Makefile" >/dev/null; then
 	    if [ -n "$PARTS" ]; then PARTS="$PARTS "; fi
 	    PARTS="${PARTS}$d"

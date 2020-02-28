@@ -77,6 +77,7 @@ extern FILE *fopencookie(
 	void *cookie, const char *mode, cookie_io_functions_t io_funcs);
 #endif
 
+extern FILE *fopen(const char *path, const char *mode);
 extern FILE *fdopen(int fd, const char *mode);
 extern FILE *fmemopen(void *buf, size_t size, const char *mode);
 extern int fclose(FILE *f);
