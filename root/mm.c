@@ -24,7 +24,7 @@
 #include "defs.h"
 
 
-#define N_PRE_HEAP 32	/* max # of fpages recorded in early sbrk() */
+#define N_PRE_HEAP 48	/* max # of fpages recorded in early sbrk() */
 
 
 static uintptr_t current_brk = 0, heap_bottom;
