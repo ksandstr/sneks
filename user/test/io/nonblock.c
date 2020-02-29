@@ -25,9 +25,6 @@ START_LOOP_TEST(nonblock_basic, iter, 0, 1)
 	const bool nonblock = !!(iter & 1);
 	diag("nonblock=%s", btos(nonblock));
 	plan_tests(5);
-#ifdef __sneks__
-	todo_start("nopes");
-#endif
 
 	struct sigaction act = { .sa_handler = &silent_handler };
 	int n = sigaction(SIGUSR1, &act, NULL);

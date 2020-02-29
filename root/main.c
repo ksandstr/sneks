@@ -1250,6 +1250,10 @@ static int kmsg_impl_fn(void *param UNUSED)
 }
 
 
+/* NOTE: that's a fucky, i.e. error-prone, parameter set right there. consider
+ * replacing this with one that takes an array and generates it, and the
+ * length value, thru __VA_ARGS__.
+ */
 static void put_sysinfo(const char *name, int nvals, ...)
 {
 	int namelen = strlen(name), pos = 0;
@@ -1730,6 +1734,10 @@ int main(void)
 		"/initrd/lib/sneks-0.0p0/sysmsg", NULL);
 	put_sysinfo("sys:sysmsg:tid", 1, sysmsg_tid.raw);
 
+	L4_ThreadId_t pipeserv = spawn_systask_from_initrd(
+		"/initrd/lib/sneks-0.0p0/pipeserv", NULL);
+	put_sysinfo("posix:pipe:tid", 1, pipeserv.raw);
+
 	struct __sysinfo *sip = sip_mem;
 	*sip = (struct __sysinfo){
 		.magic = SNEKS_SYSINFO_MAGIC,
@@ -1738,6 +1746,7 @@ int main(void)
 		.api.vm = vm_tid,
 		.memory.page_size_log2 = PAGE_BITS,
 		.memory.biggest_page_log2 = PAGE_BITS,
+		.posix.pipe = pipeserv,
 	};
 
 	/* launch init.

@@ -17,10 +17,6 @@ START_LOOP_TEST(basic, iter, 0, 1)
 	diag("use_pipe2=%s", btos(use_pipe2));
 	plan_tests(7);
 
-#ifdef __sneks__
-	todo_start("give me roffles");
-#endif
-
 	int fds[2], n;
 	if(!use_pipe2) n = pipe(fds); else n = pipe2(fds, 0);
 	skip_start(!ok(n == 0, "pipe(2)"), 6, "no pipe, errno=%d", errno) {
@@ -55,9 +51,6 @@ START_LOOP_TEST(eof, iter, 0, 7)
 	diag("writer_closes=%s, transmit_byte=%s, active_receive=%s",
 		btos(writer_closes), btos(transmit_byte), btos(active_receive));
 	plan_tests(5);
-#ifdef __sneks__
-	todo_start("or give me death");
-#endif
 
 	struct sigaction act_pipe = { .sa_handler = SIG_IGN };
 	int n = sigaction(SIGPIPE, &act_pipe, NULL);
@@ -127,9 +120,6 @@ START_LOOP_TEST(many_readers, iter, 0, 3)
 	diag("first_reader_dies=%s, reader_count=%d", btos(first_reader_dies),
 		reader_count);
 	plan_tests(2);
-#ifdef __sneks__
-	todo_start("oh no! more lemmings");
-#endif
 
 	struct sigaction act_pipe = { .sa_handler = SIG_IGN };
 	int n = sigaction(SIGPIPE, &act_pipe, NULL);
@@ -204,9 +194,6 @@ START_LOOP_TEST(blocking_write, iter, 0, 1)
 	const bool act_recv = !!(iter & 1);
 	diag("act_recv=%s", btos(act_recv));
 	plan_tests(2);
-#ifdef __sneks__
-	todo_start("beefed");
-#endif
 
 	struct sigaction ign = { .sa_handler = SIG_IGN };
 	int n = sigaction(SIGPIPE, &ign, NULL);

@@ -53,6 +53,11 @@ struct sysapi_info {
 };
 
 
+struct posix_info {
+	L4X2::ThreadId pipe;		/* Sneks::Pipe */
+};
+
+
 [StubPrefix(__info), IfaceLabel(0xe003)]
 interface Info: InfoMeta
 {
@@ -61,6 +66,7 @@ interface Info: InfoMeta
 	void uapi_block(out uapi_info block) raises(Posix::Errno);
 	void rootfs_block(out rootfs_info block) raises(Posix::Errno);
 	void sysapi_block(out sysapi_info block) raises(Posix::Errno);
+	void posix_block(out posix_info block) raises(Posix::Errno);
 };
 
 };

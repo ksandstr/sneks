@@ -154,6 +154,7 @@ static struct sneks_abend_info abend_info;
 static struct sneks_uapi_info uapi_info;
 static struct sneks_rootfs_info rootfs_info;
 static struct sneks_sysapi_info sysapi_info;
+static struct sneks_posix_info posix_info;
 
 
 static struct p_page *get_free_page(void);
@@ -1207,6 +1208,12 @@ static int impl_sysapi_block(struct sneks_sysapi_info *it) {
 }
 
 
+static int impl_posix_block(struct sneks_posix_info *it) {
+	*it = posix_info;
+	return 0;
+}
+
+
 static void add_first_mem(void)
 {
 	for(int i=0; i < NUM_INIT_PAGES; i++) {
@@ -1252,6 +1259,7 @@ static void sysinfo_init_msg(L4_MsgTag_t tag, const L4_Word_t mrs[static 64])
 			{ "uapi:vm", &uapi_info.vm },
 			{ "rootfs", &rootfs_info.service },
 			{ "sys:sysmsg", &sysapi_info.sysmsg },
+			{ "posix:pipe", &posix_info.pipe },
 		};
 		char *sep = strrchr(name, ':');
 		*sep = '\0';
@@ -1330,6 +1338,7 @@ int main(void)
 		.uapi_block = &impl_uapi_block,
 		.rootfs_block = &impl_rootfs_block,
 		.sysapi_block = &impl_sysapi_block,
+		.posix_block = &impl_posix_block,
 
 		/* Sysmem proper */
 		.rm_task = &impl_rm_task,
