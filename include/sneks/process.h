@@ -56,7 +56,8 @@
  * item's address is given in the startup routine's stack pointer, or 0 if
  * there are none. in any given fd list, ->fd appears in descending order, so
  * that the extent of the file descriptor table can be determined by reading
- * the first fdlist item; and no ->fd may appear twice.
+ * the first fdlist item; and no ->fd may appear twice. the list is terminated
+ * by an item where ->next == 0.
  *
  * this should be defined in IDL so that Proc::spawn could accept a sequence
  * thereof, but since LLVM is a bit fucky wrt sizeof on struct types (i can't

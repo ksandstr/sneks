@@ -778,7 +778,7 @@ static int make_fdlist_page(
 		return 0;
 	}
 	struct sneks_fdlist *list;
-	size_t alloc = (n_fds * sizeof *list + PAGE_SIZE - 1) & ~PAGE_MASK;
+	size_t alloc = ((n_fds + 1) * sizeof *list + PAGE_SIZE - 1) & ~PAGE_MASK;
 	list = aligned_alloc(PAGE_SIZE, alloc);
 	if(list == NULL) return -ENOMEM;
 	memset(list + n_fds, '\0', alloc - n_fds * sizeof *list);
@@ -796,6 +796,7 @@ static int make_fdlist_page(
 			return -EINVAL;
 		}
 	}
+	assert(list[n_fds].next == 0);	/* terminated w/ memset */
 	*ptr = list;
 	*n_pages_p = alloc / PAGE_SIZE;
 	return 0;

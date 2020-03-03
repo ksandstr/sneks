@@ -72,7 +72,6 @@ int atexit(void (*fn)(void))
 }
 
 
-/* copypasta'd from sys/crt/misc.c , caveats apply */
 int spawn_NP(const char *filename, char *const argv[], char *const envp[])
 {
 	char *args = p_to_argbuf(argv), *envs = p_to_argbuf(envp);
@@ -86,11 +85,12 @@ int spawn_NP(const char *filename, char *const argv[], char *const envp[])
 	 */
 	darray(int32_t) fds = darray_new();
 	darray(L4_Word_t) cookies = darray_new(), servs = darray_new();
-	for(int i=0; i <= __max_valid_fd; i++) {
-		if(!IS_FD_VALID(i)) continue;
-		darray_push(fds, i);
-		darray_push(cookies, FD_COOKIE(i));
-		darray_push(servs, FD_SERVICE(i).raw);
+	struct fd_iter it;
+	for(int fd = __fd_first(&it); fd >= 0; fd = __fd_next(&it, fd)) {
+		void *ctx = __fd_iter_ctx(&it);
+		darray_push(fds, fd);
+		darray_push(cookies, __handle(&ctx, fd));
+		darray_push(servs, __server(&ctx, fd).raw);
 	}
 	int n = __proc_spawn(__the_sysinfo->api.proc, &pid, filename, args, envs,
 		servs.item, servs.size, cookies.item, cookies.size,

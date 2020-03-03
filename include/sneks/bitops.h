@@ -6,10 +6,10 @@
 #include <stdint.h>
 
 
-/* returns 31..0 */
+/* ia32: returns 31..0 */
 #define MSB(x) (sizeof(unsigned long) * 8 - __builtin_clzl((unsigned long)(x)) - 1)
 
-/* returns 63..0 */
+/* ia32: returns 63..0 */
 #define MSBLL(x) (sizeof(unsigned long long) * 8 \
 	- __builtin_clzll((unsigned long long)(x)) - 1)
 

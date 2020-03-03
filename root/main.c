@@ -1406,7 +1406,8 @@ static int bootcon_read(
 	int32_t cookie, unsigned length,
 	uint8_t *buf, unsigned *len_p)
 {
-	return -EINVAL;
+	*len_p = 0;
+	return 0;
 }
 
 
@@ -1420,7 +1421,7 @@ static int bootcon_write(
 
 
 static int bootcon_close(int fd) {
-	return -ENOSYS;
+	return 0;	/* everything will be fire. */
 }
 
 
@@ -1440,7 +1441,8 @@ static int bootcon_thread_fn(void *param_ptr)
 	L4_Sleep(L4_TimePeriod(20 * 1000));
 
 	static const struct boot_con_vtable vtab = {
-		.read = &bootcon_read, .write = &bootcon_write,
+		.read = &bootcon_read,
+		.write = &bootcon_write,
 		.close = &bootcon_close,
 		.set_flags = &bootcon_set_flags,
 	};
@@ -1505,13 +1507,8 @@ static int launch_init(
 	int32_t fds[3];
 	for(int i=0; i < 3; i++) {
 		fds[i] = i;
-		if(i == 0) {
-			servs[i] = L4_nilthread.raw;
-			cookies[i] = 0;
-		} else {
-			servs[i] = console.raw;
-			cookies[i] = 0xbadcafe0;
-		}
+		servs[i] = console.raw;
+		cookies[i] = 0xbadcafe0;
 	}
 	/* init starts out with an empty environment. so sad. */
 	int n = __proc_spawn(uapi_tid, init_pid_p, prog,

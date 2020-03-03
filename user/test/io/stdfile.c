@@ -11,12 +11,10 @@
 START_TEST(dup_and_close_stdin)
 {
 	plan(2);
-#ifdef __sneks__
-	todo_start("borked");
-#endif
 
 	int newfd = dup(0);
 	if(!ok1(newfd >= 0)) diag("errno=%d", errno);
+	else diag("newfd=%d", newfd);
 
 	skip_start(newfd < 0, 1, "no fd") {
 		int n = close(newfd);
@@ -31,7 +29,6 @@ DECLARE_TEST("io:stdfile", dup_and_close_stdin);
 START_TEST(fcntl_dupfd)
 {
 	plan_tests(4);
-	todo_start("nix");
 
 	int n = fcntl(1, F_DUPFD, 10);
 	if(!ok(n >= 10, "F_DUPFD(10)")) {

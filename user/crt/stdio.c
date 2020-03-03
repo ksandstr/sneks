@@ -4,29 +4,29 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <assert.h>
+#include <unistd.h>
 #include <errno.h>
+#include <ccan/minmax/minmax.h>
 
 #include <l4/types.h>
 
-#include "io-defs.h"
 #include "private.h"
 
 
 static long fd_write(void *cookie, const char *buf, size_t size)
 {
-	int fd = (int)cookie;
-	assert(IS_FD_VALID(fd));
-	if(size > SNEKS_IO_IOSEG_MAX) size = SNEKS_IO_IOSEG_MAX;
-	uint16_t ret;
-	int n = __io_write(FD_SERVICE(fd), &ret, FD_COOKIE(fd), (void *)buf, size);
-	return NTOERR(n, (int)ret);
+	int n;
+	do {
+		n = write((int)cookie, buf, size);
+	} while(n < 0 && errno == EINTR);
+	return max_t(long, n, 0);
 }
 
 
 FILE *fdopen(int fd, const char *mode)
 {
-	static const cookie_io_functions_t fd_io_funcs = {
+	return fopencookie((void *)fd, mode, (cookie_io_functions_t){
 		.write = &fd_write,
-	};
-	return fopencookie((void *)fd, mode, fd_io_funcs);
+		/* TODO: add read, close */
+	});
 }

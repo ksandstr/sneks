@@ -21,8 +21,9 @@ struct sfdpriv {
 };
 
 
-/* TODO: export this somewhere? */
-static int idl2errno(int n) {
+/* NOTE: duplicated in user/crt/private.h, albeit inline */
+static int idl2errno(int n)
+{
 	if(n == 0) return 0;
 	else {
 		errno = n < 0 ? -n : EIO;

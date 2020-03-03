@@ -54,7 +54,7 @@ initrd_spawn_partner: $(CFGDIR)/user/crt/static.ld spawn-partner.o \
 	@$(LD) $(LDFLAGS) -L $(CFGDIR)/user/crt -static -o $@ \
 		-b elf32-i386 -T $(CFGDIR)/user/crt/static.ld \
 		$(filter %.o,$^) $(filter %.a,$^) \
-		-lsneks-user-crt -ll4 -lm \
+		-lsneks-user-crt -lsneks -ll4 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 

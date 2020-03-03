@@ -6,8 +6,10 @@
 #ifndef _SNEKS_USER_CRT_PRIVATE_H
 #define _SNEKS_USER_CRT_PRIVATE_H
 
+#include <stdbool.h>
 #include <stdnoreturn.h>
 #include <setjmp.h>
+#include <errno.h>
 #include <ucontext.h>
 #include <l4/types.h>
 #include <l4/kip.h>
@@ -15,12 +17,10 @@
 #include <sneks/sysinfo.h>
 
 
-/* invalid when .service is nil. */
-struct __sneks_file {
-	L4_ThreadId_t service;
-	L4_Word_t cookie;
-};
+extern L4_KernelInterfacePage_t *__the_kip;
+extern struct __sysinfo *__the_sysinfo;
 
+extern L4_ThreadId_t __main_tid;
 
 /* turns a muidl "positive for L4 ErrorCode values, negative for errno, zero
  * for success" style result into a written errno and a {0, -1} return value.
@@ -34,24 +34,40 @@ extern int __idl2errno(int n, ...);
 extern int __l4_last_errorcode;
 
 
-#define IS_FD_VALID(fd) !L4_IsNilThread(__files[(fd)].service)
-#define FD_SERVICE(fd) __files[(fd)].service
-#define FD_COOKIE(fd) __files[(fd)].cookie
-
-
-extern L4_KernelInterfacePage_t *__the_kip;
-extern struct __sysinfo *__the_sysinfo;
-
-extern L4_ThreadId_t __main_tid;
-
-
-/* what file descriptors index into. */
-extern struct __sneks_file *__files;
-extern int __max_valid_fd;	/* inclusive, < 0 before init */
-
-
 struct sneks_fdlist;
 extern void __file_init(struct sneks_fdlist *fdlist);
+
+
+struct fdchunk;
+struct fd_iter {
+	struct fdchunk *chunk;
+};
+
+
+/* fd-to-component access w/ group caching via @ctx (initialize to NULL,
+ * invalidated by next call to close()).
+ */
+extern L4_ThreadId_t __server(void **ctx, int fd);
+extern L4_Word_t __handle(void **ctx, int fd);
+extern int __fflags(void **ctx, int fd); /* file descriptor (FD_*) flags */
+extern bool __fd_valid(void **ctx, int fd);
+
+/* creation. if @fd < 0, allocates a different file descriptor. otherwise if
+ * @fd is already valid, returns -EEXIST.
+ */
+extern int __alloc_fd(
+	void **ctx, int fd,
+	L4_ThreadId_t server, L4_Word_t handle, int flags);
+
+/* these return -1 when there were no file descriptors, or when @prev was the
+ * last one, respectively. __fd_iter_ctx() returns an useful value for @ctx in
+ * __server etc.
+ */
+extern int __fd_first(struct fd_iter *it);
+extern int __fd_next(struct fd_iter *it, int prev);
+static inline void *__fd_iter_ctx(struct fd_iter *it) {
+	return it->chunk;
+}
 
 
 /* from sigaction.c */
