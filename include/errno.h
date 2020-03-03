@@ -23,6 +23,7 @@
 #define ENOSYS	28	/* function not implemented */
 #define EPIPE	32	/* broken pipe */
 #define EDEADLK 35	/* resource deadlock would occur */
+#define EWOULDBLOCK 41	/* NOTE: distinct from EAGAIN! */
 #define EOVERFLOW 75	/* value too large for defined data type */
 #define ETIMEDOUT 110	/* connection timed out */
 

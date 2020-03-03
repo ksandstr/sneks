@@ -13,16 +13,47 @@ module Sneks {
 [StubPrefix(__io), IfaceLabel(0xe803)]
 interface IO
 {
-	/* TODO: get these from posixlike.idl */
+	/* TODO: move these into posixlike.idl, carry generated header stuff into
+	 * the actual POSIX headers thru (say) an <include/bits/idl/posixlike.h>
+	 * so the types match up proper in userspace.
+	 */
 	typedef unsigned long size_t;
 	typedef unsigned long off_t;
 	typedef unsigned short pid_t;
 
 	/* this is the weak I/O interface where data is copied through the
-	 * microkernel. so the transfer size can be fairly small.
+	 * microkernel, so the max transfer size can be fairly small.
 	 */
-	typedef sequence<octet, 65536> ioseg;
+	const long IOSEG_MAX = 65536;
+	typedef sequence<octet, IOSEG_MAX> ioseg;
+
+	/* bits for ::set_flags(). same values as on Linux. */
+	const long O_NONBLOCK = 04000;
+
+	/* sets @fd's flags' = (flags & @and_mask) | @or_mask. returns previous
+	 * flags in @old_flags. raises EBADF when @fd doesn't exist, and EINVAL
+	 * when an unknown flag would be set.
+	 *
+	 * this alters the set of file status flags (O_*) as opposed to file
+	 * descriptor flags present in userspace (FD_*), or some other set of
+	 * flags accessed by ioctl.
+	 */
+	void set_flags(out long old_flags,
+		in long fd, in long or_mask, in long and_mask)
+		raises(Posix::Errno);
+
+	/* when write (read) blocks on a full (empty) buffer, wakeup happens in
+	 * the form of an EAGAIN error result. when O_NONBLOCK is set, instead
+	 * EWOULDBLOCK is raised.
+	 */
 	unsigned short write(in long fd, in ioseg buf)
+		raises(Posix::Errno, muidl::NoReply);
+
+	void read(in long fd, in off_t length, out ioseg buf)
+		raises(Posix::Errno, muidl::NoReply);
+
+	/* raises like POSIX close(2) */
+	void close(in long fd)
 		raises(Posix::Errno);
 };
 

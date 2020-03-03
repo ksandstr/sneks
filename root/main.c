@@ -1400,12 +1400,34 @@ static void parse_initrd_args(struct htable *dest)
 }
 
 
+/* TODO: move into bootcon.c */
+
+static int bootcon_read(
+	int32_t cookie, unsigned length,
+	uint8_t *buf, unsigned *len_p)
+{
+	return -EINVAL;
+}
+
+
 static int bootcon_write(
 	int32_t cookie, const uint8_t *buf, unsigned buf_len)
 {
 	extern void computchar(unsigned char ch);
 	for(unsigned i=0; i < buf_len; i++) computchar(buf[i]);
 	return buf_len;
+}
+
+
+static int bootcon_close(int fd) {
+	return -ENOSYS;
+}
+
+
+static int bootcon_set_flags(int *old, int fd, int or, int and)
+{
+	*old = 0;
+	return 0;
 }
 
 
@@ -1418,7 +1440,9 @@ static int bootcon_thread_fn(void *param_ptr)
 	L4_Sleep(L4_TimePeriod(20 * 1000));
 
 	static const struct boot_con_vtable vtab = {
-		.write = &bootcon_write,
+		.read = &bootcon_read, .write = &bootcon_write,
+		.close = &bootcon_close,
+		.set_flags = &bootcon_set_flags,
 	};
 	for(;;) {
 		L4_Word_t status = _muidl_boot_con_dispatch(&vtab);

@@ -16,6 +16,7 @@ static long fd_write(void *cookie, const char *buf, size_t size)
 {
 	int fd = (int)cookie;
 	assert(IS_FD_VALID(fd));
+	if(size > SNEKS_IO_IOSEG_MAX) size = SNEKS_IO_IOSEG_MAX;
 	uint16_t ret;
 	int n = __io_write(FD_SERVICE(fd), &ret, FD_COOKIE(fd), (void *)buf, size);
 	return NTOERR(n, (int)ret);
