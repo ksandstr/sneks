@@ -102,6 +102,7 @@ static inline struct page * rb_insert_page_cache(struct inode * inode,
 #define SEEN_UKERNEL_RBTREE_H
 
 #include <stdlib.h>
+#include <ccan/container_of/container_of.h>
 
 
 struct rb_node
