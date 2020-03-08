@@ -644,22 +644,16 @@ static bool handle_pf(
 			"systask=%lu:%lu segv; faddr=%#lx fip=%#lx\n",
 			L4_ThreadNo(tid), L4_Version(tid), faddr, fip);
 		return false;
-	} else if(lp == NULL) {
-		lp = alloc_struct(l_page);
+	} else if(lp == NULL || lp->p_addr == 0) {
+		assert(lp == NULL || lp->flags != 0);
+		if(lp == NULL) {
+			lp = alloc_struct(l_page);
+			lp->flags = 0;
+			lp->l_addr = faddr & ~PAGE_MASK;
+			put_lpage(task, lp);
+		}
 		struct p_page *phys = get_free_page();
 		lp->p_addr = phys->address;
-		lp->l_addr = faddr & ~PAGE_MASK;
-		lp->flags = 0;
-		phys->owner = lp;
-		put_lpage(task, lp);
-		list_add_tail(&active_page_list, &phys->link);
-	} else if(lp->p_addr == 0) {
-		struct p_page *phys = get_free_page();
-		lp->p_addr = phys->address;
-		/* FIXME: remove `lp' if ->flags is cleared by alter_flags while
-		 * ->p_addr == 0. this assert will blow as a reminder.
-		 */
-		assert(lp->flags != 0);
 		phys->owner = lp;
 		list_add_tail(&active_page_list, &phys->link);
 	} else if(lp->p_addr & LF_SWAP) {
@@ -840,14 +834,15 @@ static void remove_l_page(
 			list_add(&buddy_list, &ch->buddy_link);
 		}
 	} else {
-		unmap_page(lp->p_addr & ~PAGE_MASK, fp, n_fp);
 		struct p_page *phys = get_active_page(lp->p_addr & ~PAGE_MASK);
-		assert(phys != NULL);
-		assert(phys->owner == lp);
-		list_del_from(&active_page_list, &phys->link);
-		phys->owner = NULL;
-		list_add(&free_page_list, &phys->link);
-		num_free_pages++;
+		if(phys != NULL) {
+			unmap_page(lp->p_addr & ~PAGE_MASK, fp, n_fp);
+			assert(phys->owner == lp);
+			list_del_from(&active_page_list, &phys->link);
+			phys->owner = NULL;
+			list_add(&free_page_list, &phys->link);
+			num_free_pages++;
+		}
 	}
 
 	rb_erase(&lp->rb, &task->mem);
@@ -1145,8 +1140,12 @@ static int impl_alter_flags(
 		addr += PAGE_SIZE)
 	{
 		struct l_page *lp = get_lpage(t, addr);
-		if(lp != NULL) lp->flags = (lp->flags | or_mask) & and_mask;
-		else {
+		if(lp != NULL) {
+			lp->flags = (lp->flags | or_mask) & and_mask;
+			if(lp->flags == 0 && lp->p_addr == 0) {
+				remove_l_page(t, lp, NULL, 0);
+			}
+		} else {
 			lp = alloc_struct(l_page);
 			lp->p_addr = 0;
 			lp->l_addr = addr;

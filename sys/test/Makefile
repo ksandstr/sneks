@@ -11,9 +11,9 @@ CFLAGS:=$(CFLAGS) -D__KERNEL__ -D__sneks__=1 -D__l4x2__=1 -mstackrealign
 
 OUTPUTS=systest initrd_spawn_partner
 
-# FIXME: this will generate full paths where they're not needed. hack the build
-# scripts present a nicer "  CC sys/foo/t/c11sumthing.c" report to conceal teh
-# ugly.
+# FIXME: this will cause the %.c->%.o recipe to print full paths. hack the
+# build scripts until they present a nicer "  CC sys/foo/t/c11sumthing.c"
+# report so as to conceal teh ugly.
 TEST_SOURCE:=$(wildcard $(CFGDIR)/sys/*/t/*.c)
 TEST_OBJS:=$(TEST_SOURCE:%.c=%.o)
 
@@ -33,10 +33,14 @@ distclean:
 
 harness.o: harness.c proc-defs.h
 
+# FIXME: this is also a bit fugly.
+$(CFGDIR)/sys/sysmem/t/flags.o: sysmem-defs.h
+
 
 systest: $(LDSCRIPT) systest.o harness.o $(TEST_OBJS) \
 		ccan-opt.a ccan-htable.o ccan-talloc.o ccan-autodata.o \
-		proc-common.o proc-client.o
+		proc-common.o proc-client.o \
+		sysmem-common.o sysmem-client.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T $(LDSCRIPT) \
 		$(filter %.o,$^) $(filter %.a,$^) $(LIBS) \
