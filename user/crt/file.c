@@ -323,24 +323,6 @@ int close(int fd)
 }
 
 
-int pipe(int pipefd[2]) {
-	return pipe2(pipefd, 0);
-}
-
-
-int pipe2(int pipefd[2], int flags)
-{
-	if(flags != 0) {
-		errno = EINVAL;
-		return -1;
-	}
-
-	/* TODO */
-	errno = ENOSYS;
-	return -1;
-}
-
-
 long read(int fd, void *buf, size_t count)
 {
 	void *ctx = NULL;

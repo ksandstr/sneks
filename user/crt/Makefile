@@ -42,6 +42,8 @@ stdio.o: io-defs.h
 sigaction.o: proc-defs.h
 signal.o: proc-defs.h
 uid.o: proc-defs.h
+file.o: io-defs.h
+pipe.o: pipe-defs.h io-defs.h
 
 
 libsneks-user-crt.a: $(CRT_OBJS)
