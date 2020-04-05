@@ -1,0 +1,52 @@
+
+#ifndef __SYS_MSG_IDL__
+#define __SYS_MSG_IDL__
+
+#include <muidl.idl>
+#include <l4x2.idl>
+#include <posixlike.idl>
+
+
+[StubPrefix(__sysmsg), IfaceLabel(0xe007)]
+interface Sysmsg
+{
+	/* returns old mask, sets mask' = (mask & @and) | @or.
+	 *
+	 * if this is the first call of Sneks::setmask from the process at hand,
+	 * sets broadcast reception TID to the caller. this TID cannot be
+	 * subsequently changed without exiting the systask.
+	 *
+	 * sysmsg broadcasts may be propagated on behalf of the sysmsg thread ID,
+	 * in which case the ActualSender output indicates the thread to which
+	 * acknowledgments should be sent. if they are not propagated, the
+	 * apparent sender ID should be used instead.
+	 */
+	long setmask(in long or, in long and);
+
+	/* sends a broadcast message of up to 60 words to all registered systasks
+	 * whose mask contains one or more of what's set in @maskp, but none of
+	 * what's set in @maskn. this is needlessly fancy and confusing, and may
+	 * change to something simpler at a later time.
+	 *
+	 * returns true if there were no recipients, or all recipients indicated
+	 * that the message was either processed immediately, or disregarded;
+	 * false if there was at least one that did not.
+	 *
+	 * this operation may not be called from within a handler, or a deadlock
+	 * will occur. systemspace porcelain for this operation detects that and
+	 * pops -EDEADLK; use that, not the raw call.
+	 */
+	typedef sequence<L4X2::word, 60> words;
+	boolean broadcast(in long maskp, in long maskn, in words body)
+		raises(muidl::NoReply);	/* for impl convenience only */
+
+	/* adds and removes items from the per-client bloom filter. @mask is the
+	 * bits that these items should be de-/associated with.
+	 * (the porcelain never passes more than 1 bit set in @mask, but w/e.)
+	 */
+	void add_filter(in long mask, in words labels);
+	void rm_filter(in long mask, in words labels);
+};
+
+
+#endif
