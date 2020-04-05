@@ -2,7 +2,7 @@
 export CFGDIR:=$(abspath ../..)
 include $(CFGDIR)/config.mk
 
-IDL_FILES=sysmem.idl kmsg.idl info.idl proc.idl fs.idl
+IDL_FILES=sysmem.idl kmsg.idl info.idl proc.idl fs.idl msg.idl
 IDL_OBJS:=$(patsubst %.idl,%-common.o,$(IDL_FILES)) \
 	$(patsubst %.idl,%-client.o,$(IDL_FILES))
 
@@ -36,10 +36,11 @@ libsneks-systask.a: $(LIB_OBJS)
 	@ranlib $@
 
 
-crt1.o: crt1.c sysmem-defs.h kmsg-defs.h info-defs.h
-threads.o: threads.c proc-defs.h info-defs.h
-fileio.o: fileio.c fs-defs.h
-misc.o: misc.c proc-defs.h
+crt1.o: sysmem-defs.h kmsg-defs.h info-defs.h
+threads.o: proc-defs.h info-defs.h
+fileio.o: fs-defs.h
+misc.o: proc-defs.h
+msg.o: msg-defs.h info-defs.h
 
 
 # build things from mung as guests.

@@ -30,7 +30,6 @@ START_LOOP_TEST(listen_send_close, iter, 0, 1)
 	const bool filters = !!(iter & 1);
 	diag("filters=%s", btos(filters));
 	plan_tests(8);
-	todo_start("everything is unimplemented");
 
 	static _Atomic int counter;
 
@@ -154,7 +153,6 @@ static bool handler_which_calls_broadcast_fn(
 START_TEST(broadcast_from_handler)
 {
 	plan_tests(3);
-	todo_start("expected to fail");
 
 	int *status = malloc(sizeof *status);
 	*status = 0;
