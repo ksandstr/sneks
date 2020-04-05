@@ -47,6 +47,12 @@ struct rootfs_info {
 };
 
 
+/* FIXME: merge with abend_info, kmsg_info */
+struct sysapi_info {
+	L4X2::ThreadId sysmsg;
+};
+
+
 [StubPrefix(__info), IfaceLabel(0xe003)]
 interface Info: InfoMeta
 {
@@ -54,6 +60,7 @@ interface Info: InfoMeta
 	void abend_block(out abend_info block) raises(Posix::Errno);
 	void uapi_block(out uapi_info block) raises(Posix::Errno);
 	void rootfs_block(out rootfs_info block) raises(Posix::Errno);
+	void sysapi_block(out sysapi_info block) raises(Posix::Errno);
 };
 
 };

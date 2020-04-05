@@ -1705,6 +1705,10 @@ int main(void)
 	L4_ThreadId_t initrd_tid = mount_initrd();
 	put_sysinfo("rootfs:tid", 1, initrd_tid.raw);
 
+	L4_ThreadId_t sysmsg = spawn_systask_from_initrd(
+		"/initrd/lib/sneks-0.0p0/sysmsg", NULL);
+	put_sysinfo("sys:sysmsg:tid", 1, sysmsg.raw);
+
 	struct __sysinfo *sip = sip_mem;
 	*sip = (struct __sysinfo){
 		.magic = SNEKS_SYSINFO_MAGIC,

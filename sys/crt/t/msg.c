@@ -59,9 +59,7 @@ START_LOOP_TEST(listen_send_close, iter, 0, 1)
 	 * "another" around until it is.
 	 */
 	imply_ok1(!filters, counter == 2);
-	todo_start("borked");
 	imply_ok1(filters, counter == 1);
-	todo_end();
 	diag("counter=%d", counter);
 
 	n = sysmsg_close(handle);
@@ -121,7 +119,6 @@ static bool handler_which_calls_listen_fn(
 START_TEST(listen_from_handler)
 {
 	plan_tests(3);
-	todo_start("nope");
 
 	int *state = malloc(sizeof *state);
 	*state = 1;

@@ -3,6 +3,7 @@
 #define __SNEKS_BITOPS_H__
 
 #include <stdlib.h>
+#include <stdint.h>
 
 
 /* returns 31..0 */
@@ -16,6 +17,9 @@ static inline int size_to_shift(size_t sz) {
 	int msb = MSB(sz);
 	return (1 << msb) < sz ? msb + 1 : msb;
 }
+
+/* 32-bit comparison-to-mask conversion. zero -> 0, nonzero -> ~0. */
+#define MASK32(b) ((int32_t)((b) | -(b)) >> 31)
 
 
 #endif
