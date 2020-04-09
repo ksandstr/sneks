@@ -33,6 +33,25 @@
 #define SNEKS_PID_T_SHIFT 3
 
 
+/* process lifecycle notification using MSGB_PROCESS_LIFECYCLE (via
+ * <sneks/msg.h>).
+ *
+ * three things can be received notifications about. the first is process
+ * creation via fork(2), the second is process image replacement via the
+ * exec(2) family, and the third is process exit. the related message formats
+ * are as follows:
+ *   - fork: parent-pid, 0 | child-pid << 8
+ *   - exec: process-pid, 1
+ *   - exit: process-pid, 2 | signo << 8, waitstatus, exitcode
+ *
+ * note that process creation via spawn_NP(2) isn't signaled; rather, file
+ * descriptor duplication etc. happens explicitly.
+ */
+#define MPL_FORK 0	/* these are low 8 bits of body[1] */
+#define MPL_EXEC 1
+#define MPL_EXIT 2
+
+
 /* for passing file descriptors through spawn and exec: the first fdlist
  * item's address is given in the startup routine's stack pointer, or 0 if
  * there are none. in any given fd list, ->fd appears in descending order, so

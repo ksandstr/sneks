@@ -1,6 +1,6 @@
 
 /* header file wrt the sys/crt stuff for interfacing with sysmsg, i.e. the
- * process lifecycle notification facility.
+ * process lifecycle notification facility. also the bit reservations.
  */
 
 #ifndef __SNEKS_MSG_H__
@@ -8,6 +8,10 @@
 
 #include <stdbool.h>
 #include <l4/types.h>
+
+
+/* bits */
+#define MSGB_PROCESS_LIFECYCLE 0	/* see <sneks/process.h> */
 
 
 /* handlers should return true when the message was either disregarded or
