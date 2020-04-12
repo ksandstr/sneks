@@ -84,7 +84,6 @@ START_TEST(notify_fork_exit)
 		diag("loop completed (f=%d, x=%d, e=%d)",
 			st->n_fork, st->n_exec, st->n_exit);
 
-		todo_start("known not to work");
 		ok1(st->n_fork == 1);
 		ok1(st->n_exit == 2);
 		ok((st->exits[0] == st->children[0] && st->exits[1] == partner)

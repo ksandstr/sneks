@@ -25,11 +25,13 @@
 #include <ukernel/rangealloc.h>
 #include <sneks/hash.h>
 #include <sneks/mm.h>
+#include <sneks/msg.h>
 #include <sneks/process.h>
 
 #include "muidl.h"
 #include "vm-defs.h"
 #include "fs-defs.h"
+#include "msg-defs.h"
 #include "info-defs.h"
 #include "proc-defs.h"
 #include "root-uapi-defs.h"
@@ -415,7 +417,7 @@ void zombify(struct process *p)
 
 	L4_ThreadId_t waiter = L4_nilthread;
 	if(!L4_IsNilThread(p->wait_tid)) waiter = p->wait_tid;
-	else if((parent->flags & PF_WAIT_ANY) != 0) {
+	else if(parent->flags & PF_WAIT_ANY) {
 		size_t hash = int_hash(p->ppid);
 		struct htable_iter it;
 		bool more = false;
@@ -439,6 +441,18 @@ void zombify(struct process *p)
 			parent->flags &= ~PF_WAIT_ANY;
 			/* TODO: under !NDEBUG, check that there truly aren't any more. */
 		}
+	}
+
+	assert(!L4_IsNilThread(sysmsg_tid));
+	L4_Word_t msg[] = {
+		ra_ptr2id(ra_process, p),
+		MPL_EXIT | p->signo << 8, p->status, p->code,
+	};
+	bool dummy;
+	int n = __sysmsg_broadcast(sysmsg_tid, &dummy,
+		1 << MSGB_PROCESS_LIFECYCLE, 0, msg, ARRAY_SIZE(msg));
+	if(n != 0) {
+		printf("%s: Sysmsg::broadcast failed, n=%d\n", __func__, n);
 	}
 
 	if(!L4_IsNilThread(waiter)) {
@@ -1120,6 +1134,16 @@ static int uapi_fork(L4_Word_t *tid_raw_p, L4_Word_t sp, L4_Word_t ip)
 		/* FIXME: cleanup */
 		if(n > 0) return -EIO; else return n;
 	}
+
+	assert(!L4_IsNilThread(sysmsg_tid));
+	L4_Word_t msg[] = { pid, MPL_FORK | newpid << 8 };
+	bool dummy;
+	n = __sysmsg_broadcast(sysmsg_tid, &dummy,
+		1 << MSGB_PROCESS_LIFECYCLE, 0, msg, ARRAY_SIZE(msg));
+	if(n != 0) {
+		printf("root: warning: fork broadcast failed, n=%d\n", n);
+	}
+
 	void *utcb_loc;
 	L4_ThreadId_t start_tid = allocate_thread(newpid, &utcb_loc);
 	if(L4_IsNilThread(start_tid)) {

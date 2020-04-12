@@ -31,6 +31,7 @@ root: root.ld crt0.o main.o runtime.o thrd.o uapi.o sig.o mm.o ser_io.o \
 		rootserv-service.o root-uapi-service.o bootcon-service.o \
 		proc-common.o proc-client.o vm-common.o vm-client.o \
 		fs-common.o fs-client.o info-common.o info-client.o \
+		msg-common.o msg-client.o \
 		ccan-htable.o ccan-bitmap.o ccan-hash.o \
 		mung-rangealloc.o mung-slab.o \
 		lfht-epoch.o lfht-nbsl.o lfht-percpu.o
@@ -39,11 +40,11 @@ root: root.ld crt0.o main.o runtime.o thrd.o uapi.o sig.o mm.o ser_io.o \
 		$(filter %.o,$^) $(LIBS) -lsneks -ll4 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
-main.o: main.c sysmem-defs.h kmsg-defs.h rootserv-defs.h proc-defs.h \
-	bootcon-defs.h
-thrd.o: thrd.c proc-defs.h
-uapi.o: uapi.c root-uapi-defs.h proc-defs.h vm-defs.h fs-defs.h info-defs.h
-fsio.o: fsio.c fs-defs.h info-defs.h
+main.o: sysmem-defs.h kmsg-defs.h rootserv-defs.h proc-defs.h bootcon-defs.h
+thrd.o: proc-defs.h
+uapi.o: root-uapi-defs.h proc-defs.h vm-defs.h fs-defs.h info-defs.h \
+	msg-defs.h
+fsio.o: fs-defs.h info-defs.h
 
 
 test-initrd:

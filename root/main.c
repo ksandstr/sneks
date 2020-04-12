@@ -66,7 +66,7 @@ struct root_arg {
 static size_t hash_raw_word(const void *ptr, void *priv);
 
 L4_KernelInterfacePage_t *the_kip;
-L4_ThreadId_t vm_tid = { .raw = 0 };
+L4_ThreadId_t vm_tid = { .raw = 0 }, sysmsg_tid = { .raw = 0 };
 
 static L4_ThreadId_t sigma0_tid, sysmem_tid;
 static int sysmem_pages = 0, sysmem_self_pages = 0;
@@ -1705,9 +1705,9 @@ int main(void)
 	L4_ThreadId_t initrd_tid = mount_initrd();
 	put_sysinfo("rootfs:tid", 1, initrd_tid.raw);
 
-	L4_ThreadId_t sysmsg = spawn_systask_from_initrd(
+	sysmsg_tid = spawn_systask_from_initrd(
 		"/initrd/lib/sneks-0.0p0/sysmsg", NULL);
-	put_sysinfo("sys:sysmsg:tid", 1, sysmsg.raw);
+	put_sysinfo("sys:sysmsg:tid", 1, sysmsg_tid.raw);
 
 	struct __sysinfo *sip = sip_mem;
 	*sip = (struct __sysinfo){

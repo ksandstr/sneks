@@ -68,8 +68,9 @@ struct process
 extern void mm_enable_sysmem(L4_ThreadId_t sysmem_tid);
 
 
-/* from main.c. should be moved into mm.c, or boot.c, or some such. */
+/* from main.c . */
 
+extern L4_ThreadId_t vm_tid, sysmsg_tid;
 extern L4_KernelInterfacePage_t *the_kip;
 
 extern void send_phys_to_sysmem(
@@ -107,7 +108,6 @@ extern int root_uapi_kill(int pid, int sig);
 /* from uapi.c */
 
 extern L4_ThreadId_t uapi_tid;
-extern L4_ThreadId_t vm_tid;
 extern struct rangealloc *ra_process;
 
 #define IS_SYSTASK(pid) ((pid) >= SNEKS_MIN_SYSID)
