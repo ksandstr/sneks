@@ -14,7 +14,7 @@ OUTPUTS=systest initrd_spawn_partner initrd_systask_partner
 # FIXME: this will cause the %.c->%.o recipe to print full paths. hack the
 # build scripts until they present a nicer "  CC sys/foo/t/c11sumthing.c"
 # report so as to conceal teh ugly.
-TEST_SOURCE:=$(wildcard $(CFGDIR)/sys/*/t/*.c)
+TEST_SOURCE:=$(wildcard $(CFGDIR)/sys/*/t/*.c) $(wildcard $(CFGDIR)/root/t/*.c)
 TEST_OBJS:=$(TEST_SOURCE:%.c=%.o)
 
 vpath %.idl $(CFGDIR)/idl/api $(CFGDIR)/idl/sys
