@@ -9,6 +9,7 @@
 #include <signal.h>
 
 #include <l4/types.h>
+#include <l4/ipc.h>
 #include <l4/thread.h>
 #include <ukernel/rangealloc.h>
 #include <sneks/mm.h>
@@ -135,7 +136,7 @@ int root_uapi_kill(int pid, int sig)
 	struct process *p = get_process(pid);
 	if(p == NULL) return -ESRCH;
 
-	int sender_pid = pidof_NP(muidl_get_sender());
+	const int sender_pid = pidof_NP(muidl_get_sender());
 	struct process *sender = get_process(sender_pid);
 	/* TODO: also permit SIGCONT within session. */
 	if(!IS_SYSTASK(sender_pid)
@@ -148,7 +149,21 @@ int root_uapi_kill(int pid, int sig)
 		return -EPERM;
 	}
 
-	if(sig < 0 || sig >= 64) return -EINVAL;
+	if(sig < 0 || sig > 64) return -EINVAL;
+	if(sender_pid == pidof_NP(vm_tid)) {
+		/* reply vm's calls to Proc::kill early, because zombify() in
+		 * sig_send()'s call tree tries to do VM::erase, which cornflakes
+		 * things the fuck out.
+		 */
+		L4_LoadMR(0, 0);
+		L4_MsgTag_t tag = L4_Reply(muidl_get_sender());
+		if(L4_IpcSucceeded(tag)) muidl_raise_no_reply();
+		else {
+			printf("%s: early reply to vm failed, ec=%lu\n",
+				__func__, L4_ErrorCode());
+			return -EAGAIN;	/* try pie, try. */
+		}
+	}
 	if(sig != 0) sig_send(p, sig, pid == sender_pid);
 	return 0;
 }
