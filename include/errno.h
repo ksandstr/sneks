@@ -21,6 +21,7 @@
 #define EISDIR	21	/* is a directory */
 #define EINVAL	22	/* invalid value */
 #define ENOSYS	28	/* function not implemented */
+#define EDEADLK 35	/* resource deadlock would occur */
 
 
 extern int *__errno_location(void);
