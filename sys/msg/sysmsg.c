@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
-#include <threads.h>
 #include <errno.h>
 #include <assert.h>
 #include <ccan/darray/darray.h>
@@ -19,7 +18,6 @@
 
 #include <sneks/hash.h>
 #include <sneks/bitops.h>
-#include <sneks/thread.h>
 #include <sneks/process.h>
 #include <sneks/systask.h>
 
@@ -40,6 +38,9 @@ struct msgclient
 
 
 static size_t rehash_msgclient(const void *ptr, void *priv);
+static L4_MsgTag_t recursive_sysmsg_call(
+	L4_MsgTag_t tag, L4_ThreadId_t sender);
+static bool filter_pass(L4_Word_t *filter, int maskp, uint32_t hash);
 
 
 static darray(struct msgclient *) subs[32];
@@ -47,7 +48,6 @@ static struct htable client_ht = HTABLE_INITIALIZER(client_ht,
 	&rehash_msgclient, NULL);
 
 static L4_ThreadId_t main_tid;
-static thrd_t assist_thrd;
 static L4_Word_t filter_salt[ARRAY_SIZE(subs)];
 
 
@@ -149,6 +149,14 @@ static int send_to_client(
 	L4_LoadMRs(2, body_len, body);
 	L4_Accept(L4_UntypedWordsAcceptor);
 	tag = L4_Call(c->recv_tid);
+	while(L4_IpcSucceeded(tag) && L4_Label(tag) == 0xe007) {
+		tag = recursive_sysmsg_call(tag, c->recv_tid);
+	}
+	/* this may cause funny behaviour in that an IPC failure in a Sysmsg call
+	 * from within a handler may cause the outer handler call to fail also,
+	 * which may in turn cause handler replies to appear in the muidl dispatch
+	 * loop.
+	 */
 	if(L4_IpcFailed(tag)) return -(int)L4_ErrorCode();
 
 	assert(L4_UntypedWords(tag) == 1);
@@ -202,27 +210,21 @@ static bool impl_broadcast(
 		receivers = temp.item;
 	}
 
-	bool ret = n_receivers == 0;
-	if(n_receivers > 0) {
-		/* pass it off to the assistant. */
-		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = body_len + 4 }.raw);
-		L4_LoadMRs(1, body_len, body);
-		L4_LoadMR(body_len + 1, muidl_get_sender().raw);
-		L4_LoadMR(body_len + 2, maskp);
-		L4_LoadMR(body_len + 3, n_receivers);
-		L4_LoadMR(body_len + 4, (L4_Word_t)receivers);
-		L4_Accept(L4_UntypedWordsAcceptor);
-		L4_MsgTag_t tag = L4_Lcall(thrd_to_tid(assist_thrd));
-		if(L4_IpcFailed(tag)) {
-			printf("sysmsg: assist hand-off failed, ec=%lu\n", L4_ErrorCode());
-		} else {
-			/* assistant replies. */
-			muidl_raise_no_reply();
+	bool immediate = true;
+	uint32_t hash = int_hash(body[0]);
+	for(int i=0; i < n_receivers; i++) {
+		assert(i < 1 || receivers[i - 1] != receivers[i]);
+		if(!filter_pass(receivers[i]->filter, maskp, hash)) continue;
+		int n = send_to_client(receivers[i], maskp, body, body_len);
+		if(n == 1) immediate = false;
+		else if(n < 0) {
+			printf("sysmsg: couldn't send to pid=%d, n=%d\n",
+				pidof_NP(receivers[i]->recv_tid), n);
 		}
 	}
 
 	darray_free(temp);
-	return ret;
+	return immediate;
 }
 
 
@@ -423,70 +425,63 @@ static void impl_rm_filter(
 }
 
 
-static int assist_fn(void *param_ptr)
+static L4_MsgTag_t recursive_sysmsg_call(
+	L4_MsgTag_t tag, L4_ThreadId_t sender)
 {
-	for(;;) {
-		L4_Accept(L4_UntypedWordsAcceptor);
-		L4_MsgTag_t tag = L4_Receive(main_tid);
-		assert(tag.X.u > 0 && tag.X.t == 0);
+	L4_ThreadId_t dummy;
+	int err;
 
-		L4_ThreadId_t client;
-		L4_Word_t maskp, n_receivers, recptr;
-		int body_len = tag.X.u - 4;
-		L4_StoreMR(tag.X.u - 3, &client.raw);
-		L4_StoreMR(tag.X.u - 2, &maskp);
-		L4_StoreMR(tag.X.u - 1, &n_receivers);
-		L4_StoreMR(tag.X.u, &recptr);
-		bool immediate = true;
-		struct msgclient *recs_local[64];
-		struct msgclient **recs = n_receivers <= ARRAY_SIZE(recs_local)
-			? recs_local : malloc(sizeof *recs * n_receivers);
-		if(recs == NULL) {
-			fprintf(stderr, "sysmsg: can't allocate receiver array?\n");
-			/* and discards the message. oof */
-		} else {
-			L4_Word_t body[60];
-			assert(body_len <= ARRAY_SIZE(body));
-			L4_StoreMRs(1, body_len, body);
-
-			/* copy receivers and return ownership */
-			assert(recptr != (L4_Word_t)NULL);
-			memcpy(recs, (void *)recptr, sizeof *recs * n_receivers);
+	assert(L4_Label(tag) == 0xe007);
+	L4_Word_t oplabel; L4_StoreMR(1, &oplabel);
+	switch(oplabel) {
+		case 1: /* setmask */ {
+			L4_Word_t or, and;
+			L4_StoreMR(1, &or);
+			L4_StoreMR(2, &and);
+			int oldmask = impl_setmask(or, and);
+			L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+			L4_LoadMR(1, oldmask);
+			break;
+		}
+		case 2: /* broadcast */
+			/* (this cannot be implemented recursively without pushing an
+			 * "EAGAIN" condition down to the caller; however, there's no
+			 * clear way for a caller to respond to that, so we forbid
+			 * recursive broadcasts outright.)
+			 */
+			err = EAGAIN;
+			goto error;
+		case 3: /* add_filter */
+		case 4: /* rm_filter */
+		{
+			/* single inline-encoded sequence, so length is tag.X.u - 2. (it
+			 * even consumes at most six bits, twee shit)
+			 */
+			int n_labels = L4_UntypedWords(tag) - 2;
+			L4_Word_t mask, labels[60];
+			L4_StoreMR(2, &mask);
+			L4_StoreMRs(3, n_labels, labels);
+			if(oplabel == 3) impl_add_filter(mask, labels, n_labels);
+			else impl_rm_filter(mask, labels, n_labels);
 			L4_LoadMR(0, 0);
-			tag = L4_Reply(main_tid);
-			assert(L4_IpcSucceeded(tag));
-
-			uint32_t hash = int_hash(body[0]);
-			for(int i=0; i < n_receivers; i++) {
-				assert(i < 1 || recs[i - 1] != recs[i]);
-				/* TODO: should do filter checks in impl_broadcast() already;
-				 * in fact, instead of the receiver array we should pass an
-				 * array of thread IDs.
-				 */
-				if(!filter_pass(recs[i]->filter, maskp, hash)) continue;
-				int n = send_to_client(recs[i], maskp, body, body_len);
-				if(n == 1) immediate = false;
-				else if(n < 0) {
-					printf("sysmsg: couldn't send to pid=%d, n=%d\n",
-						pidof_NP(recs[i]->recv_tid), n);
-				}
-			}
-
-			if(recs != recs_local) free(recs);
+			break;
 		}
-
-		tag = (L4_MsgTag_t){ .X.u = 1 };
-		L4_Set_Propagation(&tag);
-		L4_Set_VirtualSender(main_tid);
-		L4_LoadMR(0, tag.raw);
-		L4_LoadMR(1, immediate ? 1 : 0);
-		tag = L4_Reply(client);
-		if(L4_IpcFailed(tag)) {
-			printf("sysmsg: reply to client=%#lx failed, ec=%lu\n",
-				client.raw, L4_ErrorCode());
-			/* nothing can be done */
-		}
+		default:
+			printf("sysmsg: weird recursive tag=%#lx\n", tag.raw);
+			err = ENOSYS;
+			goto error;
 	}
+
+reply:
+	/* "ReplyReceive" */
+	L4_Accept(L4_UntypedWordsAcceptor);
+	return L4_Ipc(sender, sender,
+		L4_Timeouts(L4_ZeroTime, L4_Never), &dummy);
+
+error:
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 1, .X.u = 1 }.raw);
+	L4_LoadMR(1, err);
+	goto reply;
 }
 
 
@@ -504,12 +499,6 @@ int main(void)
 	for(int i=0; i < ARRAY_SIZE(filter_salt); i++) {
 		salt = siphash_2_4(&salt, sizeof salt, t_key);
 		filter_salt[i] = salt;
-	}
-
-	int n = thrd_create(&assist_thrd, &assist_fn, NULL);
-	if(n != thrd_success) {
-		fprintf(stderr, "sysmsg: thrd_create failed, n=%d", n);
-		abort();
 	}
 
 	static const struct sysmsg_vtable vtab = {

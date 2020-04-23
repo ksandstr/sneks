@@ -21,7 +21,8 @@ interface Sysmsg
 	 * acknowledgments should be sent. if they are not propagated, the
 	 * apparent sender ID should be used instead.
 	 */
-	long setmask(in long or, in long and);
+	[Label(0x0001)]
+	long setmask([MR(2)] in long or, [MR(3)] in long and);
 
 	/* sends a broadcast message of up to 60 words to all registered systasks
 	 * whose mask contains one or more of what's set in @maskp, but none of
@@ -37,6 +38,7 @@ interface Sysmsg
 	 * pops -EDEADLK; use that, not the raw call.
 	 */
 	typedef sequence<L4X2::word, 60> words;
+	[Label(0x0002)]
 	boolean broadcast(in long maskp, in long maskn, in words body)
 		raises(muidl::NoReply);	/* for impl convenience only */
 
@@ -44,8 +46,10 @@ interface Sysmsg
 	 * bits that these items should be de-/associated with.
 	 * (the porcelain never passes more than 1 bit set in @mask, but w/e.)
 	 */
-	void add_filter(in long mask, in words labels);
-	void rm_filter(in long mask, in words labels);
+	[Label(0x0003)]
+	void add_filter([MR(2)] in long mask, in words labels);
+	[Label(0x0004)]
+	void rm_filter([MR(2)] in long mask, in words labels);
 };
 
 
