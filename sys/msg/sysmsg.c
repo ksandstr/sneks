@@ -32,7 +32,7 @@
 struct msgclient
 {
 	L4_ThreadId_t recv_tid;
-	int subs_mask;
+	int subs_mask, n_filters;
 	L4_Word_t *filter;	/* 4-bit counting 3-hash bloom filter */
 };
 
@@ -287,7 +287,7 @@ static bool filter_query(L4_Word_t *filter, const int slots[static 3])
 	for(int i=0; i < 3; i++) {
 		int limb = slots[i] / SLOTS_PER_LIMB,
 			offs = (slots[i] % SLOTS_PER_LIMB) * 4;
-		ret &= !(filter[limb] & (0xf << offs));
+		ret &= !!(filter[limb] & (0xf << offs));
 	}
 	return ret;
 }
@@ -380,6 +380,7 @@ static void impl_add_filter(
 	struct msgclient *c = get_client(muidl_get_sender());
 	if(c == NULL) return;	/* do setmask first plz */
 	if(c->filter == NULL) {
+		assert(c->n_filters == 0);
 		c->filter = calloc(FILTER_SIZE, sizeof *c->filter);
 		if(c->filter == NULL) {
 			fprintf(stderr, "can't allocate client filter!\n");
@@ -401,6 +402,7 @@ static void impl_add_filter(
 			for(int j=0; j < 3; j++) filter_inc(c->filter, slots[j]);
 		}
 	}
+	c->n_filters += n_labels * __builtin_popcount(mask);
 }
 
 
@@ -410,6 +412,7 @@ static void impl_rm_filter(
 	struct msgclient *c = get_client(muidl_get_sender());
 	if(c == NULL || c->filter == NULL) return;
 
+	int removed = 0;
 	for(int i=0; i < n_labels; i++) {
 		uint32_t hash = int_hash(labels[i]);
 		for(int acc = mask, bit = ffsl(acc) - 1;
@@ -420,7 +423,14 @@ static void impl_rm_filter(
 			get_slots(slots, hash ^ filter_salt[bit]);
 			if(!filter_query(c->filter, slots)) continue;
 			for(int j=0; j < 3; j++) filter_dec(c->filter, slots[j]);
+			removed++;
 		}
+	}
+	assert(removed <= c->n_filters);
+	c->n_filters -= removed;
+	if(c->n_filters == 0) {
+		free(c->filter);
+		c->filter = NULL;
 	}
 }
 

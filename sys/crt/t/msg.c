@@ -40,7 +40,7 @@ START_LOOP_TEST(listen_send_close, iter, 0, 1)
 		diag("handle=%d", handle);
 	}
 
-	L4_Word_t body = 0xfadedbee;
+	const L4_Word_t body = 0xfadedbee;
 
 	skip_start(!filters, 1, "filters not used") {
 		int n = sysmsg_add_filter(handle, &body, 1);
@@ -61,14 +61,15 @@ START_LOOP_TEST(listen_send_close, iter, 0, 1)
 	imply_ok1(filters, counter == 1);
 	diag("counter=%d", counter);
 
+	if(filters) sysmsg_rm_filter(handle, &body, 1);
 	n = sysmsg_close(handle);
 	if(!ok(n == 0, "close")) {
 		diag("n=%d", n);
 	}
 
 	int oldcounter = atomic_load(&counter);
-	body = 0xf00dfeed;
-	n = sysmsg_broadcast(TEST_BIT, 0, &body, 1);
+	L4_Word_t body2 = 0xf00dfeed;
+	n = sysmsg_broadcast(TEST_BIT, 0, &body2, 1);
 	if(!ok(n == 0 && atomic_load(&counter) == oldcounter,
 		"broadcast after close had no effect"))
 	{
