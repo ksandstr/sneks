@@ -39,7 +39,7 @@ typedef void (*handler_bottom_fn)(void);
 static void *sig_delivery_page = NULL;
 static uint64_t ign_set = 0, dfl_set = ~0ull, block_set = 0;
 static struct sigaction sig_actions[64];
-static bool recv_break_ok = false;
+static _Atomic bool recv_break_flag = false;
 
 /* process-wide signal queue.
  *
@@ -60,17 +60,17 @@ static ucontext_t *signal_uctx = NULL;
 
 void __permit_recv_interrupt(void)
 {
-	assert(!recv_break_ok);
-	recv_break_ok = true;
-	atomic_signal_fence(memory_order_acq_rel);
+	bool old = atomic_exchange_explicit(&recv_break_flag, true,
+		memory_order_acq_rel);
+	assert(!old);
 }
 
 
 void __forbid_recv_interrupt(void)
 {
-	assert(recv_break_ok);
-	recv_break_ok = false;
-	atomic_signal_fence(memory_order_acq_rel);
+	bool old = atomic_exchange_explicit(&recv_break_flag, false,
+		memory_order_acq_rel);
+	assert(old);
 }
 
 
@@ -177,6 +177,10 @@ static int queue_signals(uint64_t sigs)
 void __sig_bottom(void)
 {
 	extern void __invoke_sig_slow(), __invoke_sig_fast();
+
+	const bool recv_break_ok = atomic_exchange_explicit(
+		&recv_break_flag, false, memory_order_relaxed);
+
 #if 0
 	printf("%s: called in tid=%lu:%lu!\n", __func__,
 		L4_ThreadNo(L4_MyGlobalId()), L4_Version(L4_MyGlobalId()));
@@ -191,7 +195,7 @@ void __sig_bottom(void)
 	if(n != 0) {
 		printf("%s: Proc::sigset failed, n=%d\n", __func__, n);
 		/* spin */
-		goto end;
+		goto noinvoke;
 	}
 	assert((pending & ign_set) == 0);
 	assert((pending & dfl_set) == 0);
@@ -224,7 +228,7 @@ void __sig_bottom(void)
 				(unsigned long)pending, n);
 		}
 	}
-	if(sig == 0) goto end;
+	if(sig == 0) goto noinvoke;
 
 	int inner;
 	const bool in_main = L4_SameThreads(L4_Myself(), __main_tid);
@@ -236,7 +240,7 @@ void __sig_bottom(void)
 		 */
 		assert(call == 0);
 		inner = atomic_exchange_explicit(&n_calls, 0, memory_order_relaxed);
-		__invoke_sig_sync(sig + 1);
+		__invoke_sig_sync((sig + 1) | (recv_break_ok ? 1 : 0) << 8);
 		if(inner > 1) __sig_bottom();
 	} else {
 		/* H to halt the thread;
@@ -262,7 +266,10 @@ void __sig_bottom(void)
 		L4_Word_t *sp = (void *)sp_out;
 		*(--sp) = ip_out;	/* return address */
 		*(--sp) = flags_out;
-		*(--sp) = sig + 1;	/* POSIX signal number */
+		/* parameter is a POSIX signal number, and the recv_break_flag value
+		 * that __sig_invoke() should restore.
+		 */
+		*(--sp) = (sig + 1) | (recv_break_ok ? 1 : 0) << 8;
 		L4_Word_t new_ip;
 		if((~ctl_out & 0x004) || ((ctl_out & 0x002) && !recv_break_ok)) {
 			/* in non-breakable receive phase, or no IPC at all. do the slow
@@ -299,6 +306,15 @@ end:
 		inner = atomic_exchange_explicit(&n_calls, 0, memory_order_relaxed);
 		if(inner > 1) __sig_bottom();
 	}
+	return;
+
+noinvoke:
+	/* undo the recv_break_depth change, since __sig_invoke won't be doing it
+	 * for us now.
+	 */
+	atomic_store_explicit(&recv_break_flag, recv_break_ok,
+		memory_order_relaxed);
+	goto end;
 }
 
 
@@ -416,6 +432,9 @@ Enosys:
  */
 void __attribute__((regparm(3))) __sig_invoke(int sig, ucontext_t *uctx)
 {
+	/* (of course we're squeezing other things through there.) */
+	const bool recv_break_ok = !!(sig & 0x100);
+	sig &= 0xff;
 	assert(sig > 0);
 
 	/* set signal_uctx so that the first __sig_invoke() re-/sets it and
@@ -494,6 +513,10 @@ void __attribute__((regparm(3))) __sig_invoke(int sig, ucontext_t *uctx)
 		atomic_compare_exchange_strong_explicit(&signal_uctx, &oldctx, NULL,
 			memory_order_relaxed, memory_order_relaxed);
 	}
+
+	int old = atomic_exchange_explicit(&recv_break_flag,
+		recv_break_ok, memory_order_relaxed);
+	assert(old == 0);
 }
 
 

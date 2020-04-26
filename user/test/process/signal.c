@@ -1008,7 +1008,6 @@ START_LOOP_TEST(forbid_recv_interrupt_in_handler, iter, 0, 1)
 	const bool do_permit = !!(iter & 1);
 	diag("do_permit=%s", btos(do_permit));
 	plan_tests(7);
-	todo_start("expected broken");
 
 	struct sigaction act = { .sa_handler = &recv_sleeping_handler_fn };
 	int n = sigaction(SIGUSR1, &act, NULL);
