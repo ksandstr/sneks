@@ -229,8 +229,11 @@ extern void close_no_plan(void);	/* for harness.c impls */
  * status is 255, propagates bail-out by exit(255)'ing.
  */
 #define fork_subtest_join(_child) ({ \
-		int __st, __dead = waitpid((_child), &__st, 0); \
-		fail_unless(__dead == (_child)); \
+		int __st, __dead, __c = (_child); \
+		do { \
+			__dead = waitpid(__c, &__st, 0); \
+		} while(__dead < 0 && errno == EINTR); \
+		fail_unless(__dead == __c); \
 		if(WIFEXITED(__st) && WEXITSTATUS(__st) == 255) { \
 			exit(255); \
 		} \
@@ -242,11 +245,14 @@ extern void close_no_plan(void);	/* for harness.c impls */
  * fork_subtest_join().
  */
 #define fork_subtest_ok1(_child) ({ \
-		int __st, __dead = waitpid((_child), &__st, 0); \
+		int __st, __dead, __c = (_child); \
+		do { \
+			__dead = waitpid(__c, &__st, 0); \
+		} while(__dead < 0 && errno == EINTR); \
 		if(WIFEXITED(__st) && WEXITSTATUS(__st) == 255) { \
 			exit(255); \
 		} \
-		ok(__dead == (_child) \
+		ok(__dead == __c \
 			&& WIFEXITED(__st) && WEXITSTATUS(__st) == 0, \
 			"unknown subtest"); 	/* press f to pay respects */ \
 	})
