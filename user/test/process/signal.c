@@ -3,11 +3,10 @@
  *   - portable interface: sigaction, kill, sigsuspend, sigprocmask, etc.
  *   - handler semantics: preservation of state (errno, L4.X2 vregs, etc.),
  *     longjmp and ucontext interactions, etc.
- *   - etc.
+ *   - semantics of forbid/permit signals interrupting receive-wait IPC.
+ *   - (etc.)
  *   - BUT NOT tests on preservation of signal handling state (procmask,
  *     handlers, etc.) across fork().
- *
- * TODO: there may be a few of the latter in here. move them out.
  */
 
 #include <stdbool.h>
@@ -977,3 +976,95 @@ START_LOOP_TEST(squashing, iter, 0, 7)
 END_TEST
 
 DECLARE_TEST("process:signal", squashing);
+
+
+#ifdef __l4x2__
+static _Atomic int recv_sleeping_err;
+
+static void recv_sleeping_handler_fn(int sig)
+{
+	L4_ThreadId_t dummy;
+	L4_MsgTag_t tag = L4_Ipc(L4_nilthread, L4_MyLocalId(),
+		L4_Timeouts(L4_ZeroTime, L4_TimePeriod(20 * 1000)), &dummy);
+	atomic_store(&recv_sleeping_err,
+		L4_IpcSucceeded(tag) ? 0 : L4_ErrorCode());
+}
+#endif
+
+
+/* L4.X2 only: whether the signal handler for an interrupted receive phase,
+ * such as due to __{permit,forbid}_recv_interrupt(), forbids receive
+ * interrupts until re-enabled within handler context. (it should.)
+ */
+START_LOOP_TEST(forbid_recv_interrupt_in_handler, iter, 0, 1)
+{
+#ifndef __l4x2__
+	plan_skip_all("not applicable outside L4.X2 (iter=%d)", iter);
+#else
+	/* FIXME: declare these in a header that's accessible */
+	extern void __forbid_recv_interrupt(void);
+	extern void __permit_recv_interrupt(void);
+
+	const bool do_permit = !!(iter & 1);
+	diag("do_permit=%s", btos(do_permit));
+	plan_tests(7);
+	todo_start("expected broken");
+
+	struct sigaction act = { .sa_handler = &recv_sleeping_handler_fn };
+	int n = sigaction(SIGUSR1, &act, NULL);
+	if(!ok(n == 0, "sigaction[USR1]")) diag("n=%d, errno=%d", n, errno);
+	struct sigaction off = { .sa_handler = &ignore_signal };
+	n = sigaction(SIGUSR2, &off, NULL);
+	if(!ok(n == 0, "sigaction[USR2]")) diag("n=%d, errno=%d", n, errno);
+
+	atomic_store(&recv_sleeping_err, 0);
+
+	int parent = getpid();
+	L4_ThreadId_t parent_tid = L4_Myself(), child_tid;
+	int child = fork_subtest_start("signal sender") {
+		plan_tests(6);
+
+		L4_LoadMR(0, 0);
+		L4_MsgTag_t tag = L4_Send(parent_tid);
+		ok(L4_IpcSucceeded(tag), "parent introduction");
+
+		/* sync to atomically put parent in receive stage */
+		L4_Accept(L4_UntypedWordsAcceptor);
+		tag = L4_Receive_Timeout(parent_tid, L4_TimePeriod(20 * 1000));
+		ok(L4_IpcSucceeded(tag), "parent synced");
+		int n = kill(parent, SIGUSR1);
+		if(!ok(n == 0, "kill[USR1]")) diag("errno=%d", errno);
+
+		usleep(8 * 1000);	/* slightly weaker a sync */
+		n = kill(parent, SIGUSR2);
+		if(!ok(n == 0, "kill[USR2]")) diag("errno=%d", errno);
+
+		L4_LoadMR(0, 0);
+		tag = L4_Reply(parent_tid);
+		L4_Word_t ec = L4_IpcFailed(tag) ? L4_ErrorCode() : 0;
+		imply_ok1(do_permit, ec == 2);
+		imply_ok1(!do_permit, ec == 0);
+		diag("ec=%lu", ec);
+	} fork_subtest_end;
+
+	L4_Accept(L4_UntypedWordsAcceptor);
+	L4_MsgTag_t tag = L4_Wait(&child_tid);
+	ok(L4_IpcSucceeded(tag) && pidof_NP(child_tid) == child,
+		"got helper tid");
+
+	if(do_permit) __permit_recv_interrupt();
+	L4_LoadMR(0, 0);
+	tag = L4_Call(child_tid);
+	if(do_permit) __forbid_recv_interrupt();
+	iff_ok1(!do_permit, L4_IpcSucceeded(tag));
+	imply_ok1(do_permit, L4_ErrorCode() == 7);
+	diag("fail=%s, ec=%lu", btos(L4_IpcFailed(tag)), L4_ErrorCode());
+	fork_subtest_ok1(child);
+	if(!ok(recv_sleeping_err == 3, "signal handler's receive timed out")) {
+		diag("recv_sleeping_err=%d", recv_sleeping_err);
+	}
+#endif
+}
+END_TEST
+
+DECLARE_TEST("process:signal", forbid_recv_interrupt_in_handler);
