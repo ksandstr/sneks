@@ -35,12 +35,14 @@ harness.o: proc-defs.h
 
 # FIXME: this is also a bit fugly.
 $(CFGDIR)/sys/sysmem/t/flags.o: sysmem-defs.h
+$(CFGDIR)/sys/crt/t/idlrollback.o: io-defs.h
 
 
 systest: $(LDSCRIPT) systest.o harness.o $(TEST_OBJS) \
 		ccan-opt.a ccan-talloc.o \
 		proc-common.o proc-client.o \
-		sysmem-common.o sysmem-client.o
+		sysmem-common.o sysmem-client.o \
+		io-common.o io-service.o io-client.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T $(LDSCRIPT) \
 		$(filter %.o,$^) $(filter %.a,$^) $(LIBS) \
