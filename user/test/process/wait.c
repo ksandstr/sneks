@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <setjmp.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 
 #include <sneks/test.h>
@@ -182,3 +183,75 @@ START_LOOP_TEST(catch_or_ignore_aborting_child, iter, 0, 3)
 END_TEST
 
 DECLARE_TEST("process:wait", catch_or_ignore_aborting_child);
+
+
+static void nothing_fn(int signo) {
+	/* 'naff */
+}
+
+
+/* test whether waitpid(2) is idempotent when interrupted.
+ *
+ * specifically this is intended to hit the L4.X2 foible where an IPC "call"
+ * can be interrupted, or time out, while its receive half is waiting on the
+ * server. if this happens the server must roll back (or not complete lazily)
+ * side effects of that call.
+ *
+ * for Proc::wait, we mean to provoke the case where the sleeper child's exit
+ * causes a reply to a sleeping waiter, which fails, and so the zombie-reaping
+ * should not occur. we observe this by a subsequent waitpid(2) succeeding,
+ * where it'd pop ECHILD if the effect occurred unannounced.
+ *
+ * variables:
+ *   - [slow_exit] sleeper sleeps for an additional 15ms between sigsuspend
+ *     and exit.
+ */
+START_LOOP_TEST(lost_waitpid_on_interrupt, iter, 0, 1)
+{
+	const bool slow_exit = !!(iter & 1);
+	diag("slow_exit=%s", btos(slow_exit));
+	plan_tests(5);
+
+	sigset_t olds, usr1;
+	sigemptyset(&usr1);
+	sigaddset(&usr1, SIGUSR1);
+	int n = sigprocmask(SIG_BLOCK, &usr1, &olds);
+	fail_unless(n == 0, "sigprocmask n=%d, errno=%d", n, errno);
+
+	struct sigaction act = { .sa_handler = &nothing_fn };
+	n = sigaction(SIGUSR1, &act, NULL);
+	if(!ok(n == 0, "sigaction")) diag("errno=%d", errno);
+
+	int parent = getpid();
+	int sleeper = fork_subtest_start("sleeping child") {
+		plan(1);
+		n = sigsuspend(&olds);
+		ok(n == -1 && errno == EINTR, "sigsuspend");
+		if(slow_exit) usleep(15 * 1000);
+	} fork_subtest_end;
+
+	int interloper = fork_subtest_start("interloper") {
+		plan(1);
+		usleep(8 * 1000);
+		n = kill(parent, SIGUSR1);
+		ok(n == 0, "kill(parent, SIGUSR1)");
+	} fork_subtest_end;
+
+	n = sigprocmask(SIG_SETMASK, &olds, NULL);
+	fail_unless(n == 0, "sigprocmask n=%d, errno=%d", n, errno);
+	int st;
+	n = waitpid(sleeper, &st, 0);
+	if(!ok1(n < 0 && errno == EINTR)) {
+		diag("waitpid: n=%d, errno=%d", n, errno);
+	}
+
+	n = kill(sleeper, SIGUSR1);
+	ok(n == 0, "kill sleeper");
+	usleep(8 * 1000);
+
+	fork_subtest_ok1(sleeper);
+	fork_subtest_ok1(interloper);
+}
+END_TEST
+
+DECLARE_TEST("process:wait", lost_waitpid_on_interrupt);

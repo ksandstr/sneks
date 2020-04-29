@@ -153,9 +153,11 @@ int waitid(idtype_t idtype, id_t id, siginfo_t *si, int options)
 {
 	siginfo_t dummy;
 	if(si == NULL) si = &dummy;
+	__permit_recv_interrupt();
 	int n = __proc_wait(__the_sysinfo->api.proc,
 		&si->si_pid, &si->si_uid, &si->si_signo,
 		&si->si_status, &si->si_code,
 		idtype, id, options);
+	__forbid_recv_interrupt();
 	return NTOERR(n);
 }
