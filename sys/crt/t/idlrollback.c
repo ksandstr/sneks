@@ -109,7 +109,6 @@ START_LOOP_TEST(broken_write, iter, 0, 1)
 	const bool do_cancel = !!(iter & 1);
 	diag("do_cancel=%s", btos(do_cancel));
 	plan_tests(8);
-	todo_start("nope");
 
 	thrd_t iolimit;
 	int n = thrd_create(&iolimit, &iolimit_fn, (void *)20);
