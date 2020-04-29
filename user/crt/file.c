@@ -2,10 +2,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <assert.h>
 #include <unistd.h>
+#include <errno.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/array_size/array_size.h>
+#include <ccan/likely/likely.h>
 #include <sneks/process.h>
 
 #include <l4/types.h>
@@ -16,6 +19,45 @@
 /* NOTE: statically allocated when max_valid_fd < 8. */
 struct __sneks_file *__files = NULL;
 int __max_valid_fd = -1;	/* valid as in memory, not IS_FD_VALID() */
+
+int __l4_last_errorcode = 0;	/* TODO: TSS this up */
+
+
+int __idl2errno(int n, ...)
+{
+	__l4_last_errorcode = n;
+	if(likely(n == 0)) {
+		va_list al; va_start(al, n);
+		int ret = va_arg(al, int);
+		va_end(al);
+		return ret;
+	} else if(n < 0) {
+		errno = -n;
+		return -1;
+	} else {
+		n >>= 1;	/* skip recv/send side. */
+		/* NOTE: some of these will deviate from the semantics of the syscall
+		 * wrappers they'll be used in. adjust them to rarer errno values as
+		 * that happens.
+		 */
+		static const int l4_to_errno[] = {
+			/* codes where partner wasn't involved yet, so signaled only to
+			 * current thread.
+			 */
+			[0] = 0,
+			[1] = ETIMEDOUT,	/* timed out */
+			[2] = ESRCH,		/* non-existing partner */
+			[3] = EINTR,		/* canceled by other thread (w/ exregs) */
+			/* codes signaled to current thread and partner both. */
+			[4] = EOVERFLOW,	/* message overflow (no strxfer buffers) */
+			[5] = ETIMEDOUT,	/* timed out during xfer fault in own space */
+			[6] = ETIMEDOUT,	/* same, in partner's space */
+			[7] = EINTR,		/* aborted during strxfer (w/ exregs) */
+		};
+		errno = n < ARRAY_SIZE(l4_to_errno) ? l4_to_errno[n] : EIO;
+		return -1;
+	}
+}
 
 
 /* this isn't as much cold as init-only. */

@@ -21,7 +21,10 @@
 #define EISDIR	21	/* is a directory */
 #define EINVAL	22	/* invalid value */
 #define ENOSYS	28	/* function not implemented */
+#define EPIPE	32	/* broken pipe */
 #define EDEADLK 35	/* resource deadlock would occur */
+#define EOVERFLOW 75	/* value too large for defined data type */
+#define ETIMEDOUT 110	/* connection timed out */
 
 
 extern int *__errno_location(void);

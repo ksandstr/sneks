@@ -22,6 +22,18 @@ struct __sneks_file {
 };
 
 
+/* turns a muidl "positive for L4 ErrorCode values, negative for errno, zero
+ * for success" style result into a written errno and a {0, -1} return value.
+ * @n is stored in __l4_last_errorcode. the NTOERR() macro can be used to
+ * avoid the double underscore, and to return a different positive value
+ * instead of 0 (the second parameter).
+ */
+extern int __idl2errno(int n, ...);
+#define NTOERR(...) __idl2errno(__VA_ARGS__, 0)
+
+extern int __l4_last_errorcode;
+
+
 #define IS_FD_VALID(fd) !L4_IsNilThread(__files[(fd)].service)
 #define FD_SERVICE(fd) __files[(fd)].service
 #define FD_COOKIE(fd) __files[(fd)].cookie

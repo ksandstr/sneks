@@ -58,15 +58,6 @@ __uid_t geteuid(void) {
 }
 
 
-static int NTOERR(int n) {
-	if(n == 0) return 0;
-	else {
-		errno = n > 0 ? EIO : -n;
-		return -1;
-	}
-}
-
-
 int setuid(__uid_t uid) {
 	int n = __proc_setresugid(__the_sysinfo->api.proc,
 		1, uid, -1, -1, -1, -1, -1);

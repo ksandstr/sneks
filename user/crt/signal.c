@@ -100,31 +100,23 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *oldset)
 
 	sigset_t foo = 0;
 	if(oldset == NULL) oldset = &foo;
+
 	int n = __proc_sigset(__the_sysinfo->api.proc, oldset, 2, or, and);
-	if(n != 0) {
-		errno = n < 0 ? -n : EIO;	/* TODO: translate properly! */
-		return -1;
+	if(n == 0) {
+		if(how == SIG_UNBLOCK || how == SIG_SETMASK) {
+			atomic_signal_fence(memory_order_acq_rel);
+			__sig_bottom();
+		}
 	}
 
-	if(how == SIG_UNBLOCK || how == SIG_SETMASK) {
-		atomic_signal_fence(memory_order_acq_rel);
-		__sig_bottom();
-	}
-
-	return 0;
+	return NTOERR(n);
 }
 
 
 int sigpending(sigset_t *set)
 {
 	int n = __proc_sigset(__the_sysinfo->api.proc, set, 3, 0, ~0ull);
-	if(n != 0) {
-		/* TODO: translate properly */
-		errno = n > 0 ? EIO : -n;
-		return -1;
-	}
-
-	return 0;
+	return NTOERR(n);
 }
 
 
@@ -134,17 +126,11 @@ int sigsuspend(const sigset_t *mask)
 	uint16_t sig;
 	int n = __proc_sigsuspend(__the_sysinfo->api.proc, &sig, *mask);
 	__forbid_recv_interrupt();
-	if(n == 0) {
+	if(n != 0) return NTOERR(n);
+	else {
 		/* got one signal immediately. */
 		__invoke_sig_sync(sig);
 		errno = EINTR;
-		return -1;
-	} else if(n == 6 || n == 7) {
-		/* canceled (send or receive phase) */
-		errno = EINTR;
-		return -1;
-	} else {
-		errno = n > 0 ? EIO : -n;
 		return -1;
 	}
 }

@@ -10,6 +10,7 @@
 #include <l4/thread.h>
 #include <sneks/mm.h>
 
+#include "private.h"
 #include "vm-defs.h"
 
 
@@ -67,26 +68,27 @@ void *mmap(
 	void *_addr, size_t length, int prot, int flags,
 	int fd, unsigned long offset)
 {
-	if(~flags & MAP_ANONYMOUS) goto Enosys;	/* TODO: file support */
+	int n;
+	if(~flags & MAP_ANONYMOUS) {
+		/* TODO: file support */
+		n = -ENOSYS;
+		goto err;
+	}
 
 	L4_Word_t addr = (L4_Word_t)_addr;
-	int n = __vm_mmap(L4_Pager(), 0, &addr, length, prot, flags,
+	n = __vm_mmap(L4_Pager(), 0, &addr, length, prot, flags,
 		L4_nilthread.raw, 0, offset);
-	if(n != 0) goto En;
+	if(n != 0) goto err;
 
 	return (void *)addr;
 
-Enosys: n = -ENOSYS; goto En;
-En:
-	errno = n < 0 ? -n : EIO;
-	return MAP_FAILED;
+err:
+	return NTOERR(n), MAP_FAILED;
 }
 
 
 int munmap(void *addr, size_t length)
 {
 	int n = __vm_munmap(L4_Pager(), (L4_Word_t)addr, length);
-	if(n == 0) return 0;
-	errno = n < 0 ? -n : EIO;
-	return -1;
+	return NTOERR(n);
 }

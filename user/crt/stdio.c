@@ -18,11 +18,7 @@ static long fd_write(void *cookie, const char *buf, size_t size)
 	assert(IS_FD_VALID(fd));
 	uint16_t ret;
 	int n = __io_write(FD_SERVICE(fd), &ret, FD_COOKIE(fd), (void *)buf, size);
-	if(n == 0) return ret;
-	else {
-		errno = n < 0 ? -n : EIO;
-		return 0;
-	}
+	return NTOERR(n, (int)ret);
 }
 
 

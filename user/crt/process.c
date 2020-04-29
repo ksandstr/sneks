@@ -97,12 +97,8 @@ int spawn_NP(const char *filename, char *const argv[], char *const envp[])
 		fds.item, fds.size);
 	free(args); free(envs);
 	darray_free(fds); darray_free(cookies); darray_free(servs);
-	if(n != 0) {
-		errno = n > 0 ? -EIO : -n;
-		return -1;
-	}
 
-	return pid;
+	return NTOERR(n, pid);
 }
 
 
@@ -161,10 +157,5 @@ int waitid(idtype_t idtype, id_t id, siginfo_t *si, int options)
 		&si->si_pid, &si->si_uid, &si->si_signo,
 		&si->si_status, &si->si_code,
 		idtype, id, options);
-	if(n != 0) {
-		/* FIXME: respond to interrupted IPC etc. by retrying or some such */
-		errno = n < 0 ? -n : EIO;
-		return -1;
-	}
-	return 0;
+	return NTOERR(n);
 }
