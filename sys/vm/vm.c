@@ -1854,9 +1854,8 @@ static L4_Fpage_t pf_cow(struct vp *virt)
 		}
 	}
 	/* is @virt the sole owner of the page, which isn't in the page cache? */
-	if(VP_IS_ANON(virt)
-		&& ((primary == virt && !has_shares(hash, virt->status, 1))
-			|| (primary == NULL && !has_shares(hash, virt->status, 2))))
+	if((primary == NULL || primary == virt) && VP_IS_ANON(virt)
+		&& !has_shares(hash, virt->status, 1))
 	{
 		/* it is. take ownership. */
 		assert(primary == NULL || atomic_load(&phys->owner) == virt);
