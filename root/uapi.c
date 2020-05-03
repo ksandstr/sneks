@@ -26,6 +26,7 @@
 #include <sneks/hash.h>
 #include <sneks/mm.h>
 #include <sneks/msg.h>
+#include <sneks/rollback.h>
 #include <sneks/process.h>
 
 #include "muidl.h"
@@ -132,6 +133,7 @@ static void free_threadno(L4_ThreadId_t tid)
 struct process *get_process(int pid)
 {
 	if(pid <= 0 || pid > SNEKS_MAX_PID) return NULL;
+	sync_confirm();
 	/* no need to use the _safe variant since the rangealloc is backed by
 	 * virtual memory, which initializes such that p->task.utcb_area will be
 	 * L4_Nilpage for PIDs landing on unallocated pages.
@@ -146,6 +148,7 @@ static struct systask *get_systask(int pid)
 {
 	int stid = pid - SNEKS_MIN_SYSID;
 	if(stid < 0 || stid >= NUM_SYSTASK_IDS) return NULL;
+	sync_confirm();
 	/* see comment about safety in get_process() */
 	struct systask *st = ra_id2ptr(ra_systask, stid);
 	if(st == NULL || L4_IsNilFpage(st->task.utcb_area)) return NULL;
@@ -467,15 +470,8 @@ void zombify(struct process *p)
 		if(L4_IpcSucceeded(tag)) {
 			destroy_process(p);
 			return;
-		} else {
-			printf("%s: signaling of active exit failed, ec=%lu\n",
-				__func__, L4_ErrorCode());
-			/* FIXME: do something about it according to the error code. the
-			 * main problem is that the waiter has been dequeued and should be
-			 * put back in the queue so that it doesn't pull a long-ass beauty
-			 * sleep.
-			 */
 		}
+		/* discard the waiter on failure; it'll have stopped listening. */
 	}
 
 	/* add a reapable zombie. */
@@ -1013,6 +1009,14 @@ static bool has_children(int pid) {
 }
 
 
+static void call_destroy_process(L4_Word_t dead_ptr, void *self_ptr)
+{
+	struct process *self = self_ptr, *dead = (struct process *)dead_ptr;
+	list_del_from(&self->dead_list, &dead->dead_link);
+	destroy_process(dead);
+}
+
+
 static int uapi_wait(
 	int32_t *si_pid_p, int32_t *si_uid_p, int32_t *si_signo_p,
 	int32_t *si_status_p, int32_t *si_code_p,
@@ -1042,13 +1046,12 @@ static int uapi_wait(
 	}
 	if(dead != NULL) {
 		assert(live == NULL);
-		list_del_from(&self->dead_list, &dead->dead_link);
 		*si_pid_p = ra_ptr2id(ra_process, dead);
 		*si_uid_p = 0;	/* FIXME: dead->uid or something */
 		*si_signo_p = dead->signo;
 		*si_status_p = dead->status;
 		*si_code_p = dead->code;
-		destroy_process(dead);
+		set_confirm(&call_destroy_process, (L4_Word_t)dead, self);
 		return 0;
 	} else if(live != NULL) {
 		assert(dead == NULL);
@@ -1286,7 +1289,8 @@ int uapi_loop(void *param_ptr)
 	};
 	for(;;) {
 		L4_Word_t st = _muidl_root_uapi_dispatch(&vtab);
-		if(st == MUIDL_UNKNOWN_LABEL) {
+		if(check_rollback(st)) continue;
+		else if(st == MUIDL_UNKNOWN_LABEL) {
 			/* ignore it. in debug this'd indicate an out-of-sync IPC flow,
 			 * which would get confused by any reply. so ignoring will
 			 * minimize observed weirdness.

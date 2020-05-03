@@ -274,7 +274,6 @@ START_LOOP_TEST(failing_wait, iter, 0, 1)
 	const bool failure = !!(iter & 1);
 	diag("failure=%s", btos(failure));
 	plan_tests(3);
-	todo_start("borked");
 
 	int child = fork();
 	if(child == 0) exit(0);
