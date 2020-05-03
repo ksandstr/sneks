@@ -11,6 +11,14 @@
 
 #include <sneks/test.h>
 
+#ifdef __sneks__
+#include <l4/types.h>
+#include <l4/thread.h>
+#include <l4/ipc.h>
+#include <l4/kip.h>
+#include <sneks/sysinfo.h>
+#endif
+
 
 /* a call to wait(2) should return -1 (ECHILD) when there are no children. */
 START_TEST(empty_wait)
@@ -255,3 +263,51 @@ START_LOOP_TEST(lost_waitpid_on_interrupt, iter, 0, 1)
 END_TEST
 
 DECLARE_TEST("process:wait", lost_waitpid_on_interrupt);
+
+
+/* test that Proc::wait is idempotent under reply failure. */
+START_LOOP_TEST(failing_wait, iter, 0, 1)
+{
+#ifndef __l4x2__
+	plan_skip_all("depends on L4.X2 IPC semantics (iter=%d)", iter);
+#else
+	const bool failure = !!(iter & 1);
+	diag("failure=%s", btos(failure));
+	plan_tests(3);
+	todo_start("borked");
+
+	int child = fork();
+	if(child == 0) exit(0);
+	usleep(8 * 1000);
+
+	/* fuck with UAPI a little bit first by sending it a Proc::wait with no
+	 * intention of picking the reply up.
+	 */
+	skip_start(!failure, 1, "no fail") {
+		struct __sysinfo *sip = __get_sysinfo(L4_GetKernelInterface());
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 4, .X.label = 0xe801 }.raw);
+		L4_LoadMR(1, 0x1235);
+		L4_LoadMR(2, P_PID);	/* idtype */
+		L4_LoadMR(3, child);	/* id */
+		L4_LoadMR(4, WNOHANG);	/* options */
+		L4_MsgTag_t tag = L4_Send(sip->api.proc);
+		if(!ok1(L4_IpcSucceeded(tag))) diag("ec=%#lx", L4_ErrorCode());
+	} skip_end;
+
+	/* with and without fuckery, this should succeed immediately due to
+	 * the usleep() call up there.
+	 */
+	int st, n = waitpid(child, &st, WNOHANG);
+	if(!ok1(n == child)) diag("n=%d, errno=%d", n, errno);
+	ok1(WIFEXITED(st) && WEXITSTATUS(st) == 0);
+
+	/* (clean up.) */
+	n = waitpid(-1, &st, 0);
+	if(n != -1 || errno != ECHILD) {
+		diag("unexpected cleanup status, n=%d, errno=%d", n, errno);
+	}
+#endif
+}
+END_TEST
+
+DECLARE_TEST("process:wait", failing_wait);

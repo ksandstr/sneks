@@ -69,6 +69,7 @@ interface Proc
 	 * waitid(2) manpage aren't supported. values of idtype and the si_*
 	 * return values are defined in <sneks/process.h>.
 	 */
+	[Label(0x1235)]	/* see create_thread */
 	void wait(
 		[MR(1)] out long si_pid, [MR(2)] out long si_uid,
 		[MR(3)] out long si_signo, [MR(4)] out long si_status,
