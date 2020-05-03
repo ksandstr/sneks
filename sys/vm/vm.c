@@ -1557,7 +1557,8 @@ static int fork_pages(struct vm_space *src, struct vm_space *dest)
 #endif
 
 		if(!VP_IS_ANON(cur)
-			&& (VP_IS_SHARED(cur) || (~VP_RIGHTS(cur) & L4_Writable)))
+			&& (VP_IS_SHARED(cur)
+				|| ((~VP_RIGHTS(cur) & L4_Writable) && !VP_IS_COW(cur))))
 		{
 			/* ignore private+file+ro or shared pages since they'll be mapped
 			 * lazily using the page cache.
