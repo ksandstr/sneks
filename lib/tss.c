@@ -152,6 +152,32 @@ void tss_set(tss_t key, void *value)
 }
 
 
+/* this is basically a spinlock around @func, ensuring that concurrent callers
+ * return only once the function has completed.
+ */
+void call_once(once_flag *flag, void (*func)(void))
+{
+	int old = atomic_load_explicit(flag, memory_order_relaxed);
+
+again:
+	if(likely(old > 1)) {
+		/* early out. */
+		return;
+	} else if(old == 0) {
+		/* try to run @func. */
+		bool run = atomic_compare_exchange_strong(flag, &old, 1);
+		if(!run) goto again;	/* nope! */
+		(*func)();
+		atomic_store(flag, 2);
+	} else if(unlikely(old == 1)) {
+		/* wait until concurrent @func completes. */
+		while(atomic_load(flag) <= 1) {
+			asm volatile ("pause");
+		}
+	}
+}
+
+
 void __tss_on_exit(void)
 {
 	struct tss_block *blk = (void *)L4_UserDefinedHandle();
