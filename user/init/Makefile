@@ -30,11 +30,11 @@ initrd-install: init
 	@install etc/inittab $(INITRD)/etc/
 
 
-init: $(LDSCRIPT) init.o inittab.o optcompat.o ccan-opt.a ccan-htable.o
+init: $(LDSCRIPT) init.o inittab.o optcompat.o ccan-opt.a
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T $(LDSCRIPT) \
 		$(filter %.o,$^) $(filter %.a,$^) \
-		-lsneks-user-crt -ll4 -L /usr/lib32 -lm \
+		-lsneks-user-crt -lsneks -ll4 -L /usr/lib32 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 inittab.o: etc/inittab

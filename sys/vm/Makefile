@@ -27,8 +27,7 @@ distclean:
 	@rm -rf .deps $(OUTPUTS)
 
 
-vm: $(LDSCRIPT) vm.o boot.o $(IDL_OBJS) \
-		ccan-list.o ccan-htable.o ccan-bitmap.o
+vm: $(LDSCRIPT) vm.o boot.o $(IDL_OBJS)
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T $(LDSCRIPT) \
 		$(filter %.o,$^) $(LIBS) \
@@ -36,7 +35,7 @@ vm: $(LDSCRIPT) vm.o boot.o $(IDL_OBJS) \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
-vm.o: vm.c vm-impl-defs.h info-defs.h proc-defs.h fs-defs.h
+vm.o: vm-impl-defs.h info-defs.h proc-defs.h fs-defs.h
 
 
 include $(wildcard .deps/*.d)

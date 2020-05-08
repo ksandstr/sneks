@@ -24,14 +24,14 @@ distclean:
 	@rm -rf .deps $(OUTPUTS)
 
 
-sysmem: sysmem.ld crt0.o sysmem.o $(IDL_OBJS) ccan-list.o
+sysmem: sysmem.ld crt0.o sysmem.o $(IDL_OBJS)
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T sysmem.ld \
 		$(filter %.o,$^) $(LIBS) -lsneks -ll4 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
-sysmem.o: sysmem.c sysmem-impl-defs.h info-defs.h abend-defs.h
+sysmem.o: sysmem-impl-defs.h info-defs.h abend-defs.h
 
 
 include $(wildcard .deps/*.d)

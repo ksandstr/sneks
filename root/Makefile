@@ -32,7 +32,6 @@ root: root.ld crt0.o main.o runtime.o thrd.o uapi.o sig.o mm.o ser_io.o \
 		proc-common.o proc-client.o vm-common.o vm-client.o \
 		fs-common.o fs-client.o info-common.o info-client.o \
 		msg-common.o msg-client.o \
-		ccan-htable.o ccan-bitmap.o ccan-hash.o \
 		mung-rangealloc.o mung-slab.o \
 		lfht-epoch.o lfht-nbsl.o lfht-percpu.o
 	@echo "  LD $@"

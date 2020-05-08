@@ -28,7 +28,7 @@ distclean:
 # properly be done by importing all of libsneks into libsneks-systask, making
 # the latter a superset of the former, which follows usage.
 fs.squashfs: $(LDSCRIPT) squashfs.o $(IDL_OBJS) \
-		ccan-opt.a ccan-list.o ccan-htable.o
+		ccan-opt.a
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T $(LDSCRIPT) \
 		$(filter %.o,$^) $(filter %.a,$^) $(LIBS) \
@@ -36,7 +36,7 @@ fs.squashfs: $(LDSCRIPT) squashfs.o $(IDL_OBJS) \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
-squashfs.o: squashfs.c squashfs-impl-defs.h
+squashfs.o: squashfs-impl-defs.h
 
 
 # muidl outputs.

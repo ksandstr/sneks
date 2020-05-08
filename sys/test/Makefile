@@ -31,14 +31,14 @@ distclean:
 	@rm -rf .deps $(OUTPUTS)
 
 
-harness.o: harness.c proc-defs.h
+harness.o: proc-defs.h
 
 # FIXME: this is also a bit fugly.
 $(CFGDIR)/sys/sysmem/t/flags.o: sysmem-defs.h
 
 
 systest: $(LDSCRIPT) systest.o harness.o $(TEST_OBJS) \
-		ccan-opt.a ccan-htable.o ccan-talloc.o ccan-autodata.o \
+		ccan-opt.a ccan-talloc.o \
 		proc-common.o proc-client.o \
 		sysmem-common.o sysmem-client.o
 	@echo "  LD $@"

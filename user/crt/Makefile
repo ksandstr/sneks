@@ -13,8 +13,7 @@ LIB_OBJS=bsearch.o dlmalloc.o hash.o pidof.o sort.o rbtree.o string.o \
 CRT_SRC:=$(wildcard *.c)
 CRT_ASM:=$(wildcard *-32.S)
 CRT_OBJS:=crt0.o $(IDL_OBJS) $(CRT_SRC:.c=.o) $(CRT_ASM:-32.S=.o) \
-	$(patsubst %,$(CFGDIR)/lib/%,$(LIB_OBJS)) \
-	ccan-hash.o
+	$(patsubst %,$(CFGDIR)/lib/%,$(LIB_OBJS))
 
 vpath %.idl $(CFGDIR)/idl/api
 
@@ -36,13 +35,13 @@ distclean:
 
 # IDL header dependencies (which should really get figured out automagically;
 # c'est la guerre.)
-process.o: process.c proc-defs.h
-fork.o: fork.c proc-defs.h
-heap.o: heap.c vm-defs.h
-stdio.o: stdio.c io-defs.h
-sigaction.o: sigaction.c proc-defs.h
-signal.o: signal.c proc-defs.h
-uid.o: uid.c proc-defs.h
+process.o: proc-defs.h
+fork.o: proc-defs.h
+heap.o: vm-defs.h
+stdio.o: io-defs.h
+sigaction.o: proc-defs.h
+signal.o: proc-defs.h
+uid.o: proc-defs.h
 
 
 libsneks-user-crt.a: $(CRT_OBJS)

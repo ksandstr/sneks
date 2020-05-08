@@ -16,7 +16,7 @@ TEST_SOURCE:=$(wildcard */*.c)
 TEST_OBJS:=$(TEST_SOURCE:%.c=%.o)
 
 TESTSUITE_OBJS:=main.o harness.o optcompat.o $(TEST_OBJS) \
-	ccan-htable.o ccan-talloc.o ccan-autodata.o
+	ccan-talloc.o
 
 HOSTSUITE_OBJS:=$(filter-out optcompat.%,$(TESTSUITE_OBJS:%.o=%.host.o))
 HOSTSUITE_CFLAGS=-O2 -Wall -march=native -std=gnu99 -m32 -D_GNU_SOURCE \
@@ -42,7 +42,7 @@ testsuite: $(LDSCRIPT) $(TESTSUITE_OBJS) $(CFGDIR)/lib/tap.o ccan-opt.a
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T $(LDSCRIPT) \
 		$(filter %.o,$^) $(filter %.a,$^) \
-		-lsneks-user-crt -ll4 -lm \
+		-lsneks-user-crt -lsneks -ll4 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
@@ -54,7 +54,7 @@ initrd-install: testsuite
 # hostsuite stuff. perhaps dirtier than necessary.
 
 hostsuite: $(HOSTSUITE_OBJS) $(CFGDIR)/lib/tap.c $(CFGDIR)/lib/strscpy.c \
-		ccan-opt.host.a
+		ccan-htable.host.o ccan-autodata.host.o ccan-opt.host.a
 	@echo " LD $@ <impure!>"
 	@$(CC) -o $@ $^ $(HOSTSUITE_CFLAGS)
 

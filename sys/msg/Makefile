@@ -38,7 +38,7 @@ sysmsg: $(LDSCRIPT) sysmsg.o ccan-siphash.o $(IDL_OBJS)
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
-sysmsg.o: sysmsg.c msg-defs.h
+sysmsg.o: msg-defs.h
 
 
 include $(wildcard .deps/*.d)
