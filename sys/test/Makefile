@@ -48,7 +48,8 @@ systest: $(LDSCRIPT) systest.o harness.o $(TEST_OBJS) \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
-initrd_spawn_partner: $(CFGDIR)/user/crt/static.ld spawn-partner.o
+initrd_spawn_partner: $(CFGDIR)/user/crt/static.ld spawn-partner.o \
+		ccan-htable.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -L $(CFGDIR)/user/crt -static -o $@ \
 		-b elf32-i386 -T $(CFGDIR)/user/crt/static.ld \

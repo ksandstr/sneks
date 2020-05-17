@@ -71,6 +71,14 @@ extern void __permit_recv_interrupt(void);
 extern void __forbid_recv_interrupt(void);
 
 
+/* from threads.c (see comment in that file) */
+
+/* returns muidl stub return. fills in *@tid_p. */
+extern int __crt_thread_create(
+	L4_ThreadId_t *tid_p, void (*fn)(void *), void *param_ptr);
+extern void __crt_thread_join(L4_ThreadId_t tid);
+
+
 /* from uid.c */
 extern void __init_crt_cached_creds(void);
 
