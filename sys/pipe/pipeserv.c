@@ -734,6 +734,9 @@ int main(void)
 		} else {
 			printf("pipeserv: dispatch status %#lx (last tag %#lx)\n",
 				status, muidl_get_tag().raw);
+			L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1, .X.label = 1 }.raw);
+			L4_LoadMR(1, ENOSYS);
+			L4_Reply(muidl_get_sender());
 		}
 	}
 }
