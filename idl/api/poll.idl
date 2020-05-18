@@ -1,0 +1,48 @@
+
+#ifndef __API_POLL_IDL__
+#define __API_POLL_IDL__
+
+#include <muidl.idl>
+#include <l4x2.idl>
+#include <posixlike.idl>
+#include <api/io.idl>
+
+
+module Sneks {
+
+/* polling and notification of I/O status, as in epoll(7), select(2), and
+ * poll(2).
+ */
+[StubPrefix(__io), IfaceLabel(0xe805)]
+interface Poll
+{
+	/* set epoll notification mask on a file descriptor associated with the
+	 * caller. this mask is not shared between processes, so a transition from
+	 * empty to non-empty may be signaled to multiple EPOLLIN listeners.
+	 *
+	 * returns mask of events that would've been previously triggered as a
+	 * subset of @events in @exmask.
+	 *
+	 * events are delivered to the calling process' most recent value of @tid,
+	 * where nilthread leaves the setting unchanged. event messages consist of
+	 * tag.X.u / 2 pairs of event mask and handle, in that order, one word
+	 * each; if an event message cannot be delivered, SIGIO is sent to the
+	 * client instead. the event message label will be the PID of the sending
+	 * filesystem server.
+	 */
+	void set_notify(out long exmask,
+		in long fd, in long events, in L4X2::ThreadId tid)
+		raises(Posix::Errno);
+
+	/* retrieve level-triggered I/O status (set of EPOLL*) for each element in
+	 * @handles. on error sets status to ~0ul.
+	 */
+	const long STBUF_SIZE = 60;
+	typedef sequence<L4X2::word, STBUF_SIZE> stbuf;
+	void get_status(in stbuf handles, out stbuf statuses);
+};
+
+};
+
+
+#endif
