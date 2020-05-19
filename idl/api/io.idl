@@ -53,7 +53,8 @@ interface IO
 		raises(Posix::Errno, muidl::NoReply);
 
 	/* raises like POSIX close(2) */
-	void close(in long fd)
+	[Label(0xabcd)]	/* provisional, for epoll's use */
+	void close([MR(2)] in long fd)
 		raises(Posix::Errno);
 };
 

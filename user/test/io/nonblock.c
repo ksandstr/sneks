@@ -84,9 +84,6 @@ DECLARE_TEST("io:nonblock", nonblock_basic);
 START_TEST(epoll_basic)
 {
 	plan_tests(4);
-#ifdef __sneks__
-	todo_start("foo");
-#endif
 
 	int epfd = epoll_create1(0);
 	if(!ok(epfd >= 0, "epoll_create1")) diag("errno=%d", errno);
@@ -121,9 +118,6 @@ START_LOOP_TEST(epoll_from_pipe, iter, 0, 1)
 	const bool act_send = !!(iter & 1);
 	diag("act_send=%s", btos(act_send));
 	plan_tests(10);
-#ifdef __sneks__
-	todo_start("bar");
-#endif
 
 	int fds[2];
 	int n = pipe(fds);
@@ -192,9 +186,6 @@ START_LOOP_TEST(epoll_write_many, iter, 0, 1)
 	const int n_readers = (~iter & 1) ? 2 : 7;
 	diag("n_readers=%d", n_readers);
 	plan_tests(2);
-#ifdef __sneks__
-	todo_start("no no, no no there's no limit");
-#endif
 
 	struct sigaction act = { .sa_handler = SIG_IGN };
 	int n = sigaction(SIGPIPE, &act, NULL);
