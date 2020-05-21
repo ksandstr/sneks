@@ -2,11 +2,13 @@
 /* implementation spec for pipeserv. not for client use. */
 
 #include <api/io.idl>
+#include <api/poll.idl>
 #include <api/pipe.idl>
 #include <l4x2.idl>
 
 
-interface PipeservImpl: Sneks::IO, Sneks::Pipe
+interface PipeservImpl:
+	Sneks::IO, Sneks::Poll, Sneks::Pipe
 {
 	/* jack shit! */
 };

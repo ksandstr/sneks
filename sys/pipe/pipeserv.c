@@ -6,12 +6,13 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdatomic.h>
-#include <threads.h>
 #include <assert.h>
+#include <threads.h>
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/types.h>
+#include <sys/epoll.h>
 #include <l4/types.h>
 #include <l4/thread.h>
 #include <l4/ipc.h>
@@ -29,6 +30,7 @@
 
 #include "muidl.h"
 #include "io-defs.h"
+#include "proc-defs.h"
 #include "pipeserv-impl-defs.h"
 
 
@@ -61,7 +63,6 @@ struct pipehead
 	MEMBUF(char) buf;
 	struct list_head readh, writeh;	/* of <struct pipehandle> */
 	darray(L4_ThreadId_t) sleepers;	/* blocking clients */
-	unsigned flags;
 };
 
 
@@ -73,12 +74,14 @@ struct pipehandle
 	struct pipeclient *owner;
 	int bits;		/* low 16 are fd, rest are PHF_* */
 	int client_ix;	/* index in pipeclient.handles */
+	uint32_t events;/* per IO::set_notify */
 };
 
 
 struct pipeclient
 {
 	pid_t pid;
+	L4_ThreadId_t notify_tid;
 	unsigned short next_bits;
 	darray(struct pipehandle *) handles;
 };
@@ -104,6 +107,7 @@ struct lc_event
 static L4_ThreadId_t main_tid;
 static thrd_t poke_thrd;
 static struct htable client_ht, handle_ht;
+static int my_pid;
 static int lifecycle_msg = -1;	/* sysmsg handle */
 /* an ad-hoc SPSC concurrent circular buffer. */
 static struct lc_event lce_queue[NUM_LC_EVENTS];
@@ -112,6 +116,7 @@ static _Atomic uint32_t lce_ctrl;
 
 
 static void wakey_wakey(struct pipehead *hd, int code, int pid);
+static void send_notify(struct list_head *handle_list, int events);
 
 
 static size_t rehash_pipeclient(const void *ptr, void *priv) {
@@ -138,7 +143,7 @@ static void pipehandle_dtor(struct pipehandle *h)
 	struct list_head *hh = h->bits & PHF_WRITER
 		? &h->head->writeh : &h->head->readh;
 	list_del_from(hh, &h->ph_link);
-	if(list_empty(&h->head->readh) && list_empty(&h->head->writeh)) {
+	if(list_empty(&h->head->writeh) && list_empty(&h->head->readh)) {
 		/* pipe goes away. */
 		/* NOTE: this wakey_wakey() isn't necessary; if all read and write
 		 * handles to that head have been deleted, then all sleepers will be
@@ -150,6 +155,7 @@ static void pipehandle_dtor(struct pipehandle *h)
 		free(h->head);
 	} else if(list_empty(&h->head->writeh)) {
 		wakey_wakey(h->head, EAGAIN, -1);
+		send_notify(&h->head->readh, EPOLLHUP);
 	}
 
 	/* remove handle from client and htable, then dispose. */
@@ -194,6 +200,7 @@ static void fork_pipehandle(
 	copy->head = h->head;
 	copy->owner = child;
 	copy->bits = h->bits;
+	copy->events = h->events;
 	darray_push(child->handles, copy);
 	copy->client_ix = child->handles.size - 1;
 	assert(copy->client_ix == h->client_ix);
@@ -587,6 +594,60 @@ static int pipe_set_flags(int *old, int fd, int or, int and)
 }
 
 
+/* return mask of EPOLL* representing the active level-triggered I/O status of
+ * the pipe associated with @h.
+ */
+static uint32_t event_status(struct pipehandle *h)
+{
+	uint32_t st;
+	if(h->bits & PHF_WRITER) {
+		if(list_empty(&h->head->readh)) st = EPOLLERR;	/* EPIPE pending */
+		else {
+			membuf_prepare_space(&h->head->buf, 1);
+			if(!IS_FULL(h->head)) st = EPOLLOUT;
+			else st = 0;
+		}
+	} else {
+		if(!IS_EMPTY(h->head)) st = EPOLLIN;
+		else if(list_empty(&h->head->writeh)) st = EPOLLHUP;
+		else st = 0;
+	}
+	return st;
+}
+
+
+static int pipe_set_notify(
+	int *exmask_ptr, int fd, int events, L4_Word_t tid_raw)
+{
+	if(tid_raw != L4_nilthread.raw) {
+		struct pipeclient *c = caller(false);
+		if(c == NULL) return -EBADF;
+		L4_ThreadId_t tid = { .raw = tid_raw };
+		if(!L4_IsGlobalId(tid)) return -EINVAL;
+		c->notify_tid = tid;
+	}
+
+	struct pipehandle *h = resolve_fd(fd);
+	if(h == NULL) return -EBADF;
+	h->events = events;
+	*exmask_ptr = event_status(h) & (h->events | EPOLLHUP);
+	return 0;
+}
+
+
+static void pipe_get_status(
+	const L4_Word_t *handles, unsigned n_handles,
+	L4_Word_t *st, unsigned *n_st_p)
+{
+	int spid = pidof_NP(muidl_get_sender());
+	for(int i=0; i < n_handles; i++) {
+		struct pipehandle *h = get_handle(NULL, spid, handles[i]);
+		st[i] = h == NULL ? ~0ul : event_status(h);
+	}
+	*n_st_p = n_handles;
+}
+
+
 /* wakes up blocking sleepers. */
 static void wakey_wakey(struct pipehead *hd, int code, int pid)
 {
@@ -602,6 +663,44 @@ static void wakey_wakey(struct pipehead *hd, int code, int pid)
 		}
 	}
 	if(pid < 0) darray_resize(hd->sleepers, 0);
+}
+
+
+/* IO::set_notify interaction with structs pipehandle in @handle_list. */
+static void send_notify(struct list_head *handle_list, int events)
+{
+	struct pipehandle *r;
+	list_for_each(handle_list, r, ph_link) {
+		if((r->events & events) == 0) continue;
+		L4_ThreadId_t ntid = r->owner->notify_tid;
+		assert(!L4_IsNilThread(ntid));
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.label = my_pid, .X.u = 2 }.raw);
+		L4_LoadMR(1, events);
+		L4_LoadMR(2, r->bits & 0xffff);
+		L4_MsgTag_t tag = L4_Reply(ntid);
+		if(L4_IpcFailed(tag)) {
+			L4_Word_t ec = L4_ErrorCode();
+			if(ec != 2) {
+				printf("pipeserv: %s: weird ec=%lu\n", __func__, ec);
+			} else {
+				/* receiver not ready. */
+				extern L4_ThreadId_t __uapi_tid;
+				int n = __proc_kill(__uapi_tid, r->owner->pid, SIGIO);
+				if(n != 0) {
+					printf("pipeserv: Proc::kill[SIGIO] to pid=%d failed, n=%d\n",
+						r->owner->pid, n);
+					/* ... and do nothing.
+					 * FIXME: do something?
+					 */
+				}
+			}
+		}
+#if 0
+		printf("%s: notification to %lu:%lu %s\n", __func__,
+			L4_ThreadNo(ntid), L4_Version(ntid),
+			L4_IpcFailed(tag) ? "failed" : "succeeded");
+#endif
+	}
 }
 
 
@@ -635,7 +734,10 @@ static int pipe_write(
 
 	size_t written = min(buf_len, membuf_num_space(&h->head->buf));
 	memcpy(membuf_space(&h->head->buf), buf, written);
-	if(was_empty) wakey_wakey(h->head, EAGAIN, -1);
+	if(was_empty) {
+		wakey_wakey(h->head, EAGAIN, -1);
+		send_notify(&h->head->readh, EPOLLIN);
+	}
 
 	/* (TODO: move this into a confirm callback, ere long) */
 	membuf_added(&h->head->buf, written);
@@ -671,7 +773,10 @@ static int pipe_read(
 	bool was_full = IS_FULL(h->head);
 	size_t got = min(length, membuf_num_elems(&h->head->buf));
 	memcpy(buf, membuf_elems(&h->head->buf), got);
-	if(got > 0 && was_full) wakey_wakey(h->head, EAGAIN, -1);
+	if(got > 0 && was_full) {
+		wakey_wakey(h->head, EAGAIN, -1);
+		send_notify(&h->head->writeh, EPOLLOUT);
+	}
 
 	/* TODO: move this into a confirm callback */
 	membuf_consume(&h->head->buf, got);
@@ -711,9 +816,12 @@ int main(void)
 		.write = &pipe_write, .read = &pipe_read,
 		.close = &pipe_close, .pipe = &pipe_pipe,
 		.set_flags = &pipe_set_flags,
+		.set_notify = &pipe_set_notify,
+		.get_status = &pipe_get_status,
 	};
 
 	main_tid = L4_MyLocalId();
+	my_pid = getpid();
 	spawn_poke_thrd();
 	htable_init(&client_ht, &rehash_pipeclient, NULL);
 	htable_init(&handle_ht, &rehash_pipehandle, NULL);
