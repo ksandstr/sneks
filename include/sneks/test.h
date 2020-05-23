@@ -220,7 +220,7 @@ extern void close_no_plan(void);	/* for harness.c impls */
 			int _rc; \
 			char *_msg = subtest_pop(&_rc, NULL); \
 			diag("(subtest name was `%s')", _msg); \
-			exit(_rc == 1 ? 0 : 1); \
+			exit(_rc); \
 		} \
 		__stc; \
 	})

@@ -159,9 +159,8 @@ char *subtest_pop(int *rc_p, void **freeptr_p)
 	no_plan_closed = c->no_plan_closed;
 	free(todo_msg); todo_msg = c->todo_msg;
 
-	int ret = exst == 0;
-	if(!ret) diag("subtest exit_status=%d", exst);
-	if(rc_p != NULL) *rc_p = ret;
+	if(exst != 0) diag("subtest exit_status=%d", exst);
+	if(rc_p != NULL) *rc_p = exst;
 	if(freeptr_p != NULL) *freeptr_p = c;
 	return c->testmsg;
 }
@@ -172,7 +171,8 @@ int subtest_end(void)
 	int rc;
 	void *freeptr;
 	char *msg = subtest_pop(&rc, &freeptr);
-	ok(rc, "%s", msg);
+	/* "rc" is value of exit_status(), 0 when all tests passed. */
+	ok(rc == 0, "%s", msg);
 	free(freeptr);
 	return rc;
 }
