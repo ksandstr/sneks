@@ -117,8 +117,7 @@ void sig_send(struct process *p, int sig, bool self)
 	assert(sig >= 1 && sig <= 64);
 	uint64_t sig_bit = 1ull << (sig - 1);
 	if((p->mask_set & sig_bit) != 0) p->pending_set |= sig_bit;
-	else {
-		assert((p->pending_set & sig_bit) == 0);
+	else if(~p->pending_set & sig_bit) {
 		if((p->dfl_set & sig_bit) != 0) {
 			assert((p->ign_set & sig_bit) == 0);
 			if(sig_default(p, sig) && self) {
