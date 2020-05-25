@@ -10,6 +10,8 @@
 typedef int __pid_t;
 typedef unsigned int __useconds_t;
 
+struct timeval;
+
 
 extern int getpagesize(void);
 extern __pid_t getpid(void);
@@ -61,5 +63,30 @@ extern int setuid(__uid_t uid);
 extern int seteuid(__uid_t uid);
 extern int setreuid(__uid_t real_uid, __uid_t eff_uid);
 extern int setresuid(__uid_t real_uid, __uid_t eff_uid, __uid_t saved_uid);
+
+
+extern int select(
+	int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
+	struct timeval *timeout);
+
+extern void FD_CLR(int fd, fd_set *set);
+extern int FD_ISSET(int fd, fd_set *set);
+extern void FD_SET(int fd, fd_set *set);
+extern void FD_ZERO(fd_set *set);
+
+#define __UINTPTR_BITS (sizeof(uintptr_t) * 8)
+
+#define FD_CLR(fd, set) do { \
+		int __fd = (fd); \
+		((set)->__w[__fd / __UINTPTR_BITS] &= ~(1ul << (__fd % __UINTPTR_BITS))); \
+	} while(0)
+#define FD_ISSET(fd, set) ({ \
+		int __fd = (fd); \
+		!!((set)->__w[__fd / __UINTPTR_BITS] & (1ul << (__fd % __UINTPTR_BITS))); \
+	})
+#define FD_SET(fd, set) do { \
+		int __fd = (fd); \
+		((set)->__w[__fd / __UINTPTR_BITS] |= 1ul << (__fd % __UINTPTR_BITS)); \
+	} while(0)
 
 #endif
