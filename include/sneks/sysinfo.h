@@ -37,6 +37,12 @@ struct __sysinfo
 		uint8_t __pad0[2];
 		L4_Word32_t __reserved[15];
 	} memory;
+
+	/* services implementing specific POSIX interfaces. */
+	struct {
+		L4_ThreadId_t pipe;	/* Sneks::Pipe */
+		L4_Word32_t __reserved[63];
+	} posix;
 } __attribute__((__packed__));
 
 

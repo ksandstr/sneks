@@ -1,0 +1,23 @@
+
+#ifndef __API_PIPE_IDL__
+#define __API_PIPE_IDL__
+
+#include <muidl.idl>
+#include <l4x2.idl>
+#include <posixlike.idl>
+
+
+module Sneks {
+
+[StubPrefix(__pipe), IfaceLabel(0xe804)]
+interface Pipe
+{
+	/* @flags is undefined and must be 0. */
+	void pipe(out L4X2::word readside, out L4X2::word writeside, in long flags)
+		raises(Posix::Errno);
+};
+
+};
+
+
+#endif
