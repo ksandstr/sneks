@@ -1,9 +1,4 @@
-
-/* very basic support interface for µIDL. works in a non-threaded runtime
- * only.
- *
- * TODO: reimplement for C11 TSD stuff so that this can be used to deploy
- * services from root and other multithreaded tasks.
+/* support bits for µIDL.
  *
  * TODO: this interface isn't obviously defined anywhere, so its future
  * consistency is questionable.
@@ -13,27 +8,44 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
-
-#include <ccan/likely/likely.h>
-
-
-static void *the_context = NULL;
+#include <threads.h>
 
 
-void muidl_supp_alloc_context(unsigned int length)
+static tss_t key;
+static once_flag init_once = ONCE_FLAG_INIT;
+
+
+static void create_key(void)
 {
-	if(unlikely(the_context == NULL)) {
-		if(length < 64) length = 64;
-		the_context = malloc(length);
-		if(the_context == NULL) {
-			printf("%s: malloc(%u) failed\n", __func__, length);
-			abort();
-		}
-		memset(the_context, '\0', length);
+	int n = tss_create(&key, &free);
+	if(n != thrd_success) {
+		fprintf(stderr, "%s: can't create muidl support tss_t, n=%d\n",
+			__func__, n);
+		abort();
 	}
 }
 
 
-void *muidl_supp_get_context(void) {
-	return the_context;
+void muidl_supp_alloc_context(unsigned int length)
+{
+	call_once(&init_once, &create_key);
+
+	void *ctx = tss_get(key);
+	if(ctx != NULL) free(ctx);
+
+	if(length < 64) length = 64;
+	ctx = malloc(length);
+	if(ctx == NULL) {
+		printf("%s: malloc(%u) failed\n", __func__, length);
+		abort();
+	}
+	memset(ctx, '\0', length);
+	tss_set(key, ctx);
+}
+
+
+void *muidl_supp_get_context(void)
+{
+	call_once(&init_once, &create_key);
+	return tss_get(key);
 }
