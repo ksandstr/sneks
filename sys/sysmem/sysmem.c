@@ -141,6 +141,8 @@ static struct rb_root systask_tree = RB_ROOT;
 
 static uint8_t first_mem[PAGE_SIZE * NUM_INIT_PAGES]
 	__attribute__((aligned(PAGE_SIZE)));
+static uint8_t muidl_supp_mem[64]
+	__attribute__((aligned(16)));
 
 static L4_ThreadId_t abend_helper_tid, s0_tid;
 
@@ -206,6 +208,16 @@ void __assert_failure(
 {
 	printf("!!! assert(%s) failed in `%s' [%s:%u]\n", cond, fn, file, line);
 	abort();
+}
+
+
+void muidl_supp_alloc_context(size_t length) {
+	assert(length <= sizeof muidl_supp_mem);
+}
+
+
+void *muidl_supp_get_context(void) {
+	return muidl_supp_mem;
 }
 
 
