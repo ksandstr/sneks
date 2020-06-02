@@ -28,33 +28,40 @@ int select(
 		return -1;
 	}
 
+	static fd_set dummy = { };
+	if(readfds == NULL) readfds = &dummy;
+	if(writefds == NULL) writefds = &dummy;
+	if(exceptfds == NULL) exceptfds = &dummy;
+
 	int epfd = epoll_create1(0);
 	if(epfd < 0) return -1;
+
 	int n_evs = 0, limbs = (nfds + __UINTPTR_BITS - 1) / __UINTPTR_BITS;
 	for(int j=0; j < limbs; j++) {
-		int i = ffsl((readfds != NULL ? readfds->__w[j] : 0)
-			| (writefds != NULL ? writefds->__w[j] : 0)
-			| (exceptfds != NULL ? exceptfds->__w[j] : 0));
+		int i = ffsl(readfds->__w[j] | writefds->__w[j] | exceptfds->__w[j]);
 		if(i == 0) continue;
 		i += j-- * __UINTPTR_BITS - 1;
 
 		int evs = 0;
-		if(readfds != NULL && FD_ISSET(i, readfds)) {
+		if(FD_ISSET(i, readfds)) {
+			assert(readfds != &dummy);
 			evs |= EPOLLIN;
 			FD_CLR(i, readfds);
 		}
-		if(writefds != NULL && FD_ISSET(i, writefds)) {
+		if(FD_ISSET(i, writefds)) {
+			assert(writefds != &dummy);
 			evs |= EPOLLOUT;
 			FD_CLR(i, writefds);
 		}
-		if(exceptfds != NULL && FD_ISSET(i, exceptfds)) {
-			evs |= EPOLLERR;	/* and others? */
+		if(FD_ISSET(i, exceptfds)) {
+			assert(exceptfds != &dummy);
+			evs |= EPOLLERR;	/* others? */
 			FD_CLR(i, exceptfds);
 		}
 		assert(evs != 0);
 		evs |= EPOLLET | EPOLLEXCLUSIVE;
-		struct epoll_event ev = { .events = evs, .data.fd = i };
-		int n = epoll_ctl(epfd, EPOLL_CTL_ADD, i, &ev);
+		int n = epoll_ctl(epfd, EPOLL_CTL_ADD, i,
+			&(struct epoll_event){ .events = evs, .data.fd = i });
 		if(n < 0) {
 			int err = errno;
 			close(epfd);
@@ -63,11 +70,6 @@ int select(
 		}
 		n_evs++;
 	}
-
-	fd_set dummy;
-	if(readfds == NULL) readfds = &dummy;
-	if(writefds == NULL) writefds = &dummy;
-	if(exceptfds == NULL) exceptfds = &dummy;
 
 	struct epoll_event evs[n_evs];
 	int n = epoll_wait(epfd, evs, n_evs, timeout == NULL ? -1
@@ -80,9 +82,18 @@ int select(
 	}
 	int count = 0;
 	for(int i=0; i < n; i++) {
-		if(evs[i].events & EPOLLIN) FD_SET(evs[i].data.fd, readfds);
-		if(evs[i].events & EPOLLOUT) FD_SET(evs[i].data.fd, writefds);
-		if(evs[i].events & EPOLLERR) FD_SET(evs[i].data.fd, exceptfds);
+		if(evs[i].events & EPOLLIN) {
+			assert(readfds != &dummy);
+			FD_SET(evs[i].data.fd, readfds);
+		}
+		if(evs[i].events & EPOLLOUT) {
+			assert(writefds != &dummy);
+			FD_SET(evs[i].data.fd, writefds);
+		}
+		if(evs[i].events & EPOLLERR) {
+			assert(exceptfds != &dummy);
+			FD_SET(evs[i].data.fd, exceptfds);
+		}
 		if(evs[i].events & (EPOLLIN | EPOLLOUT | EPOLLERR)) count++;
 	}
 
@@ -102,24 +113,24 @@ int pselect(
 
 
 #undef FD_CLR
-void FD_CLR(int fd, fd_set *set) {
+inline void FD_CLR(int fd, fd_set *set) {
 	set->__w[fd / __UINTPTR_BITS] &= ~(1ul << (fd % __UINTPTR_BITS));
 }
 
 
 #undef FD_ISSET
-int FD_ISSET(int fd, fd_set *set) {
+inline int FD_ISSET(int fd, fd_set *set) {
 	return !!(set->__w[fd / __UINTPTR_BITS] & (1ul << (fd % __UINTPTR_BITS)));
 }
 
 
 #undef FD_SET
-void FD_SET(int fd, fd_set *set) {
+inline void FD_SET(int fd, fd_set *set) {
 	set->__w[fd / __UINTPTR_BITS] |= 1ul << (fd % __UINTPTR_BITS);
 }
 
 
-void FD_ZERO(fd_set *set) {
+inline void FD_ZERO(fd_set *set) {
 	memset(set, 0, sizeof *set);
 }
 
