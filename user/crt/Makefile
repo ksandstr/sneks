@@ -13,7 +13,8 @@ LIB_OBJS=bsearch.o dlmalloc.o hash.o pidof.o sort.o rbtree.o string.o \
 CRT_SRC:=$(wildcard *.c)
 CRT_ASM:=$(wildcard *-32.S)
 CRT_OBJS:=crt0.o $(IDL_OBJS) $(CRT_SRC:.c=.o) $(CRT_ASM:-32.S=.o) \
-	$(patsubst %,$(CFGDIR)/lib/%,$(LIB_OBJS))
+	$(patsubst %,$(CFGDIR)/lib/%,$(LIB_OBJS)) \
+	mung-rangealloc.o mung-slab.o
 
 vpath %.idl $(CFGDIR)/idl/api
 
@@ -52,6 +53,17 @@ libsneks-user-crt.a: $(CRT_OBJS)
 	@ar cr $@ $^
 	@echo "  RANLIB $@"
 	@ranlib $@
+
+
+# build things from mung as guests.
+#
+# NOTE: this is here rather than config.mk because imports of these things
+# should happen into sys/crt and user/crt, and then nowhere else; so having the
+# rule at toplevel is wrong.
+mung-%.o ::
+	@echo "  CC $@ <mung>"
+	@$(CC) -c -o $@ $(wildcard $(MUNG_DIR)/$*.c) $(wildcard $(MUNG_DIR)/lib/$*.c) \
+		$(CFLAGS) -nostartfiles -nodefaultlibs
 
 
 include $(wildcard .deps/*.d)

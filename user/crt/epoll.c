@@ -486,7 +486,7 @@ int epoll_create1(int flags)
 	htable_init_sized(&ep->fds, &rehash_interest, NULL, 32);
 
 	/* TODO: transfer EPFL_CLOEXEC (or some such) in @flags to FD_CLOEXEC */
-	int fd = __alloc_fd(NULL, -1, poll_tid, (L4_Word_t)ep, 0);
+	int fd = __alloc_fd_bits(NULL, -1, poll_tid, (L4_Word_t)ep, 0);
 	if(fd < 0) {
 		htable_clear(&ep->fds);
 		free(ep);

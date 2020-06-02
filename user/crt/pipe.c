@@ -22,8 +22,8 @@ int pipe2(int pipefd[2], int flags)
 
 	void *ctx = NULL;
 	for(int i=0; i < 2; i++) {
-		pipefd[i] = __alloc_fd(&ctx, -1, __the_sysinfo->posix.pipe,
-			rdwr[i], flags);
+		pipefd[i] = __alloc_fd_bits(&ctx, -1,
+			__the_sysinfo->posix.pipe, rdwr[i], flags);
 		if(pipefd[i] < 0) {
 			errno = -pipefd[i];
 			if(i > 0) close(pipefd[0]);

@@ -6,7 +6,6 @@
 #include <assert.h>
 #include <errno.h>
 #include <unistd.h>
-#include <errno.h>
 #include <fcntl.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/array_size/array_size.h>
@@ -15,8 +14,8 @@
 #include <ccan/likely/likely.h>
 
 #include <sneks/rbtree.h>
-#include <sneks/bitops.h>
 #include <sneks/process.h>
+#include <ukernel/rangealloc.h>
 
 #include <l4/types.h>
 
@@ -29,19 +28,15 @@
 
 struct fdchunk
 {
-	struct {
-		L4_ThreadId_t server;
-		L4_Word_t handle;
-	} pair[CHUNKSZ];
-	uint8_t fflags[CHUNKSZ];	/* FD_* */
-
-	/* metadata after. */
 	struct rb_node rb;	/* in fdchunk_tree, per step asc */
 	int step;	/* covers FDs [step << 9, (step + 1) << 9) */
+
+	struct fd fds[CHUNKSZ];
 	BITMAP_DECLARE(occ, CHUNKSZ);
 };
 
 
+static struct rangealloc *ra_fdbits;
 static struct rb_root fdchunk_tree = RB_ROOT;
 
 int __l4_last_errorcode = 0;	/* TODO: TSS this up */
@@ -131,24 +126,11 @@ static void insert_chunk(struct fdchunk *c)
 }
 
 
-inline L4_ThreadId_t __server(void **ctx, int fd) {
+inline struct fd_bits *__fdbits(void **ctx, int fd) {
 	assert(__fd_valid(ctx, fd));
 	struct fdchunk *c = get_chunk(ctx, fd);
-	return unlikely(c == NULL) ? L4_nilthread : c->pair[fd % CHUNKSZ].server;
-}
-
-
-inline L4_Word_t __handle(void **ctx, int fd) {
-	assert(__fd_valid(ctx, fd));
-	struct fdchunk *c = get_chunk(ctx, fd);
-	return unlikely(c == NULL) ? ~0ul : c->pair[fd % CHUNKSZ].handle;
-}
-
-
-inline int __fflags(void **ctx, int fd) {
-	assert(__fd_valid(ctx, fd));
-	struct fdchunk *c = get_chunk(ctx, fd);
-	return unlikely(c == NULL) ? 0 : c->fflags[fd % CHUNKSZ];
+	assert(c != NULL);
+	return ra_id2ptr(ra_fdbits, c->fds[fd % CHUNKSZ].raw >> 1);
 }
 
 
@@ -171,10 +153,7 @@ inline bool __fd_valid(void **ctx, int fd)
 static int first_free_fd(struct fdchunk **c_p, int first)
 {
 	int gap = -1;	/* discover a gap between chunks */
-	for(struct rb_node *rb = __rb_first(&fdchunk_tree);
-		rb != NULL;
-		rb = __rb_next(rb))
-	{
+	RB_FOREACH(rb, &fdchunk_tree) {
 		struct fdchunk *c = rb_entry(rb, struct fdchunk, rb);
 		if(c->step * CHUNKSZ + CHUNKSZ - 1 < first) continue;
 		if(gap < 0 || gap == c->step - 1) gap = c->step;
@@ -201,7 +180,7 @@ static int first_free_fd(struct fdchunk **c_p, int first)
 	assert(gap >= 0 || __rb_first(&fdchunk_tree) == NULL
 		|| rb_entry(__rb_first(&fdchunk_tree), struct fdchunk, rb)->step * CHUNKSZ + CHUNKSZ - 1 < first);
 	*c_p = NULL;
-	return unlikely(gap < 0) ? max(0, first) : gap * CHUNKSZ;
+	return unlikely(gap < 0) ? max(0, first) : (gap + 1) * CHUNKSZ;
 }
 
 
@@ -210,10 +189,9 @@ static int first_free_fd(struct fdchunk **c_p, int first)
  * [EEXIST] when the file descriptor was already in use, and -1 [ENOMEM] when
  * a chunk wasn't found and couldn't be allocated; *@ctx may be modified.
  */
-int __alloc_fd(
-	void **ctx, int fd,
-	L4_ThreadId_t server, L4_Word_t handle, int flags)
+static int __alloc_fd_ref(void **ctx, int fd, struct fd_bits *bits, int fflags)
 {
+	assert((fflags & ~1) == 0);
 	struct fdchunk *c;
 	if(fd >= 0) {
 		c = get_chunk(ctx, fd);
@@ -232,16 +210,29 @@ int __alloc_fd(
 		c->step = fd / CHUNKSZ;
 		insert_chunk(c);
 	}
-
 	assert(c->step == fd / CHUNKSZ);
+	assert(c->step * CHUNKSZ + fd % CHUNKSZ == fd);
+
 	assert(!bitmap_test_bit(c->occ, fd % CHUNKSZ));
 	bitmap_set_bit(c->occ, fd % CHUNKSZ);
-	assert(c->step * CHUNKSZ + fd % CHUNKSZ == fd);
-	c->fflags[fd % CHUNKSZ] = flags;
-	c->pair[fd % CHUNKSZ].handle = handle;
-	c->pair[fd % CHUNKSZ].server = server;
+	c->fds[fd % CHUNKSZ].raw = ra_ptr2id(ra_fdbits, bits) << 1 | fflags;
+	bits->refs++;
 
+	assert(__fd_valid(ctx, fd));
 	return fd;
+}
+
+
+int __alloc_fd_bits(
+	void **ctx, int fd,
+	L4_ThreadId_t server, L4_Word_t handle, int fflags)
+{
+	struct fd_bits *bits = ra_alloc(ra_fdbits, -1);
+	*bits = (struct fd_bits){ .server = server, .handle = handle };
+	int ret = __alloc_fd_ref(ctx, fd, bits, fflags);
+	if(unlikely(ret < 0)) ra_free(ra_fdbits, bits);
+	assert(bits->refs > 0);
+	return ret;
 }
 
 
@@ -276,6 +267,8 @@ int __fd_next(struct fd_iter *it, int prev)
 /* this isn't as much cold as init-only. */
 COLD void __file_init(struct sneks_fdlist *fdlist)
 {
+	ra_fdbits = RA_NEW(struct fd_bits, 1 << 15);
+
 	if(fdlist == NULL || fdlist->next == 0) return;
 
 	void *ctx = NULL;
@@ -283,7 +276,7 @@ COLD void __file_init(struct sneks_fdlist *fdlist)
 	do {
 		if(fdlist->fd > prev) abort();	/* invalid fdlist */
 		prev = fdlist->fd;
-		n = __alloc_fd(&ctx, fdlist->fd, fdlist->serv, fdlist->cookie, 0);
+		n = __alloc_fd_bits(&ctx, fdlist->fd, fdlist->serv, fdlist->cookie, 0);
 		fdlist = sneks_fdlist_next(fdlist);
 	} while(n >= 0 && fdlist->next != 0);
 	int err = errno;
@@ -293,7 +286,7 @@ COLD void __file_init(struct sneks_fdlist *fdlist)
 	stderr = fdopen(2, "w");
 
 	if(n < 0) {
-		fprintf(stderr, "%s: __alloc_fd() failed, errno=%d\n",
+		fprintf(stderr, "%s: __alloc_fd_bits() failed, errno=%d\n",
 			__func__, err);
 		abort();
 	}
@@ -309,16 +302,15 @@ int close(int fd)
 	}
 	struct fdchunk *c = get_chunk(&ctx, fd);
 	assert(bitmap_test_bit(c->occ, fd % CHUNKSZ));
-	int n = __io_close(c->pair[fd % CHUNKSZ].server,
-		c->pair[fd % CHUNKSZ].handle);
-	if(n <= 0) {
-		c->pair[fd % CHUNKSZ].server = L4_nilthread;
-		bitmap_clear_bit(c->occ, fd % CHUNKSZ);
-		assert(!__fd_valid(&ctx, fd));
+	struct fd_bits *b = ra_id2ptr(ra_fdbits, c->fds[fd % CHUNKSZ].raw >> 1);
+	assert(b->refs > 0);
+	bitmap_clear_bit(c->occ, fd % CHUNKSZ);
+	assert(!__fd_valid(&ctx, fd));
+	if(--b->refs > 0) return 0;
+	else {
+		int n = __io_close(b->server, b->handle);
+		ra_free(ra_fdbits, b);
 		return NTOERR(n);
-	} else {
-		errno = EIO;
-		return -1;
 	}
 }
 
@@ -334,11 +326,11 @@ long read(int fd, void *buf, size_t count)
 
 	int n;
 	unsigned length;
+	struct fd_bits *b = __fdbits(&ctx, fd);
 	__permit_recv_interrupt();
 	do {
 		length = count;
-		n = __io_read(__server(&ctx, fd), __handle(&ctx, fd),
-			count, buf, &length);
+		n = __io_read(b->server, b->handle, count, buf, &length);
 	} while(n == -EAGAIN);
 	__forbid_recv_interrupt();
 	if(n == -EWOULDBLOCK) n = -EAGAIN;
@@ -357,9 +349,9 @@ long write(int fd, const void *buf, size_t count)
 
 	uint16_t rc;
 	int n;
+	struct fd_bits *b = __fdbits(&ctx, fd);
 	do {
-		n = __io_write(__server(&ctx, fd), &rc, __handle(&ctx, fd),
-			buf, count);
+		n = __io_write(b->server, &rc, b->handle, buf, count);
 	} while(n == -EAGAIN);
 	if(n == -EWOULDBLOCK) n = -EAGAIN;
 	return NTOERR(n, rc);
@@ -374,7 +366,7 @@ uint64_t lseek(int fd, uint64_t offset, int whence)
 
 
 int dup(int oldfd) {
-	return dup2(oldfd, -1);
+	return dup2(oldfd, -3);
 }
 
 
@@ -388,9 +380,7 @@ int dup2(int oldfd, int newfd)
 	}
 	if(oldfd == newfd) return oldfd;	/* no-op */
 	if(newfd >= 0 && __fd_valid(&ctx, newfd)) close(newfd);
-
-	return __alloc_fd(&ctx, newfd, __server(&ctx, oldfd),
-		__handle(&ctx, oldfd), __fflags(&ctx, oldfd));
+	return __alloc_fd_ref(&ctx, newfd, __fdbits(&ctx, oldfd), 0);
 }
 
 
@@ -413,8 +403,7 @@ int fcntl(int fd, int cmd, ...)
 		errno = EBADF;
 		return -1;
 	}
-	L4_ThreadId_t server = __server(&ctx, fd);
-	L4_Word_t handle = __handle(&ctx, fd);
+	struct fd_bits *b = __fdbits(&ctx, fd);
 	va_list al; va_start(al, cmd);
 	switch(cmd) {
 		default: va_end(al); goto Einval;
@@ -422,20 +411,19 @@ int fcntl(int fd, int cmd, ...)
 			int low = va_arg(al, int);
 			va_end(al);
 			if(low < 0) goto Einval;
-			int fflags = __fflags(&ctx, fd);
 			if(low == 0 && __fd_valid(&ctx, 0)) low = 1;
-			return __alloc_fd(&ctx, -low, server, handle, fflags);
+			return __alloc_fd_ref(&ctx, -low, b, 0);
 		}
 		case F_GETFL: {
 			va_end(al);
 			int old = 0;
-			int n = __io_set_flags(server, &old, handle, 0, ~0l);
+			int n = __io_set_flags(b->server, &old, b->handle, 0, ~0l);
 			return NTOERR(n, old);
 		}
 		case F_SETFL: {
 			int or = va_arg(al, int);
 			va_end(al);
-			int dummy, n = __io_set_flags(server, &dummy, handle, or, ~or);
+			int foo, n = __io_set_flags(b->server, &foo, b->handle, or, ~or);
 			return NTOERR(n);
 		}
 	}

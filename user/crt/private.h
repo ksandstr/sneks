@@ -43,21 +43,29 @@ struct fd_iter {
 	struct fdchunk *chunk;
 };
 
+struct fd_bits {
+	L4_ThreadId_t server;
+	L4_Word_t handle;
+	unsigned refs;
+};
 
-/* fd-to-component access w/ group caching via @ctx (initialize to NULL,
- * invalidated by next call to close()).
- */
-extern L4_ThreadId_t __server(void **ctx, int fd);
-extern L4_Word_t __handle(void **ctx, int fd);
-extern int __fflags(void **ctx, int fd); /* file descriptor (FD_*) flags */
+struct fd {
+	uint16_t raw;	/* low bit is for FD_CLOEXEC */
+};
+
+
+extern struct fd_bits *__fdbits(void **ctx, int fd)
+	__attribute__((pure));
 extern bool __fd_valid(void **ctx, int fd);
+#define __server(ctx, fd) (__fdbits((ctx), (fd))->server)
+#define __handle(ctx, fd) (__fdbits((ctx), (fd))->handle)
 
 /* creation. if @fd < 0, allocates a different file descriptor. otherwise if
  * @fd is already valid, returns -EEXIST.
  */
-extern int __alloc_fd(
+extern int __alloc_fd_bits(
 	void **ctx, int fd,
-	L4_ThreadId_t server, L4_Word_t handle, int flags);
+	L4_ThreadId_t server, L4_Word_t handle, int fflags);
 
 /* these return -1 when there were no file descriptors, or when @prev was the
  * last one, respectively. __fd_iter_ctx() returns an useful value for @ctx in

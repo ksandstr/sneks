@@ -45,8 +45,8 @@ msg.o: msg-defs.h info-defs.h
 # build things from mung as guests.
 #
 # NOTE: this is here rather than config.mk because imports of these things
-# should happen into sys/crt and nowhere else; so having the rule at toplevel
-# is wrong.
+# should happen into sys/crt and user/crt, and then nowhere else; so having the
+# rule at toplevel is wrong.
 mung-%.o ::
 	@echo "  CC $@ <mung>"
 	@$(CC) -c -o $@ $(wildcard $(MUNG_DIR)/$*.c) $(wildcard $(MUNG_DIR)/lib/$*.c) \

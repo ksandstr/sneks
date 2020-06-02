@@ -69,9 +69,6 @@ START_LOOP_TEST(many_dups, iter, 0, 1)
 	const int n_dups = (iter & 1) ? 567 : 11;
 	diag("n_dups=%d", n_dups);
 	plan_tests(6);
-#ifdef __sneks__
-	todo_start("lol, n00b");
-#endif
 
 	int n = sigaction(SIGPIPE,
 		&(struct sigaction){ .sa_handler = SIG_IGN }, NULL);
