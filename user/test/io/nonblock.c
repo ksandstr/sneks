@@ -112,12 +112,16 @@ DECLARE_TEST("io:nonblock", epoll_basic);
  *
  * variables:
  *   - [act_send] false for active wait, true for active send
+ *   - [level] use level-triggered mode when true, edge otherwise
  */
-START_LOOP_TEST(epoll_from_pipe, iter, 0, 1)
+START_LOOP_TEST(epoll_from_pipe, iter, 0, 3)
 {
-	const bool act_send = !!(iter & 1);
-	diag("act_send=%s", btos(act_send));
+	const bool act_send = !!(iter & 1), level = !!(iter & 2);
+	diag("act_send=%s, level=%s", btos(act_send), btos(level));
 	plan_tests(10);
+#ifdef __sneks__
+	if(level) todo_start("level-trig not in sneks yet");
+#endif
 
 	int fds[2];
 	int n = pipe(fds);
@@ -140,7 +144,8 @@ START_LOOP_TEST(epoll_from_pipe, iter, 0, 1)
 
 	int epfd = epoll_create1(0);
 	n = epoll_ctl(epfd, EPOLL_CTL_ADD, fds[0], &(struct epoll_event){
-		.events = EPOLLET | EPOLLEXCLUSIVE | EPOLLIN, .data.u32 = 666 });
+		.events = (level ? 0 : EPOLLET) | EPOLLEXCLUSIVE | EPOLLIN,
+		.data.u32 = 666 });
 	if(!ok(n == 0, "epoll_ctl (add)")) diag("errno=%d", errno);
 
 	if(!act_send) usleep(10 * 1000);
@@ -181,11 +186,15 @@ DECLARE_TEST("io:nonblock", epoll_from_pipe);
 /* write into multiple reader processes through nonblocking pipes, selecting
  * between them using epoll.
  */
-START_LOOP_TEST(epoll_write_many, iter, 0, 1)
+START_LOOP_TEST(epoll_write_many, iter, 0, 3)
 {
 	const int n_readers = (~iter & 1) ? 2 : 7;
-	diag("n_readers=%d", n_readers);
+	const bool level = !!(iter & 2);
+	diag("n_readers=%d, level=%s", n_readers, btos(level));
 	plan_tests(2);
+#ifdef __sneks__
+	if(level) todo_start("level-trig not in sneks yet");
+#endif
 
 	struct sigaction act = { .sa_handler = SIG_IGN };
 	int n = sigaction(SIGPIPE, &act, NULL);
@@ -226,7 +235,7 @@ START_LOOP_TEST(epoll_write_many, iter, 0, 1)
 		remain[i] = 128 * 1024;
 		n = epoll_ctl(epfd, EPOLL_CTL_ADD, pipes[i].fds[1],
 			&(struct epoll_event){
-				.events = EPOLLOUT | EPOLLET | EPOLLEXCLUSIVE,
+				.events = EPOLLOUT | (level ? 0 : EPOLLET) | EPOLLEXCLUSIVE,
 				.data.u32 = i,
 			});
 		if(n < 0) diag("epoll_ctl[add] failed, errno=%d", errno);
@@ -283,3 +292,56 @@ START_LOOP_TEST(epoll_write_many, iter, 0, 1)
 END_TEST
 
 DECLARE_TEST("io:nonblock", epoll_write_many);
+
+
+/* test level-triggered epoll. scenario as described on the epoll(7)
+ * manpage.
+ */
+START_LOOP_TEST(epoll_level_trigger, iter, 0, 1)
+{
+	const bool level = !!(iter & 1);
+	diag("level=%s", btos(level));
+	plan_tests(8);
+#ifdef __sneks__
+	todo_start("not there yet");
+#endif
+
+	int fds[2];
+	int n = pipe(fds);
+	fail_if(n < 0, "pipe(2) failed, errno=%d", errno);
+
+	int epfd = epoll_create1(0);
+	ok(epfd >= 0, "epoll_create1");
+	n = epoll_ctl(epfd, EPOLL_CTL_ADD, fds[0], &(struct epoll_event){
+			.events = EPOLLIN | (level ? 0 : EPOLLET) | EPOLLEXCLUSIVE,
+			.data.fd = fds[0],
+		});
+	ok(n == 0, "epoll_ctl");
+
+	struct epoll_event ev;
+	n = epoll_wait(epfd, &ev, 1, 0);
+	ok(n == 0, "no event before write");
+
+	char *data = malloc(2048);
+	memset(data, 0xfa, 2048);
+	n = write(fds[1], data, 2048);
+	ok(n == 2048, "write");
+
+	n = epoll_wait(epfd, &ev, 1, 0);
+	ok(n == 1 && (ev.events & EPOLLIN), "first event");
+
+	char *buf = malloc(1024);
+	n = read(fds[0], buf, 1024);
+	ok(n == 1024, "read");
+
+	n = epoll_wait(epfd, &ev, 1, 0);
+	imply_ok1(!level, n == 0);
+	imply_ok1(level, n == 1 && (ev.events & EPOLLIN));
+
+	close(epfd);
+	close(fds[0]); close(fds[1]);
+	free(data); free(buf);
+}
+END_TEST
+
+DECLARE_TEST("io:nonblock", epoll_level_trigger);
