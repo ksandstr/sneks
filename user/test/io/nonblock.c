@@ -119,9 +119,6 @@ START_LOOP_TEST(epoll_from_pipe, iter, 0, 3)
 	const bool act_send = !!(iter & 1), level = !!(iter & 2);
 	diag("act_send=%s, level=%s", btos(act_send), btos(level));
 	plan_tests(10);
-#ifdef __sneks__
-	if(level) todo_start("level-trig not in sneks yet");
-#endif
 
 	int fds[2];
 	int n = pipe(fds);
@@ -192,9 +189,6 @@ START_LOOP_TEST(epoll_write_many, iter, 0, 3)
 	const bool level = !!(iter & 2);
 	diag("n_readers=%d, level=%s", n_readers, btos(level));
 	plan_tests(2);
-#ifdef __sneks__
-	if(level) todo_start("level-trig not in sneks yet");
-#endif
 
 	struct sigaction act = { .sa_handler = SIG_IGN };
 	int n = sigaction(SIGPIPE, &act, NULL);
@@ -302,9 +296,6 @@ START_LOOP_TEST(epoll_level_trigger, iter, 0, 1)
 	const bool level = !!(iter & 1);
 	diag("level=%s", btos(level));
 	plan_tests(8);
-#ifdef __sneks__
-	todo_start("not there yet");
-#endif
 
 	int fds[2];
 	int n = pipe(fds);

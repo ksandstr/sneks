@@ -43,7 +43,7 @@ struct interest
 struct epoll
 {
 	struct list_node wait_link, all_link;
-	int last_sync;
+	int last_sync, n_level;
 	L4_ThreadId_t waiter;
 	struct htable fds;	/* of <struct interest *> */
 };
@@ -88,20 +88,73 @@ static int cmp_interest_by_spid_handle_asc(const void *a, const void *b) {
 }
 
 
+static int cmp_interest_ptr_by_spid_handle_asc(const void *a, const void *b) {
+	const struct interest *const *aa = a, *const *bb = b;
+	int c = (int)(*aa)->spid - (int)(*bb)->spid;
+	if(c == 0) c = (int)(*aa)->handle - (int)(*bb)->handle;
+	return c;
+}
+
+
 static void sigio_handler(int signo) {
 	atomic_fetch_add_explicit(&sigio_sync_count, 1, memory_order_relaxed);
 }
 
 
-/* merge as many edge-trigger signals from @q as match the interest list in
- * @ep, and return events for the first @maxevents thereof.
+static int poll_levels(
+	struct epoll *ep,
+	struct epoll_event *events, int maxevents,
+	struct interest **ls, int n_ls)
+{
+	/* probe each span in turn. */
+	L4_Word_t hbuf[SNEKS_POLL_STBUF_SIZE];
+	int got = 0, start = 0;
+	void *ctx = NULL;
+	while(got < maxevents && start < n_ls) {
+		int len = 0, spid = ls[start]->spid;
+		while(start + len < n_ls && spid == ls[start + len]->spid
+			&& len < ARRAY_SIZE(hbuf))
+		{
+			hbuf[len] = ls[start + len]->handle;
+			len++;
+		}
+		int n = __io_get_status(__server(&ctx, ls[start]->fd),
+			hbuf, len, hbuf, &(unsigned){ SNEKS_POLL_STBUF_SIZE });
+		if(n != 0) {
+			/* FIXME: do something else? */
+			fprintf(stderr, "%s: Poll::get_status failed on spid=%d: n=%d\n",
+				__func__, spid, n);
+			abort();
+		}
+		for(int i=0; i < len && got < maxevents; i++) {
+			if(hbuf[i] == ~0ul) continue;
+			struct interest *fd = ls[start + i];
+			L4_Word_t hit = (fd->ev.events | EPOLLHUP) & hbuf[i];
+			if(hit > 0) {
+				events[got++] = (struct epoll_event){
+					.events = hit, .data = fd->ev.data,
+				};
+			}
+		}
+		start += len;
+	}
+
+	return got;
+}
+
+
+/* merge as many signals from @q as match the interest list in @ep, and return
+ * events for the first @maxevents thereof. if afterward there's room and @ep
+ * has level-triggered interests that weren't matched from @q, poll them and
+ * return as many as fits.
  */
 static int epoll_consume(
 	struct epoll *ep,
 	struct epoll_event *events, int maxevents,
 	struct evq *q)
 {
-	int got = 0, live_heads = 0;
+	struct interest *levs_hit[ep->n_level];	/* haha stack go brrrrr */
+	int got = 0, live_heads = 0, n_levs_hit = 0;
 	for(int i = 0, e = 0; i < q->n_heads; e += q->heads[i++].count) {
 		int from = q->heads[i].pid;
 		if(from == 0) continue;
@@ -121,13 +174,16 @@ static int epoll_consume(
 			{
 				if(cand->spid != from || cand->handle != key.handle) continue;
 				uint32_t hit = cand->ev.events & *mask;
-				if(hit > 0) {
-					events[got++] = (struct epoll_event){
-						.events = hit, .data = cand->ev.data,
-					};
-					*mask &= ~hit;
-					if(*mask == 0) live_evs--;
-					/* TODO: support EPOLLONESHOT */
+				if(hit == 0) continue;
+				events[got++] = (struct epoll_event){
+					.events = hit, .data = cand->ev.data,
+				};
+				*mask &= ~hit;
+				if(*mask == 0) live_evs--;
+				/* TODO: support EPOLLONESHOT */
+				if(~cand->ev.events & EPOLLET) {
+					assert(n_levs_hit < ep->n_level);
+					levs_hit[n_levs_hit++] = cand;
 				}
 			}
 		}
@@ -144,6 +200,33 @@ static int epoll_consume(
 		q->n_evs = 0;
 	}
 	/* TODO: compress @q if not empty? */
+
+	if(got < maxevents && n_levs_hit < ep->n_level) {
+		struct interest *ls[ep->n_level];
+		qsort(levs_hit, n_levs_hit, sizeof levs_hit[0],
+			&cmp_interest_ptr_by_spid_handle_asc);
+		/* collect level-triggered interests which aren't in levs_hit[]. */
+		int n_ls = 0;
+		struct htable_iter it;
+		for(struct interest *cand = htable_first(&ep->fds, &it);
+			cand != NULL;
+			cand = htable_next(&ep->fds, &it))
+		{
+			if(cand->ev.events & EPOLLET) continue;
+			struct interest *hit = bsearch(&cand, levs_hit, n_levs_hit,
+				sizeof levs_hit[0], &cmp_interest_ptr_by_spid_handle_asc);
+			if(hit != NULL) continue;
+			assert(n_ls < ep->n_level);
+			ls[n_ls++] = cand;
+		}
+		if(n_ls > 0) {
+			/* sort by server, poll, and generate events. */
+			qsort(ls, n_ls, sizeof ls[0], &cmp_interest_ptr_by_spid_handle_asc);
+			int n = poll_levels(ep, &events[got], maxevents - got, ls, n_ls);
+			if(n > 0) got += n;
+		}
+	}
+
 	return got;
 }
 
@@ -159,6 +242,7 @@ static void poll_handles(
 {
 	if(q->n_heads == ARRAY_SIZE(q->heads) || q->n_evs == EVBUFSZ) {
 		/* no room; resync. */
+resync:
 		atomic_fetch_add(&sigio_sync_count, 1);
 		return;
 	}
@@ -170,8 +254,7 @@ static void poll_handles(
 	if(n != 0) {
 		fprintf(stderr, "%s: get_status for serv=%lu:%lu failed, n=%d\n",
 			__func__, L4_ThreadNo(serv), L4_Version(serv), n);
-		atomic_fetch_add(&sigio_sync_count, 1);
-		return;
+		goto resync;
 	}
 
 	int new = 0;
@@ -189,8 +272,9 @@ static void poll_handles(
 }
 
 
-/* TODO: like epoll_consume(), but this'll gather interest records that must
- * be queried explicitly; i.e. those that aren't matched by @q's contents.
+/* like epoll_consume(), but this'll gather edge-triggered interest records
+ * that must be re-queried explicitly when SIGIO is raised; i.e. those that
+ * aren't matched by @q's contents.
  */
 static int epoll_resync_consume(
 	struct epoll *ep,
@@ -209,8 +293,6 @@ static int epoll_resync_consume(
 		in != NULL;
 		in = htable_next(&ep->fds, &it))
 	{
-		/* TODO: consider level-triggered interest as well */
-		if(~in->ev.events & EPOLLET) continue;
 		assert(n_fds < ep->fds.elems);
 		fds[n_fds] = *in;
 		n_fds++;
@@ -581,7 +663,7 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
 			if(old != NULL) goto Eexist;
 			if(event == NULL) goto Einval;
 			const int unsupported = EPOLLONESHOT | EPOLLWAKEUP;
-			const int required = EPOLLET | EPOLLEXCLUSIVE;
+			const int required = EPOLLEXCLUSIVE;
 			if((event->events & unsupported) || (~event->events & required)) {
 				goto Einval;
 			}
@@ -616,6 +698,7 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
 					abort();
 				}
 			}
+			if(~new->ev.events & EPOLLET) ep->n_level++;
 			return 0;
 		}
 
@@ -623,14 +706,20 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
 			if(old == NULL) goto Enoent;
 			bool ok = htable_del(&ep->fds, hash, old);
 			assert(ok);
+			if(~old->ev.events & EPOLLET) {
+				assert(ep->n_level > 0);
+				ep->n_level--;
+			}
 			free(old);
 			int n = refresh_notify(hash, server, key.handle);
 			return min(n, 0);
 		}
 
+		/* TODO: update oneshot etc. stuff, forbid various other things. this
+		 * is generally undertested.
+		 */
 		case EPOLL_CTL_MOD: {
 			if(old == NULL) goto Enoent;
-			/* TODO: update oneshot etc. stuff */
 			old->ev = *event; old->ev.events |= EPOLLHUP;
 			int n = refresh_notify(hash, server, key.handle);
 			return min(n, 0);
