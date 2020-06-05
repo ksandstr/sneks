@@ -10,15 +10,7 @@
 #include <ccan/minmax/minmax.h>
 
 
-/* notice how bullshit this is? that's select(2).
- *
- * TODO: this could be made more efficient by not specifying EPOLLET in the
- * event mask, but sneks doesn't currently implement it. the difference is
- * worth a context switch per epoll_ctl() call, in favour of batched calls to
- * Poll::get_status per server (just one in the typical case). this is also
- * the difference that a non-epoll based select(2) would have, so it's just as
- * well to get it through epoll.
- */
+/* notice how bullshit this is? that's select(2). */
 int select(
 	int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
 	struct timeval *timeout)
@@ -59,7 +51,7 @@ int select(
 			FD_CLR(i, exceptfds);
 		}
 		assert(evs != 0);
-		evs |= EPOLLET | EPOLLEXCLUSIVE;
+		evs |= EPOLLEXCLUSIVE;
 		int n = epoll_ctl(epfd, EPOLL_CTL_ADD, i,
 			&(struct epoll_event){ .events = evs, .data.fd = i });
 		if(n < 0) {
@@ -135,9 +127,6 @@ inline void FD_ZERO(fd_set *set) {
 }
 
 
-/* NOTE: same applies wrt EPOLLET as for select(2). remove it once sneks epoll
- * does level triggering.
- */
 int poll(struct pollfd *fds, nfds_t nfds, int timeout)
 {
 	/* (events should be directly convertible.) */
@@ -157,7 +146,7 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout)
 		if(fds[i].fd < 0) continue;
 		int n = epoll_ctl(epfd, EPOLL_CTL_ADD, fds[i].fd,
 			&(struct epoll_event){
-				.events = EPOLLET | EPOLLEXCLUSIVE | (fds[i].events & pass),
+				.events = EPOLLEXCLUSIVE | (fds[i].events & pass),
 				.data.ptr = &fds[i],
 			});
 		if(n < 0 && errno == EINVAL) fds[i].revents = POLLNVAL;
