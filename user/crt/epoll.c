@@ -376,6 +376,8 @@ static noreturn void poll_notify_fn(void *unused)
 				L4_Word_t handle; L4_StoreMR(1, &handle);
 				L4_Word_t eventsptr; L4_StoreMR(2, &eventsptr);
 				L4_Word_t maxevents; L4_StoreMR(3, &maxevents);
+				bool nohang = !!(maxevents & 0x10000);
+				maxevents &= 0xffff;
 				struct epoll *ep = (struct epoll *)handle;
 				if(L4_SameThreads(ep->waiter, sender)) {
 					/* timeout idempotence */
@@ -393,7 +395,7 @@ static noreturn void poll_notify_fn(void *unused)
 				} else {
 					got = epoll_consume(ep, events, maxevents, &q);
 				}
-				if(got == 0) {
+				if(got == 0 && !nohang) {
 					ep->waiter = sender;
 					list_add_tail(&waiting_epolls, &ep->wait_link);
 					break;
@@ -668,13 +670,13 @@ int epoll_wait(int epfd,
 		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 3 }.raw);
 		L4_LoadMR(1, handle);
 		L4_LoadMR(2, (L4_Word_t)events);
-		L4_LoadMR(3, maxevents);
+		L4_LoadMR(3, (maxevents & 0xffff) | (timeout == 0 ? 0x10000 : 0));
 		L4_Accept(L4_UntypedWordsAcceptor);
 		L4_MsgTag_t tag;
 		if(timeout < 0) tag = L4_Lcall(poll_ltid);
 		else {
 			tag = L4_Call_Timeouts(poll_ltid, L4_Never,
-				timeout == 0 ? L4_ZeroTime : L4_TimePeriod(timeout * 1000));
+				timeout <= 0 ? L4_Never : L4_TimePeriod(timeout * 1000));
 		}
 		if(L4_IpcFailed(tag)) {
 			int ec = L4_ErrorCode();
