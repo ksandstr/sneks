@@ -631,6 +631,39 @@ static void epoll_close(L4_Word_t handle)
 }
 
 
+static size_t direct_rehash(const void *key, void *priv) {
+	return (size_t)key ^ 0xf0adf0ad;
+}
+
+
+static bool direct_eq_fn(const void *cand, void *key) {
+	return cand == key;
+}
+
+
+/* returns false on the first call for each value of @spid in the current
+ * process, and true thereafter.
+ */
+static bool check_notify(int spid)
+{
+	static int last_pid = -1;
+	static struct htable ht = HTABLE_INITIALIZER(ht, &direct_rehash, NULL);
+	if(unlikely(last_pid != getpid())) {
+		htable_clear(&ht);
+		last_pid = getpid();
+	} else if(likely(htable_get(&ht, direct_rehash((void *)spid, NULL),
+		&direct_eq_fn, (void *)spid) != NULL))
+	{
+		return true;
+	}
+
+	bool ok = htable_add(&ht, direct_rehash((void *)spid, NULL),
+		(void *)spid);
+	assert(ok);
+	return false;
+}
+
+
 int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
 {
 	void *ctx = NULL;
@@ -689,13 +722,9 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
 				 */
 				ep->n_level++;
 				/* ... except for the first time around in each process, so
-				 * that Poll::set_notify.tid is set.
+				 * that Poll::set_notify.tid is set in each IO server.
 				 */
-				static int last_pid = -1;
-				if(likely(last_pid == getpid())) return 0;
-				else {
-					last_pid = getpid();
-				}
+				if(likely(check_notify(key.spid))) return 0;
 			}
 			int n = refresh_notify(hash, server, key.handle);
 			if(n < 0) {
