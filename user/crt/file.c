@@ -421,9 +421,9 @@ int fcntl(int fd, int cmd, ...)
 			return NTOERR(n, old);
 		}
 		case F_SETFL: {
-			int or = va_arg(al, int);
+			int val = va_arg(al, int);
 			va_end(al);
-			int foo, n = __io_set_flags(b->server, &foo, b->handle, or, ~or);
+			int foo, n = __io_set_flags(b->server, &foo, b->handle, val, val);
 			return NTOERR(n);
 		}
 	}
