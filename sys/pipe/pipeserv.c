@@ -637,12 +637,14 @@ static int pipe_set_notify(
 
 static void pipe_get_status(
 	const L4_Word_t *handles, unsigned n_handles,
+	const uint16_t *notif, unsigned n_notif,
 	L4_Word_t *st, unsigned *n_st_p)
 {
 	int spid = pidof_NP(muidl_get_sender());
 	for(int i=0; i < n_handles; i++) {
 		struct pipehandle *h = get_handle(NULL, spid, handles[i]);
 		st[i] = h == NULL ? ~0ul : event_status(h);
+		if(h != NULL && i < n_notif) h->events = notif[i];
 	}
 	*n_st_p = n_handles;
 }
@@ -673,7 +675,11 @@ static void send_notify(struct list_head *handle_list, int events)
 	list_for_each(handle_list, r, ph_link) {
 		if((r->events & events) == 0) continue;
 		L4_ThreadId_t ntid = r->owner->notify_tid;
-		assert(!L4_IsNilThread(ntid));
+		if(L4_IsNilThread(ntid)) {
+			printf("pipeserv: pid=%d notify_tid is nil!\n",
+				r->owner->pid);
+			continue;
+		}
 		L4_LoadMR(0, (L4_MsgTag_t){ .X.label = my_pid, .X.u = 2 }.raw);
 		L4_LoadMR(1, events);
 		L4_LoadMR(2, r->bits & 0xffff);

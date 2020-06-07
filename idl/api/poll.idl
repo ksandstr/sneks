@@ -34,12 +34,19 @@ interface Poll
 		in long fd, in long events, in L4X2::ThreadId tid)
 		raises(Posix::Errno);
 
-	/* retrieve level-triggered I/O status (set of EPOLL*) for each element in
-	 * @handles. on error sets status to ~0ul.
+	/* retrieve level-triggered I/O status (set of EPOLL{IN,OUT,ERR,*})
+	 * for each element in @handles. on error sets status to ~0ul.
+	 *
+	 * when @notif[i] is valid, notification mask for @handles[i] is set to
+	 * its value; this allows low overhead level-triggered select(2) and
+	 * poll(2). note that @statuses is the full status unfiltered by @notif,
+	 * and that the caller must have called Poll::set_notify to set the
+	 * receiver thread ID.
 	 */
-	const long STBUF_SIZE = 60;
+	const long STBUF_SIZE = 32;
 	typedef sequence<L4X2::word, STBUF_SIZE> stbuf;
-	void get_status(in stbuf handles, out stbuf statuses);
+	typedef sequence<unsigned short, STBUF_SIZE> maskbuf;
+	void get_status(in stbuf handles, in maskbuf notif, out stbuf statuses);
 };
 
 };

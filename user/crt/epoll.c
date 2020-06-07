@@ -107,6 +107,7 @@ static int poll_levels(
 	struct interest **ls, int n_ls)
 {
 	/* probe each span in turn. */
+	uint16_t notif[SNEKS_POLL_STBUF_SIZE];
 	L4_Word_t hbuf[SNEKS_POLL_STBUF_SIZE];
 	int got = 0, start = 0;
 	void *ctx = NULL;
@@ -115,11 +116,13 @@ static int poll_levels(
 		while(start + len < n_ls && spid == ls[start + len]->spid
 			&& len < ARRAY_SIZE(hbuf))
 		{
-			hbuf[len] = ls[start + len]->handle;
+			struct interest *i = ls[start + len];
+			hbuf[len] = i->handle; notif[len] = i->ev.events & 0xffff;
 			len++;
 		}
 		int n = __io_get_status(__server(&ctx, ls[start]->fd),
-			hbuf, len, hbuf, &(unsigned){ SNEKS_POLL_STBUF_SIZE });
+			hbuf, len, notif, len,
+			hbuf, &(unsigned){ SNEKS_POLL_STBUF_SIZE });
 		if(n != 0) {
 			/* FIXME: do something else? */
 			fprintf(stderr, "%s: Poll::get_status failed on spid=%d: n=%d\n",
@@ -250,7 +253,7 @@ resync:
 	assert(n_handles > 0 && n_handles <= SNEKS_POLL_STBUF_SIZE);
 	L4_Word_t st[SNEKS_POLL_STBUF_SIZE];
 	unsigned n_st = ARRAY_SIZE(st);
-	int n = __io_get_status(serv, handles, n_handles, st, &n_st);
+	int n = __io_get_status(serv, handles, n_handles, NULL, 0, st, &n_st);
 	if(n != 0) {
 		fprintf(stderr, "%s: get_status for serv=%lu:%lu failed, n=%d\n",
 			__func__, L4_ThreadNo(serv), L4_Version(serv), n);
@@ -676,6 +679,24 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
 			};
 			bool ok = htable_add(&ep->fds, hash, new);
 			if(!ok) { free(new); goto Enomem; }
+			if(~new->ev.events & EPOLLET) {
+				/* skip mask refresh; it's not necessary to get notifications
+				 * for a level-triggered event because status will be queried
+				 * anyhow.
+				 *
+				 * this saves one context switch per fd per call to select(2)
+				 * or poll(2).
+				 */
+				ep->n_level++;
+				/* ... except for the first time around in each process, so
+				 * that Poll::set_notify.tid is set.
+				 */
+				static int last_pid = -1;
+				if(likely(last_pid == getpid())) return 0;
+				else {
+					last_pid = getpid();
+				}
+			}
 			int n = refresh_notify(hash, server, key.handle);
 			if(n < 0) {
 				htable_del(&ep->fds, hash, new);
@@ -698,7 +719,6 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
 					abort();
 				}
 			}
-			if(~new->ev.events & EPOLLET) ep->n_level++;
 			return 0;
 		}
 
