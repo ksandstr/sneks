@@ -65,7 +65,21 @@ struct evq
 };
 
 
+/* see evq_first(), evq_next() */
+struct evq_iter {
+	int from;	/* current q->heads[h].pid */
+	int h, e_base, j, count;
+	int live_heads, live_evs;
+};
+
+
 static void epoll_close(L4_Word_t handle);
+static bool evq_first(
+	L4_Word_t **maskpp, L4_Word_t *handle_p,
+	struct evq *q, struct evq_iter *it);
+static bool evq_next(
+	L4_Word_t **maskpp, L4_Word_t *handle_p,
+	struct evq *q, struct evq_iter *it);
 
 
 static L4_ThreadId_t poll_tid = { .raw = 0 }, poll_ltid;
@@ -146,6 +160,71 @@ static int poll_levels(
 }
 
 
+/* sadly, gcc doesn't separate this out from evq_next() on its own. so we have
+ * this, the rare half; and evq_next(), the common one.
+ */
+static bool _evq_next_head(
+	L4_Word_t **maskpp, L4_Word_t *handle_p,
+	struct evq *q, struct evq_iter *it)
+{
+	if(it->live_evs == 0) {
+		it->live_heads++;
+		q->heads[it->h].pid = 0;
+	}
+	it->live_evs = 0;
+	it->j = -1;
+	while(it->e_base += q->heads[it->h].count, ++it->h < q->n_heads) {
+		it->count = q->heads[it->h].count;
+		it->from = q->heads[it->h].pid;
+		if(it->from != 0) break;
+	}
+	if(it->h < q->n_heads) {
+		return evq_next(maskpp, handle_p, q, it);
+	} else {
+		if(it->live_heads == 0) {
+			q->n_heads = 0;
+			q->n_evs = 0;
+		}
+		/* TODO: compress @q if not empty? */
+		return false;
+	}
+}
+
+
+static inline bool evq_next(
+	L4_Word_t **maskpp, L4_Word_t *handle_p,
+	struct evq *q, struct evq_iter *it)
+{
+	if(likely(++it->j < it->count)) {
+		*maskpp = &q->evbuf[it->e_base + it->j].mask;
+		*handle_p = q->evbuf[it->e_base + it->j].handle;
+		if(*maskpp != 0) it->live_evs++;
+		return true;
+	} else {
+		return _evq_next_head(maskpp, handle_p, q, it);
+	}
+}
+
+
+static bool evq_first(
+	L4_Word_t **maskpp, L4_Word_t *handle_p,
+	struct evq *q, struct evq_iter *it)
+{
+	it->e_base = 0; it->live_heads = 0; it->live_evs = 0;
+	for(int i=0; i < q->n_heads; it->e_base += q->heads[i++].count) {
+		assert(q->heads[i].count > 0);
+		if(q->heads[i].pid != 0) {
+			it->h = i;
+			it->from = q->heads[i].pid;
+			it->count = q->heads[i].count;
+			it->j = -1;
+			return evq_next(maskpp, handle_p, q, it);
+		}
+	}
+	return false;
+}
+
+
 /* merge as many signals from @q as match the interest list in @ep, and return
  * events for the first @maxevents thereof. if afterward there's room and @ep
  * has level-triggered interests that weren't matched from @q, poll them and
@@ -157,52 +236,35 @@ static int epoll_consume(
 	struct evq *q)
 {
 	struct interest *levs_hit[ep->n_level];	/* haha stack go brrrrr */
-	int got = 0, live_heads = 0, n_levs_hit = 0;
-	for(int i = 0, e = 0; i < q->n_heads; e += q->heads[i++].count) {
-		int from = q->heads[i].pid;
-		if(from == 0) continue;
-		live_heads++;
-		int live_evs = 0;
-		for(int j=0; j < q->heads[i].count && got < maxevents; j++) {
-			L4_Word_t *mask = &q->evbuf[e+j].mask;
-			if(*mask == 0) continue;
-			live_evs++;
-			struct interest key = {
-				.handle = q->evbuf[e+j].handle, .spid = from };
-			size_t hash = rehash_interest(&key, NULL);
-			struct htable_iter it;
-			for(struct interest *cand = htable_firstval(&ep->fds, &it, hash);
-				cand != NULL && got < maxevents;
-				cand = htable_nextval(&ep->fds, &it, hash))
-			{
-				if(cand->spid != from || cand->handle != key.handle) continue;
-				uint32_t hit = cand->ev.events & *mask;
-				if(hit == 0) continue;
-				events[got++] = (struct epoll_event){
-					.events = hit, .data = cand->ev.data,
-				};
-				*mask &= ~hit;
-				if(*mask == 0) live_evs--;
-				/* TODO: support EPOLLONESHOT */
-				if(~cand->ev.events & EPOLLET) {
-					assert(n_levs_hit < ep->n_level);
-					levs_hit[n_levs_hit++] = cand;
-				}
+	int got = 0, n_levs_hit = 0;
+	struct evq_iter it;
+	L4_Word_t *mask, handle;
+	for(bool have = evq_first(&mask, &handle, q, &it);
+		have && got < maxevents;
+		have = evq_next(&mask, &handle, q, &it))
+	{
+		if(*mask == 0) continue;
+		struct interest key = { .handle = handle, .spid = it.from };
+		size_t hash = rehash_interest(&key, NULL);
+		struct htable_iter it;
+		for(struct interest *cand = htable_firstval(&ep->fds, &it, hash);
+			cand != NULL && got < maxevents;
+			cand = htable_nextval(&ep->fds, &it, hash))
+		{
+			if(cand->spid != key.spid || cand->handle != key.handle) continue;
+			uint32_t hit = cand->ev.events & *mask;
+			if(hit == 0) continue;
+			events[got++] = (struct epoll_event){
+				.events = hit, .data = cand->ev.data,
+			};
+			*mask &= ~hit;
+			/* TODO: support EPOLLONESHOT */
+			if(~cand->ev.events & EPOLLET) {
+				assert(n_levs_hit < ep->n_level);
+				levs_hit[n_levs_hit++] = cand;
 			}
 		}
-		assert(live_evs >= 0);
-		if(live_evs == 0) {
-			q->heads[i].pid = 0;
-			live_heads--;
-		}
-		if(got == maxevents) break;
 	}
-	assert(live_heads >= 0);
-	if(live_heads == 0) {
-		q->n_heads = 0;
-		q->n_evs = 0;
-	}
-	/* TODO: compress @q if not empty? */
 
 	if(got < maxevents && n_levs_hit < ep->n_level) {
 		struct interest *ls[ep->n_level];
@@ -291,10 +353,10 @@ static int epoll_resync_consume(
 		abort();
 	}
 	int n_fds = 0;
-	struct htable_iter it;
-	for(const struct interest *in = htable_first(&ep->fds, &it);
+	struct htable_iter ith;
+	for(const struct interest *in = htable_first(&ep->fds, &ith);
 		in != NULL;
-		in = htable_next(&ep->fds, &it))
+		in = htable_next(&ep->fds, &ith))
 	{
 		assert(n_fds < ep->fds.elems);
 		fds[n_fds] = *in;
@@ -309,47 +371,29 @@ static int epoll_resync_consume(
 	 * NB: this'll miss events for fd=0xffff, because that's used as a "dead"
 	 * value and therefore skipped.
 	 */
-	int got = 0, live_heads = 0;
-	for(int i = 0, e = 0; i < q->n_heads; e += q->heads[i++].count) {
-		int from = q->heads[i].pid;
-		if(from == 0) continue;
-		live_heads++;
-		int live_evs = 0;
-		for(int j=0; j < q->heads[i].count; j++) {
-			L4_Word_t *mask = &q->evbuf[e+j].mask;
-			if(*mask == 0) continue;
-			live_evs++;
-			struct interest key = {
-				.handle = q->evbuf[e+j].handle, .spid = from,
-			};
-			struct interest *ex = bsearch(&key, fds, n_fds, sizeof *fds,
+	int got = 0;
+	struct evq_iter it;
+	L4_Word_t *mask, handle;
+	for(bool have = evq_first(&mask, &handle, q, &it);
+		have; have = evq_next(&mask, &handle, q, &it))
+	{
+		if(*mask == 0) continue;
+		struct interest key = { .handle = handle, .spid = it.from },
+			*ex = bsearch(&key, fds, n_fds, sizeof *fds,
 				&cmp_interest_by_spid_handle_asc);
-			assert(ex == NULL
-				|| (ex->handle == key.handle && ex->spid == key.spid));
-			if(ex == NULL || ex->fd == 0xffff) continue;
-			uint32_t hit = ex->ev.events & *mask;
-			if(hit) {
-				if(got < maxevents) {
-					events[got++] = (struct epoll_event){
-						.events = hit, .data = ex->ev.data,
-					};
-					*mask &= ~hit;
-					if(*mask == 0) live_evs--;
-					/* TODO: support EPOLLONESHOT */
-				}
-				if(hit == ex->ev.events) ex->fd = 0xffff;
-			}
+		assert(ex == NULL
+			|| (ex->handle == key.handle && ex->spid == key.spid));
+		if(ex == NULL || ex->fd == 0xffff) continue;
+		uint32_t hit = ex->ev.events & *mask;
+		if(!hit) continue;
+		if(got < maxevents) {
+			events[got++] = (struct epoll_event){
+				.events = hit, .data = ex->ev.data,
+			};
+			*mask &= ~hit;
+			/* TODO: support EPOLLONESHOT */
 		}
-		assert(live_evs >= 0);
-		if(live_evs == 0) {
-			q->heads[i].pid = 0;
-			live_heads--;
-		}
-	}
-	assert(live_heads >= 0);
-	if(live_heads == 0) {
-		q->n_heads = 0;
-		q->n_evs = 0;
+		if(hit == ex->ev.events) ex->fd = 0xffff;
 	}
 
 	void *ctx = NULL;
