@@ -467,7 +467,7 @@ static bool query_selftests(void *tal, L4_ThreadId_t tid)
 static void get_systask_selftests(void *tal)
 {
 #ifdef BUILD_SELFTEST
-	int last_pid = 0, skip, prev_pid = 0;
+	int last_pid = 0, skip = 0, prev_pid = 0;
 	for(;;) {
 		extern L4_ThreadId_t __uapi_tid;	/* from sys/crt (?) */
 		L4_Word_t tidbuf[63];
