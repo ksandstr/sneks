@@ -25,8 +25,8 @@
 
 #include <sneks/hash.h>
 #include <sneks/sysinfo.h>
+#include <sneks/api/proc-defs.h>
 
-#include "proc-defs.h"
 #include "private.h"
 
 

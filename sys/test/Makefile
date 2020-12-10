@@ -17,8 +17,6 @@ OUTPUTS=systest initrd_spawn_partner initrd_systask_partner
 TEST_SOURCE:=$(wildcard $(CFGDIR)/sys/*/t/*.c) $(wildcard $(CFGDIR)/root/t/*.c)
 TEST_OBJS:=$(TEST_SOURCE:%.c=%.o)
 
-vpath %.idl $(CFGDIR)/idl/api $(CFGDIR)/idl/sys
-
 
 all: $(OUTPUTS)
 
@@ -31,18 +29,8 @@ distclean:
 	@rm -rf .deps $(OUTPUTS)
 
 
-harness.o: proc-defs.h
-
-# FIXME: this is also a bit fugly.
-$(CFGDIR)/sys/sysmem/t/flags.o: sysmem-defs.h
-$(CFGDIR)/sys/crt/t/idlrollback.o: io-defs.h
-
-
 systest: $(LDSCRIPT) systest.o harness.o $(TEST_OBJS) \
-		ccan-opt.a ccan-talloc.o \
-		proc-common.o proc-client.o \
-		sysmem-common.o sysmem-client.o \
-		io-common.o io-service.o io-client.o
+		ccan-opt.a ccan-talloc.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T $(LDSCRIPT) \
 		$(filter %.o,$^) $(filter %.a,$^) $(LIBS) \

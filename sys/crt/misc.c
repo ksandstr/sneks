@@ -10,8 +10,8 @@
 #include <assert.h>
 #include <sneks/process.h>
 #include <sneks/systask.h>
+#include <sneks/api/proc-defs.h>
 
-#include "proc-defs.h"
 #include "private.h"
 
 

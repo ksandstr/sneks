@@ -15,12 +15,12 @@
 
 #include <sneks/rbtree.h>
 #include <sneks/process.h>
+#include <sneks/api/io-defs.h>
 #include <ukernel/rangealloc.h>
 
 #include <l4/types.h>
 
 #include "private.h"
-#include "io-defs.h"
 
 
 #define CHUNKSZ (1 << 9)

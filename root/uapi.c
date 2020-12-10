@@ -28,14 +28,14 @@
 #include <sneks/msg.h>
 #include <sneks/rollback.h>
 #include <sneks/process.h>
+#include <sneks/api/vm-defs.h>
+#include <sneks/api/proc-defs.h>
+#include <sneks/sys/fs-defs.h>
+#include <sneks/sys/msg-defs.h>
+#include <sneks/sys/info-defs.h>
 
 #include "muidl.h"
-#include "vm-defs.h"
-#include "fs-defs.h"
-#include "msg-defs.h"
-#include "info-defs.h"
-#include "proc-defs.h"
-#include "root-uapi-defs.h"
+#include "root-impl-defs.h"
 #include "elf.h"
 #include "defs.h"
 

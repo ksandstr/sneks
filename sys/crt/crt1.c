@@ -19,10 +19,10 @@
 #include <sneks/mm.h>
 #include <sneks/process.h>
 #include <sneks/console.h>
+#include <sneks/sys/sysmem-defs.h>
+#include <sneks/sys/info-defs.h>
+#include <sneks/sys/kmsg-defs.h>
 
-#include "sysmem-defs.h"
-#include "info-defs.h"
-#include "kmsg-defs.h"
 #include "private.h"
 
 

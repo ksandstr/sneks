@@ -4,6 +4,8 @@ MUNG_DIR=$(CFGDIR)/../mung
 MUIDL_DIR=$(CFGDIR)/../muidl
 LFHT_DIR=$(CFGDIR)/../lfht
 
+vpath %.idl $(CFGDIR)/idl/sys $(CFGDIR)/idl/api
+
 LD=ld.gold
 
 # TODO: become independent of the mung includes
@@ -27,8 +29,11 @@ MUIDLFLAGS=-I $(MUIDL_DIR)/share/idl -I $(MUNG_DIR)/idl -I $(CFGDIR)/idl \
 CLEAN_PATS=*-service.s *-client.s *-common.s *-defs.h ccan-*.a
 
 
-# build patterns below this line.
+.deps: $(shell $(CFGDIR)/scripts/find-impl-defs.pl)
+	@mkdir -p .deps
 
+
+# pattern rules below this line.
 
 %.o: %.c
 	@echo "  CC $@"
@@ -62,30 +67,12 @@ ccan-%.a ::
 	@as --32 -o $@ $<
 
 
-.deps:
-	@mkdir -p .deps
+# IDL service implementations.
+%-impl-service.s %-impl-common.s: %-impl.idl
+	@echo "  IDL $< <impl>"
+	@$(MUIDL) $(MUIDLFLAGS) --service --common $<
 
 
-# IDL compiler outputs.
-#
-# TODO: we don't really need to hear first about the services being generated,
-# and then the common bit, the client, and then the defs. there's AS chatter
-# about the first three too.
-
-vpath %.idl $(CFGDIR)/idl/sys $(CFGDIR)/idl/api
-
-%-service.s: %.idl
-	@echo "  IDL $< <service>"
-	@$(MUIDL) $(MUIDLFLAGS) --service $<
-
-%-client.s: %.idl
-	@echo "  IDL $< <client>"
-	@$(MUIDL) $(MUIDLFLAGS) --client $<
-
-%-common.s: %.idl
-	@echo "  IDL $< <common>"
-	@$(MUIDL) $(MUIDLFLAGS) --common $<
-
-%-defs.h: %.idl
-	@echo "  IDL $< <defs>"
+%-impl-defs.h: %-impl.idl
+	@echo "  IDL $< <impl-defs>"
 	@$(MUIDL) $(MUIDLFLAGS) --defs $<

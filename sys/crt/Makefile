@@ -2,22 +2,23 @@
 export CFGDIR:=$(abspath ../..)
 include $(CFGDIR)/config.mk
 
-IDL_FILES=sysmem.idl kmsg.idl info.idl proc.idl fs.idl msg.idl
-IDL_OBJS:=$(patsubst %.idl,%-common.o,$(IDL_FILES)) \
-	$(patsubst %.idl,%-client.o,$(IDL_FILES))
+SYS_IDL:=$(subst $(CFGDIR)/idl/sys/,,$(wildcard $(CFGDIR)/idl/sys/*.idl))
+API_IDL:=$(subst $(CFGDIR)/idl/api/,,$(wildcard $(CFGDIR)/idl/api/*.idl))
+LIBSNEKS_OBJS:=$(API_IDL:.idl=-common.o) $(API_IDL:.idl=-client.o)
+IDL_OBJS:=$(API_IDL:.idl=-service.o) $(SYS_IDL:.idl=-service.o) \
+	$(SYS_IDL:.idl=-common.o) $(SYS_IDL:.idl=-client.o)
 
 LIB_SRC:=$(wildcard *.c)
-LIB_OBJS:=crt0.o $(IDL_OBJS) $(LIB_SRC:.c=.o) \
+LIB_OBJS:=crt0.o $(foreach o,$(LIBSNEKS_OBJS),$(CFGDIR)/lib/$(o)) \
+	$(IDL_OBJS) $(LIB_SRC:.c=.o) \
 	mung-rangealloc.o mung-slab.o mung-memdesc.o \
 	lfht-percpu.o lfht-epoch.o lfht-nbsl.o
-
-vpath %.idl $(CFGDIR)/idl/api
 
 CFLAGS:=$(subst -D__KERNEL__,,$(CFLAGS)) -mstackrealign
 
 # the system task runtime library is, much like the utility library (which it
 # depends on), unsuitable for use out of tree.
-all: libsneks-systask.a
+all: libsneks-systask.a libsneks-sysidl.a
 
 
 clean:
@@ -35,11 +36,11 @@ libsneks-systask.a: $(LIB_OBJS)
 	@ranlib $@
 
 
-crt1.o: sysmem-defs.h kmsg-defs.h info-defs.h
-threads.o: proc-defs.h info-defs.h
-fileio.o: fs-defs.h
-misc.o: proc-defs.h
-msg.o: msg-defs.h info-defs.h
+libsneks-sysidl.a: $(IDL_OBJS)
+	@echo "  AR $@"
+	@ar cr $@ $^
+	@echo "  RANLIB $@"
+	@ranlib $@
 
 
 # build things from mung as guests.
@@ -58,5 +59,16 @@ lfht-%.o ::
 	@$(CC) -c -o $@ $(LFHT_DIR)/$*.c \
 		$(CFLAGS) -nostartfiles -nodefaultlibs
 
+# IDL clients for systemspace interfaces.
+%-client.s %-common.s %-defs.h: %.idl
+	@echo "  IDL $< <client>"
+	@$(MUIDL) $(MUIDLFLAGS) --client --common --defs $<
+	@mkdir -p $(CFGDIR)/include/sneks/sys
+	@mv $(patsubst $(CFGDIR)/idl/sys/%.idl,%-defs.h,$<) $(CFGDIR)/include/sneks/sys
+
+# services for all of them
+%-service.s: %.idl
+	@echo "  IDL $< <service>"
+	@$(MUIDL) $(MUIDLFLAGS) --service $<
 
 include $(wildcard .deps/*.d)

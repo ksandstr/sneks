@@ -9,9 +9,9 @@
 
 #include <l4/thread.h>
 #include <sneks/mm.h>
+#include <sneks/api/vm-defs.h>
 
 #include "private.h"
-#include "vm-defs.h"
 
 
 static uintptr_t current_brk = 0, heap_bottom = 0;

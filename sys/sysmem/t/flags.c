@@ -5,8 +5,7 @@
 #include <l4/thread.h>
 #include <sneks/test.h>
 #include <sneks/mm.h>
-
-#include "sysmem-defs.h"
+#include <sneks/sys/sysmem-defs.h>
 
 
 /* set some flags with Sysmem::alter_flags, then clear them. this test aims

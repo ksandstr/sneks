@@ -18,9 +18,9 @@
 #include <sneks/thread.h>
 #include <sneks/test.h>
 #include <sneks/rollback.h>
+#include <sneks/api/io-defs.h>
 
 #include "muidl.h"
-#include "io-defs.h"
 
 
 struct iolimit_ctx {

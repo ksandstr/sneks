@@ -14,10 +14,10 @@
 #include <ukernel/rangealloc.h>
 #include <sneks/mm.h>
 #include <sneks/process.h>
+#include <sneks/api/vm-defs.h>
 
 #include "muidl.h"
-#include "vm-defs.h"
-#include "root-uapi-defs.h"
+#include "root-impl-defs.h"
 #include "defs.h"
 
 

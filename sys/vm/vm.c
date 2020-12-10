@@ -47,15 +47,15 @@
 #include <sneks/sysinfo.h>
 #include <sneks/sanity.h>
 #include <sneks/systask.h>
+#include <sneks/api/proc-defs.h>
+#include <sneks/sys/info-defs.h>
+#include <sneks/sys/fs-defs.h>
 
 #include "nbsl.h"
 #include "epoch.h"
 #include "defs.h"
 
 #include "muidl.h"
-#include "proc-defs.h"
-#include "info-defs.h"
-#include "fs-defs.h"
 #include "vm-impl-defs.h"
 
 

@@ -9,12 +9,12 @@ include config.mk
 # the first subdir of that.
 all: tags
 	+@make -C lib all
-	+@make -C root all
 	+@make -C sys all
 	+@make -C user/crt all
 	+@make -C sys/test all
 	+@make -C user/test all
 	+@make -C user/init all
+	+@make -C root all
 	+@make initrd.img
 
 

@@ -11,10 +11,10 @@
 #include <sys/types.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sneks/sys/fs-defs.h>
 
 #include <ccan/likely/likely.h>
 
-#include "fs-defs.h"
 #include "crt-private.h"
 
 

@@ -1,8 +1,0 @@
-
-/* impl spec for root's uapi server. */
-
-#include <api/proc.idl>
-
-interface RootUapi: Sneks::Proc {
-	/* emp-tay */
-};

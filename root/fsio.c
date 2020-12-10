@@ -6,12 +6,11 @@
 #include <stdint.h>
 #include <string.h>
 #include <errno.h>
+#include <sneks/sys/fs-defs.h>
+#include <sneks/sys/info-defs.h>
 
 #include <l4/types.h>
 #include <l4/thread.h>
-
-#include "fs-defs.h"
-#include "info-defs.h"
 
 
 struct sfdpriv {

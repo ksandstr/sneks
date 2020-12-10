@@ -10,7 +10,8 @@
 #include <l4/types.h>
 #include <l4/ipc.h>
 
-#include "proc-defs.h"
+#include <sneks/api/proc-defs.h>
+
 #include "private.h"
 
 

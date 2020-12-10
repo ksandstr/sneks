@@ -9,8 +9,7 @@ LDFLAGS:=$(LDFLAGS) -e_start -N -nostdlib -L $(MUNG_DIR)/user/lib/l4 \
 CFLAGS:=$(CFLAGS) -D__KERNEL__ -D__SNEKS__=1 -mstackrealign
 
 OUTPUTS=sysmem
-IDL_OBJS=sysmem-impl-common.o sysmem-impl-service.o \
-	abend-common.o abend-client.o
+IDL_OBJS=sysmem-impl-common.o sysmem-impl-service.o
 
 
 all: $(OUTPUTS)
@@ -29,9 +28,6 @@ sysmem: sysmem.ld crt0.o sysmem.o $(IDL_OBJS)
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T sysmem.ld \
 		$(filter %.o,$^) $(LIBS) -lsneks -ll4 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
-
-
-sysmem.o: sysmem-impl-defs.h info-defs.h abend-defs.h
 
 
 include $(wildcard .deps/*.d)

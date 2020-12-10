@@ -38,7 +38,4 @@ pipeserv: $(LDSCRIPT) pipeserv.o $(IDL_OBJS) ccan-membuf.o
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
-pipeserv.o: pipeserv-impl-defs.h io-defs.h proc-defs.h
-
-
 include $(wildcard .deps/*.d)

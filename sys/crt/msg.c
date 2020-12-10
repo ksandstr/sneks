@@ -17,9 +17,8 @@
 
 #include <sneks/thread.h>
 #include <sneks/msg.h>
-
-#include "msg-defs.h"
-#include "info-defs.h"
+#include <sneks/sys/msg-defs.h>
+#include <sneks/sys/info-defs.h>
 
 
 struct handler {

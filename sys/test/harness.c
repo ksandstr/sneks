@@ -24,8 +24,7 @@
 #include <l4/ipc.h>
 
 #include <sneks/test.h>
-
-#include "proc-defs.h"
+#include <sneks/api/proc-defs.h>
 
 
 #define IN_TEST_MAGIC 0xB33B7007	/* quoth the butt canary */

@@ -11,7 +11,6 @@ CFLAGS:=$(CFLAGS) -D__SNEKS__=1 -mstackrealign \
 	#-DDEBUG_ME_HARDER	# extensive invariant checking ahoy
 
 OUTPUTS=sysmsg
-IDL_OBJS=msg-common.o msg-service.o
 
 
 all: $(OUTPUTS)
@@ -30,15 +29,12 @@ initrd-install: sysmsg
 	@install $< $(INITRD)/lib/sneks-0.0p0
 
 
-sysmsg: $(LDSCRIPT) sysmsg.o ccan-siphash.o $(IDL_OBJS)
+sysmsg: $(LDSCRIPT) sysmsg.o ccan-siphash.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T $(LDSCRIPT) \
 		$(filter %.o,$^) $(LIBS) \
 		-lsneks-systask -lsneks -lsneks-systask -ll4 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
-
-
-sysmsg.o: msg-defs.h
 
 
 include $(wildcard .deps/*.d)

@@ -6,9 +6,9 @@
 #include <errno.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <sneks/api/proc-defs.h>
 
 #include "private.h"
-#include "proc-defs.h"
 
 
 /* on the basis that other processes cannot change this process' UID or GID,

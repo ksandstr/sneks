@@ -19,8 +19,8 @@
 
 #include <sneks/mm.h>
 #include <sneks/bitops.h>
+#include <sneks/sys/sysmem-defs.h>
 
-#include "sysmem-defs.h"
 #include "defs.h"
 
 

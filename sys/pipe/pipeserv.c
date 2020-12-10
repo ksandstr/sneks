@@ -27,10 +27,10 @@
 #include <sneks/thread.h>
 #include <sneks/process.h>
 #include <sneks/systask.h>
+#include <sneks/api/io-defs.h>
+#include <sneks/api/proc-defs.h>
 
 #include "muidl.h"
-#include "io-defs.h"
-#include "proc-defs.h"
 #include "pipeserv-impl-defs.h"
 
 

@@ -3,10 +3,16 @@ export CFGDIR:=$(abspath ..)
 include ../config.mk
 
 
+# for now, API client-sides are included in libsneks.a.
+
+IDL_SRC:=$(wildcard $(CFGDIR)/idl/api/*.idl)
+IDL_OBJS:=$(patsubst $(CFGDIR)/idl/api/%.idl,%-common.o,$(IDL_SRC)) \
+	$(patsubst $(CFGDIR)/idl/api/%.idl,%-client.o,$(IDL_SRC))
+
 LIB_SRC:=$(wildcard *.c)
-LIB_OBJS:=$(subst .c,.o,$(LIB_SRC)) ccan-hash.o ccan-autodata.o \
-	ccan-likely.o ccan-htable.o ccan-list.o ccan-str.o \
-	ccan-bitmap.o
+LIB_OBJS:=$(subst .c,.o,$(LIB_SRC)) $(IDL_OBJS) \
+	ccan-hash.o ccan-autodata.o ccan-likely.o ccan-htable.o \
+	ccan-list.o ccan-str.o ccan-bitmap.o
 
 CFLAGS:=$(CFLAGS) -D__SNEKS__=1
 
@@ -18,11 +24,12 @@ all: libsneks.a
 
 
 clean:
-	@rm -f *.o *.a
+	@rm -f *-*.s *-defs.h *.o *.a
 
 
 distclean:
 	@rm -rf .deps
+	@rm -f $(CFGDIR)/include/sneks/api/*-defs.h
 
 
 libsneks.a: $(LIB_OBJS) setjmp.o
@@ -30,6 +37,13 @@ libsneks.a: $(LIB_OBJS) setjmp.o
 	@ar cr $@ $^
 	@echo "  RANLIB $@"
 	@ranlib $@
+
+
+%-client.s %-common.s: $(CFGDIR)/idl/api/%.idl
+	@echo "  IDL $< <client>"
+	@$(MUIDL) $(MUIDLFLAGS) --client --common --defs $<
+	@mkdir -p $(CFGDIR)/include/sneks/api
+	@mv $(patsubst $(CFGDIR)/idl/api/%.idl,%-defs.h,$<) $(CFGDIR)/include/sneks/api
 
 
 include $(wildcard .deps/*.d)

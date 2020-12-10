@@ -11,9 +11,7 @@ CFLAGS:=$(CFLAGS) -D__SNEKS__=1 -mstackrealign \
 	#-DDEBUG_ME_HARDER	# extensive invariant checking ahoy
 
 OUTPUTS=vm
-IDL_OBJS=vm-impl-common.o vm-impl-service.o \
-	proc-common.o proc-client.o info-common.o info-client.o \
-	fs-common.o fs-client.o
+IDL_OBJS=vm-impl-common.o vm-impl-service.o
 
 
 all: $(OUTPUTS)
@@ -33,9 +31,6 @@ vm: $(LDSCRIPT) vm.o boot.o $(IDL_OBJS)
 		$(filter %.o,$^) $(LIBS) \
 		-lsneks-systask -lsneks -lsneks-systask -ll4 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
-
-
-vm.o: vm-impl-defs.h info-defs.h proc-defs.h fs-defs.h
 
 
 include $(wildcard .deps/*.d)

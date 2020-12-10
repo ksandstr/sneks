@@ -14,10 +14,10 @@
 
 #include <sneks/test.h>
 #include <sneks/systask.h>
+#include <sneks/api/proc-defs.h>
 
 #include "defs.h"
 #include "epoch.h"
-#include "proc-defs.h"
 
 
 #define RT_THREAD_MAGIC 0xb007fade	/* un-shine */

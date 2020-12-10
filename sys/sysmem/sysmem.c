@@ -21,6 +21,8 @@
 #include <sneks/rootserv.h>
 #include <sneks/console.h>
 #include <sneks/lz4.h>
+#include <sneks/sys/info-defs.h>
+#include <sneks/sys/abend-defs.h>
 
 #include <l4/types.h>
 #include <l4/kip.h>
@@ -30,8 +32,6 @@
 #include <l4/kdebug.h>
 
 #include "muidl.h"
-#include "info-defs.h"
-#include "abend-defs.h"
 #include "sysmem-impl-defs.h"
 
 

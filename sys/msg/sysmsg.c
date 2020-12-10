@@ -20,9 +20,9 @@
 #include <sneks/bitops.h>
 #include <sneks/process.h>
 #include <sneks/systask.h>
+#include <sneks/sys/msg-defs.h>
 
 #include "muidl.h"
-#include "msg-defs.h"
 
 
 #define FILTER_SIZE (64 / sizeof(L4_Word_t))	/* one cacheline's worth */

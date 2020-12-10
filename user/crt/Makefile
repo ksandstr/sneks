@@ -8,15 +8,14 @@ IDL_OBJS:=$(patsubst %.idl,%-common.o,$(IDL_FILES)) \
 
 # imports from $(CFGDIR)/lib
 LIB_OBJS=bsearch.o dlmalloc.o hash.o pidof.o sort.o rbtree.o string.o \
-	strscpy.o strtol.o vsnprintf.o env.o stdio_portable.o setjmp.o
+	strscpy.o strtol.o vsnprintf.o env.o stdio_portable.o setjmp.o \
+	$(IDL_OBJS)
 
 CRT_SRC:=$(wildcard *.c)
 CRT_ASM:=$(wildcard *-32.S)
-CRT_OBJS:=crt0.o $(IDL_OBJS) $(CRT_SRC:.c=.o) $(CRT_ASM:-32.S=.o) \
+CRT_OBJS:=crt0.o $(CRT_SRC:.c=.o) $(CRT_ASM:-32.S=.o) \
 	$(patsubst %,$(CFGDIR)/lib/%,$(LIB_OBJS)) \
 	mung-rangealloc.o mung-slab.o
-
-vpath %.idl $(CFGDIR)/idl/api
 
 CFLAGS:=$(subst -D__KERNEL__,,$(CFLAGS)) -D__SNEKS__=1 -mstackrealign
 
@@ -32,20 +31,6 @@ clean:
 
 distclean:
 	@rm -rf .deps
-
-
-# IDL header dependencies (which should really get figured out automagically;
-# c'est la guerre.)
-process.o: proc-defs.h
-fork.o: proc-defs.h
-heap.o: vm-defs.h
-stdio.o: io-defs.h
-sigaction.o: proc-defs.h
-signal.o: proc-defs.h
-uid.o: proc-defs.h
-file.o: io-defs.h
-pipe.o: pipe-defs.h io-defs.h
-epoll.o: io-defs.h poll-defs.h
 
 
 libsneks-user-crt.a: $(CRT_OBJS)

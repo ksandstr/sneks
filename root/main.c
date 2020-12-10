@@ -38,14 +38,13 @@
 #include <sneks/sysinfo.h>
 #include <sneks/rootserv.h>
 #include <sneks/console.h>
+#include <sneks/api/proc-defs.h>
+#include <sneks/sys/sysmem-defs.h>
+#include <sneks/sys/kmsg-defs.h>
 
 #include "elf.h"
 #include "muidl.h"
-#include "sysmem-defs.h"
-#include "kmsg-defs.h"
-#include "proc-defs.h"
-#include "rootserv-defs.h"
-#include "bootcon-defs.h"
+#include "root-impl-defs.h"
 #include "defs.h"
 
 

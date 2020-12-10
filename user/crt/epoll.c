@@ -22,9 +22,9 @@
 
 #include <sneks/hash.h>
 #include <sneks/process.h>
+#include <sneks/api/io-defs.h>
+#include <sneks/api/poll-defs.h>
 
-#include "io-defs.h"
-#include "poll-defs.h"
 #include "private.h"
 
 

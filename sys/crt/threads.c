@@ -10,13 +10,13 @@
 #include <sneks/mm.h>
 #include <sneks/hash.h>
 #include <sneks/thread.h>
+#include <sneks/api/proc-defs.h>
+#include <sneks/sys/info-defs.h>
 
 #include <l4/types.h>
 #include <l4/thread.h>
 #include <l4/ipc.h>
 
-#include "proc-defs.h"
-#include "info-defs.h"
 #include "private.h"
 
 

@@ -3,10 +3,10 @@
 #include <errno.h>
 
 #include <sneks/sysinfo.h>
+#include <sneks/api/pipe-defs.h>
+#include <sneks/api/io-defs.h>
 
 #include "private.h"
-#include "pipe-defs.h"
-#include "io-defs.h"
 
 
 int pipe(int pipefd[2]) {
