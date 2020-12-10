@@ -19,7 +19,7 @@
  * TODO: should reload these in the setuid, setgid families.
  */
 struct cached_creds {
-	__uid_t u_real, u_eff, u_saved;
+	uid_t u_real, u_eff, u_saved;
 	/* also __gid_t g_real, g_eff, g_saved; */
 };
 
@@ -28,7 +28,7 @@ static struct cached_creds cc;
 
 
 static int reload_cc(void) {
-	__gid_t g_dummy;
+	gid_t g_dummy;
 	return __proc_getresugid(__the_sysinfo->api.proc,
 		&cc.u_real, &cc.u_eff, &cc.u_saved,
 		&g_dummy, &g_dummy, &g_dummy);
@@ -48,17 +48,17 @@ void __init_crt_cached_creds(void)
 }
 
 
-__uid_t getuid(void) {
+uid_t getuid(void) {
 	return cc.u_real;
 }
 
 
-__uid_t geteuid(void) {
+uid_t geteuid(void) {
 	return cc.u_eff;
 }
 
 
-int setuid(__uid_t uid) {
+int setuid(uid_t uid) {
 	int n = __proc_setresugid(__the_sysinfo->api.proc,
 		1, uid, -1, -1, -1, -1, -1);
 	if(n == 0) n = reload_cc();
@@ -66,12 +66,12 @@ int setuid(__uid_t uid) {
 }
 
 
-int seteuid(__uid_t euid) {
+int seteuid(uid_t euid) {
 	return setresuid(-1, euid, -1);
 }
 
 
-int setreuid(__uid_t real_uid, __uid_t eff_uid) {
+int setreuid(uid_t real_uid, uid_t eff_uid) {
 	int n = __proc_setresugid(__the_sysinfo->api.proc,
 		2, real_uid, eff_uid, -1, -1, -1, -1);
 	if(n == 0) n = reload_cc();
@@ -79,7 +79,7 @@ int setreuid(__uid_t real_uid, __uid_t eff_uid) {
 }
 
 
-int setresuid(__uid_t real_uid, __uid_t eff_uid, __uid_t saved_uid) {
+int setresuid(uid_t real_uid, uid_t eff_uid, uid_t saved_uid) {
 	int n = __proc_setresugid(__the_sysinfo->api.proc,
 		3, real_uid, eff_uid, saved_uid, -1, -1, -1);
 	if(n == 0) n = reload_cc();

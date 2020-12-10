@@ -17,10 +17,7 @@ module Sneks {
 [StubPrefix(__vm), IfaceLabel(0xe802)]
 interface VM
 {
-	/* get these from posixlike.idl */
-	typedef unsigned long size_t;
-	typedef unsigned long off_t;
-	typedef unsigned short pid_t;
+	typedef L4X2::word word;
 
 	/* as in mmap(2) when @target_pid == 0. otherwise, EACCES unless called
 	 * from a systask that spawned @target_pid which hasn't yet been serviced
@@ -28,13 +25,13 @@ interface VM
 	 * system minimum physical page size.
 	 */
 	void mmap(
-		in pid_t target_pid,
-		inout L4X2::word addr, in size_t length, in long prot, in long flags,
-		in L4X2::ThreadId fd_serv, in L4X2::word fd, in off_t offset)
+		in Posix::id_t target_pid,
+		inout word addr, in word length, in long prot, in long flags,
+		in L4X2::ThreadId fd_serv, in word fd, in Posix::off_t offset)
 			raises(Posix::Errno);
 
 	/* implied @target_pid = getpid(). works as POSIX munmap(2). */
-	void munmap(in L4X2::word addr, in size_t length)
+	void munmap(in word addr, in word length)
 		raises(Posix::Errno);
 
 	/* virtual memory part of fork(2). systask only. if @srcpid == 0, creates
@@ -42,7 +39,7 @@ interface VM
 	 * copy-on-write duplicate of @srcpid is created and the utcb and kip
 	 * areas inherited.
 	 */
-	void fork(in pid_t srcpid, in pid_t destpid)
+	void fork(in Posix::id_t srcpid, in Posix::id_t destpid)
 			raises(Posix::Errno);
 
 	/* configuration of freshly-created address spaces. systask only. @utcb
@@ -51,8 +48,8 @@ interface VM
 	 * return value is the last reserved address.
 	 */
 	void configure(
-		out L4X2::word last_resv,
-		in pid_t pid,
+		out word last_resv,
+		in Posix::id_t pid,
 		in L4X2::Fpage utcb, in L4X2::Fpage kip)
 			raises(Posix::Errno);
 
@@ -65,8 +62,8 @@ interface VM
 	 * be nonzero.
 	 */
 	void upload_page(
-		in pid_t target_pid,
-		in L4X2::word addr, in page data,
+		in Posix::id_t target_pid,
+		in word addr, in page data,
 		in long prot, in long flags)
 		raises(Posix::Errno);
 
@@ -74,12 +71,12 @@ interface VM
 	 * ErrorCode of breath-of-life transaction under a 0 send timeout.
 	 */
 	void breath_of_life(
-		out L4X2::word rc,
+		out word rc,
 		in L4X2::ThreadId target,
-		in L4X2::word sp, in L4X2::word ip);
+		in word sp, in word ip);
 
 	/* as brk(2). */
-	void brk(in L4X2::word addr)
+	void brk(in word addr)
 		raises(Posix::Errno);
 
 	/* systask only. wipes the address space associated with @pid completely,
@@ -88,7 +85,7 @@ interface VM
 	 * returns EPERM when called from userspace and EINVAL if @pid isn't
 	 * associated with a configured address space.
 	 */
-	void erase(in pid_t pid)
+	void erase(in Posix::id_t pid)
 		raises(Posix::Errno);
 };
 

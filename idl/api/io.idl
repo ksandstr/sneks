@@ -13,14 +13,6 @@ module Sneks {
 [StubPrefix(__io), IfaceLabel(0xe803)]
 interface IO
 {
-	/* TODO: move these into posixlike.idl, carry generated header stuff into
-	 * the actual POSIX headers thru (say) an <include/bits/idl/posixlike.h>
-	 * so the types match up proper in userspace.
-	 */
-	typedef unsigned long size_t;
-	typedef unsigned long off_t;
-	typedef unsigned short pid_t;
-
 	/* this is the weak I/O interface where data is copied through the
 	 * microkernel, so the max transfer size can be fairly small.
 	 */
@@ -49,7 +41,7 @@ interface IO
 	unsigned short write(in long fd, in ioseg buf)
 		raises(Posix::Errno, muidl::NoReply);
 
-	void read(in long fd, in off_t length, out ioseg buf)
+	void read(in long fd, in Posix::off_t length, out ioseg buf)
 		raises(Posix::Errno, muidl::NoReply);
 
 	/* raises like POSIX close(2) */

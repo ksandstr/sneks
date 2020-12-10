@@ -1192,9 +1192,9 @@ static int reserve_mmap(
 
 
 static int vm_mmap(
-	uint16_t target_pid, L4_Word_t *addr_ptr, uint32_t length,
+	pid_t target_pid, L4_Word_t *addr_ptr, L4_Word_t length,
 	int prot, int flags,
-	L4_Word_t fd_serv, L4_Word_t fd, uint32_t offset)
+	L4_Word_t fd_serv, L4_Word_t fd, off_t offset)
 {
 	assert(invariants());
 
@@ -1272,7 +1272,7 @@ static int vm_brk(L4_Word_t addr)
 }
 
 
-static int vm_erase(unsigned short target_pid)
+static int vm_erase(pid_t target_pid)
 {
 	assert(invariants());
 
@@ -1482,7 +1482,7 @@ static void remove_vp(struct vp *vp, plbuf *plbuf)
 }
 
 
-static int vm_munmap(L4_Word_t addr, uint32_t size)
+static int vm_munmap(L4_Word_t addr, L4_Word_t size)
 {
 	int sender_pid = pidof_NP(muidl_get_sender());
 	if(sender_pid == 0 || sender_pid > SNEKS_MAX_PID) return -EINVAL;
@@ -1649,12 +1649,12 @@ Enomem:
 }
 
 
-static int vm_fork(uint16_t srcpid, uint16_t destpid)
+static int vm_fork(pid_t srcpid, pid_t destpid)
 {
 	assert(invariants());
 	if(srcpid > SNEKS_MAX_PID || destpid > SNEKS_MAX_PID) return -EINVAL;
 
-	int sender_pid = pidof_NP(muidl_get_sender());
+	pid_t sender_pid = pidof_NP(muidl_get_sender());
 	if(sender_pid < SNEKS_MIN_SYSID) return -EINVAL;
 
 	struct vm_space *src;
@@ -1711,7 +1711,7 @@ static int vm_fork(uint16_t srcpid, uint16_t destpid)
 
 static int vm_configure(
 	L4_Word_t *last_resv_p,
-	uint16_t pid, L4_Fpage_t utcb, L4_Fpage_t kip)
+	pid_t pid, L4_Fpage_t utcb, L4_Fpage_t kip)
 {
 	assert(invariants());
 	if(pid > SNEKS_MAX_PID) return -EINVAL;
@@ -1736,7 +1736,7 @@ static int vm_configure(
 
 
 static int vm_upload_page(
-	uint16_t target_pid, L4_Word_t addr,
+	pid_t target_pid, L4_Word_t addr,
 	const uint8_t *data, unsigned data_len,
 	int prot, int flags)
 {

@@ -7,6 +7,10 @@
 #include <posixlike.idl>
 
 
+#define uid_t Posix::id_t
+#define gid_t Posix::id_t
+
+
 module Sneks {
 
 /* FIXME: when Proc is compiled without BUILD_SELFTEST=1, it may be that the
@@ -19,9 +23,6 @@ interface Proc
 {
 	typedef string<512> pathbuf;
 	typedef string<4096> argbuf; /* substrings separated by 0x1e (RS). */
-
-	/* TODO: move these into posixlike.idl or somewhere */
-	typedef unsigned long uid_t, gid_t;
 
 	[Label(0x1234)]		/* (provisional) */
 	void create_thread([MR(1)] out L4X2::ThreadId tid)

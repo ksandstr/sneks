@@ -12,6 +12,12 @@ exception Errno {
 	unsigned short errno;
 };
 
+/* as in <sys/types.h> */
+typedef long id_t;
+typedef long off_t;
+
+typedef long mode_t;
+
 };
 
 #endif

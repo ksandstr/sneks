@@ -82,12 +82,14 @@ static inline struct sneks_fdlist *sneks_fdlist_next(
 
 
 /* constants for waitid(2). */
-#define P_PID 0
-#define P_PGID 1
-#define P_ANY 2
+enum __idtype_e {
+	P_PID = 0,
+	P_PGID = 1,
+	P_ANY = 2,
+};
 
 #define WNOHANG 1	/* return 0 instead of blocking */
-#define WUNTRACED 2	/* report status of stoped children */
+#define WUNTRACED 2	/* report status of stopped children */
 /* TODO: WSTOPPED, WEXITED, WCONTINUED, WNOWAIT */
 
 #define CLD_EXITED 0

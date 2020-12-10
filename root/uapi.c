@@ -1183,8 +1183,8 @@ static int uapi_fork(L4_Word_t *tid_raw_p, L4_Word_t sp, L4_Word_t ip)
 
 
 static void uapi_getresugid(
-	__uid_t *r_uid, __uid_t *e_uid, __uid_t *s_uid,
-	__gid_t *r_gid, __gid_t *e_gid, __gid_t *s_gid)
+	uid_t *r_uid, uid_t *e_uid, uid_t *s_uid,
+	gid_t *r_gid, gid_t *e_gid, gid_t *s_gid)
 {
 	struct process *p = get_process(pidof_NP(muidl_get_sender()));
 	if(p == NULL) {
@@ -1201,8 +1201,8 @@ static void uapi_getresugid(
 
 static int uapi_setresugid(
 	int16_t mode,
-	__uid_t r_uid, __uid_t e_uid, __uid_t s_uid,
-	__gid_t r_gid, __gid_t e_gid, __gid_t s_gid)
+	uid_t r_uid, uid_t e_uid, uid_t s_uid,
+	gid_t r_gid, gid_t e_gid, gid_t s_gid)
 {
 	struct process *p = get_process(pidof_NP(muidl_get_sender()));
 	if(p == NULL) return -ESRCH; /* sneks extension for no process found */

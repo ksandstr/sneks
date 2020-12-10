@@ -753,7 +753,7 @@ static int pipe_write(
 
 
 static int pipe_read(
-	int fd, uint32_t length,
+	int fd, off_t length,
 	uint8_t *buf, unsigned *buf_len_p)
 {
 	struct pipehandle *h = resolve_fd(fd);
@@ -777,7 +777,7 @@ static int pipe_read(
 
 	membuf_prepare_space(&h->head->buf, 1);
 	bool was_full = IS_FULL(h->head);
-	size_t got = min(length, membuf_num_elems(&h->head->buf));
+	size_t got = min_t(size_t, length, membuf_num_elems(&h->head->buf));
 	memcpy(buf, membuf_elems(&h->head->buf), got);
 	if(got > 0 && was_full) {
 		wakey_wakey(h->head, EAGAIN, -1);

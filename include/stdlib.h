@@ -5,6 +5,9 @@
 #define _STDLIB_H
 
 #include <stddef.h>
+#include <limits.h>
+#include <math.h>
+#include <sys/wait.h>
 
 
 extern void *malloc(size_t size) __attribute__((malloc));

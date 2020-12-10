@@ -408,7 +408,7 @@ static struct fd *get_fd(L4_Word_t param_fd)
  */
 static int squashfs_openat(
 	L4_Word_t *fd_p,
-	L4_Word_t dirfd, const char *path, int32_t flags, uint32_t mode)
+	L4_Word_t dirfd, const char *path, int32_t flags, mode_t mode)
 {
 	// printf("squashfs: openat path=`%s'\n", path);
 
@@ -552,7 +552,7 @@ end:
 
 static int squashfs_read(
 	uint8_t *data_buf, unsigned *data_len_p,
-	L4_Word_t param_fd, int32_t read_pos, uint32_t count)
+	L4_Word_t param_fd, int32_t read_pos, L4_Word_t count)
 {
 	int n = 0;
 

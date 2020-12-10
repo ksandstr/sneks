@@ -31,7 +31,7 @@ unsigned int sleep(unsigned int seconds)
 
 
 /* see TODO for sleep() */
-int usleep(__useconds_t usec)
+int usleep(useconds_t usec)
 {
 	L4_MsgTag_t tag = L4_Send_Timeout(L4_MyGlobalId(), L4_TimePeriod(usec));
 	assert(L4_IpcFailed(tag));

@@ -3,18 +3,20 @@
 #define _UNISTD_H 1
 
 #include <stdint.h>
+
+/* TODO: selectively include size_t, ssize_t, uid_t, gid_t, off_t, and
+ * pid_t
+ */
 #include <sys/types.h>
 
 
-/* FIXME: get this from somewhere. also __size_t, __intptr_t */
-typedef int __pid_t;
-typedef unsigned int __useconds_t;
+typedef unsigned int useconds_t;
 
 struct timeval;
 
 
 extern int getpagesize(void);
-extern __pid_t getpid(void);
+extern pid_t getpid(void);
 
 extern long sysconf(int name);
 
@@ -40,8 +42,8 @@ extern int pipe(int pipefd[2]);
 extern int pipe2(int pipefd[2], int flags);
 #endif
 
-extern __pid_t fork(void);
-extern __pid_t wait(int *status_p);
+extern pid_t fork(void);
+extern pid_t wait(int *status_p);
 
 
 /* sysconf() names as far as sneks knows of 'em. */
@@ -54,15 +56,15 @@ enum {
 
 
 extern unsigned int sleep(unsigned int seconds);
-extern int usleep(__useconds_t usec);
+extern int usleep(useconds_t usec);
 
-extern __uid_t getuid(void);
-extern __uid_t geteuid(void);
+extern uid_t getuid(void);
+extern uid_t geteuid(void);
 
-extern int setuid(__uid_t uid);
-extern int seteuid(__uid_t uid);
-extern int setreuid(__uid_t real_uid, __uid_t eff_uid);
-extern int setresuid(__uid_t real_uid, __uid_t eff_uid, __uid_t saved_uid);
+extern int setuid(uid_t uid);
+extern int seteuid(uid_t uid);
+extern int setreuid(uid_t real_uid, uid_t eff_uid);
+extern int setresuid(uid_t real_uid, uid_t eff_uid, uid_t saved_uid);
 
 
 extern int select(

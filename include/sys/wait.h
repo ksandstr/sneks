@@ -2,9 +2,7 @@
 #ifndef _SYS_WAIT_H
 #define _SYS_WAIT_H 1
 
-/* TODO: don't include sys/types.h, use bits/sys/types.h and the
- * double-underscore versions of foo_t instead.
- */
+/* TODO: only include id_t and pid_t from sys/types.h */
 #include <sys/types.h>
 #include <sneks/process.h>
 
@@ -22,6 +20,8 @@
 
 struct __siginfo_s;
 
+
+typedef enum __idtype_e idtype_t;
 
 extern pid_t wait(int *wstatus);
 extern pid_t waitpid(pid_t pid, int *wstatus, int options);

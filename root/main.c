@@ -1407,7 +1407,7 @@ static void parse_initrd_args(struct htable *dest)
 /* TODO: move into bootcon.c */
 
 static int bootcon_read(
-	int32_t cookie, unsigned length,
+	int32_t cookie, off_t length,
 	uint8_t *buf, unsigned *len_p)
 {
 	*len_p = 0;
