@@ -67,7 +67,7 @@ ccan-%.host.o ::
 # also complex CCAN modules. build-ccan-module.pl emits CC lines as
 # appropriate.
 ccan-%.host.a ::
-	+@HOSTSUITE=1 $(CFGDIR)/stuff/build-ccan-module.pl \
+	+@HOSTSUITE=1 $(CFGDIR)/scripts/build-ccan-module.pl \
 		$(CCAN_DIR)/ccan/$* $(HOSTSUITE_CFLAGS)
 
 %.host.o: %.c
