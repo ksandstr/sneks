@@ -19,7 +19,7 @@ TESTSUITE_OBJS:=main.o harness.o optcompat.o $(TEST_OBJS) \
 	ccan-talloc.o
 
 HOSTSUITE_OBJS:=$(filter-out optcompat.%,$(TESTSUITE_OBJS:%.o=%.host.o))
-HOSTSUITE_CFLAGS=-O2 -Wall -march=native -std=gnu99 -m32 -D_GNU_SOURCE \
+HOSTSUITE_CFLAGS=-O2 -Wall -march=native -std=gnu11 -m32 -D_GNU_SOURCE \
 	-I $(CFGDIR)/user/test/hostinclude -I $(CCAN_DIR) -I $(LFHT_DIR) \
 	-Wno-frame-address
 	#-DDEBUG_ME_HARDER #-DCCAN_LIST_DEBUG
