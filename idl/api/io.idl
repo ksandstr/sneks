@@ -13,14 +13,16 @@ module Sneks {
 [StubPrefix(__io), IfaceLabel(0xe803)]
 interface IO
 {
+	typedef long handle;
+
+	/* bits for ::set_flags(). same values as on Linux. */
+	const long O_NONBLOCK = 04000;
+
 	/* this is the weak I/O interface where data is copied through the
 	 * microkernel, so the max transfer size can be fairly small.
 	 */
 	const long IOSEG_MAX = 65536;
 	typedef sequence<octet, IOSEG_MAX> ioseg;
-
-	/* bits for ::set_flags(). same values as on Linux. */
-	const long O_NONBLOCK = 04000;
 
 	/* sets @fd's flags' = (flags & @and_mask) | @or_mask. returns previous
 	 * flags in @old_flags. raises EBADF when @fd doesn't exist, and EINVAL
@@ -31,22 +33,22 @@ interface IO
 	 * flags accessed by ioctl.
 	 */
 	void set_flags(out long old_flags,
-		in long fd, in long or_mask, in long and_mask)
+		in handle fd, in long or_mask, in long and_mask)
 		raises(Posix::Errno);
 
 	/* when write (read) blocks on a full (empty) buffer, wakeup happens in
 	 * the form of an EAGAIN error result. when O_NONBLOCK is set, instead
 	 * EWOULDBLOCK is raised.
 	 */
-	unsigned short write(in long fd, in ioseg buf)
+	unsigned short write(in handle fd, in ioseg buf)
 		raises(Posix::Errno, muidl::NoReply);
 
-	void read(in long fd, in Posix::off_t length, out ioseg buf)
+	void read(in handle fd, in Posix::off_t length, out ioseg buf)
 		raises(Posix::Errno, muidl::NoReply);
 
 	/* raises like POSIX close(2) */
 	[Label(0xabcd)]	/* provisional, for epoll's use */
-	void close([MR(2)] in long fd)
+	void close([MR(2)] in handle fd)
 		raises(Posix::Errno);
 };
 

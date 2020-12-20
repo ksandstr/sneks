@@ -1,0 +1,46 @@
+
+#ifndef __API_PATH_IDL__
+#define __API_PATH_IDL__
+
+#include <l4x2.idl>
+#include <posixlike.idl>
+
+
+module Sneks {
+
+/* path resolution in a filesystem in which another filesystem may have been
+ * attached, and which may in turn be attached to a parent filesystem.
+ */
+[StubPrefix(__path), IfaceLabel(0xe808)]
+interface Path
+{
+	const long PATH_MAX = 4000;
+	typedef string<PATH_MAX> path;
+
+	typedef unsigned long object;
+	typedef L4X2::word cookie;
+
+	/* form of @ifmt */
+	const long S_IFMT = 0xf000;	/* the mask (required) */
+	const long S_IFDIR = 0x4000;
+	const long S_IFCHR = 0x2000;
+	const long S_IFBLK = 0x6000;
+	const long S_IFREG = 0x8000;
+	const long S_IFIFO = 0x1000;
+	const long S_IFLNK = 0xa000;
+	const long S_IFSOCK = 0xc000;
+
+	/* @dirfd == 0 refers to the filesystem's root directory. this may be
+	 * distinct from the filesystem's mount point, which is a directory on the
+	 * parent filesystem; the exception being when the parent does not exist.
+	 */
+	void resolve(
+		out object inode, out L4X2::ThreadId server,
+		out long ifmt, out cookie cookie,
+		in L4X2::word dirfd, in path path, in long flags)
+			raises(Posix::Errno);
+};
+
+};
+
+#endif

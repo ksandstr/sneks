@@ -1,0 +1,51 @@
+
+#ifndef __API_DEV_IDL__
+#define __API_DEV_IDL__
+
+#include <muidl.idl>
+#include <posixlike.idl>
+#include <api/io.idl>
+#include <api/path.idl>
+
+
+module Sneks {
+
+/* opening of resolved device nodes. ioctl forms common to both character
+ * and block devices.
+ */
+[StubPrefix(__dev), IfaceLabel(0xe80a)]
+interface DeviceNode
+{
+	[Label(0x0002)]	/* TODO: remove once muidl gets proper propagation */
+	void open(out IO::handle handle,
+		in Path::object object, in Path::cookie cookie, in long flags)
+		raises(Posix::Errno, muidl::NoReply);
+
+	typedef unsigned long iocmd;
+
+	/* common ioctl forms are labelled in the 0x1nnn range. */
+	[Label(0x1000)]
+	void ioctl_void(out long result,
+		in IO::handle handle, in iocmd request)
+		raises(Posix::Errno);
+
+	/* TODO: Sneks::Pipe should respond to this form of ioctl as well, so this
+	 * ought to move elsewhere and get inherited by Sneks::DeviceNode.
+	 */
+	[Label(0x1001)]
+	void ioctl_int(out long result,
+		in IO::handle handle, in iocmd request, inout long arg)
+		raises(Posix::Errno);
+};
+
+
+[StubPrefix(__cdev), IfaceLabel(0xe80b)]
+interface CharacterDevice
+{
+	/* chardev-specific ioctl forms are in the 0x2nnn range. */
+	//[Label(0x2000)]
+};
+
+};
+
+#endif
