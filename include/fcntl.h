@@ -23,8 +23,13 @@
 #define F_GETFL 3	/* get/set status flags (O_*) */
 #define F_SETFL 4
 
+#define AT_FDCWD -1	/* *at() family @dirfd special value */
 
-extern int open(const char *pathname, int flags, ...);
+
+extern int open(const char *pathname, int flags, ... /* mode_t mode */);
+extern int openat(int dirfd, const char *pathname,
+	int flags, ... /* mode_t mode */);
+
 extern int fcntl(int fd, int cmd, ... /* arg */);
 
 
