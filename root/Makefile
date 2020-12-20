@@ -38,6 +38,11 @@ root: root.ld crt0.o $(IDL_OBJS) main.o runtime.o thrd.o uapi.o sig.o mm.o \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
+initrd-install: device-nodes.txt
+	@mkdir -p $(INITRD)/dev
+	@cp $^ $(INITRD)/dev/.device-nodes
+
+
 test-initrd:
 	@echo "hello, root:fsio test" >$(INITRD)/fsiohello.txt
 

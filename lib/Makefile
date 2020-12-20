@@ -12,7 +12,7 @@ IDL_OBJS:=$(patsubst $(CFGDIR)/idl/api/%.idl,%-common.o,$(IDL_SRC)) \
 LIB_SRC:=$(wildcard *.c)
 LIB_OBJS:=$(subst .c,.o,$(LIB_SRC)) $(IDL_OBJS) \
 	ccan-hash.o ccan-autodata.o ccan-likely.o ccan-htable.o \
-	ccan-list.o ccan-str.o ccan-bitmap.o
+	ccan-list.o ccan-str.o ccan-bitmap.o ccan-siphash.o
 
 CFLAGS:=$(CFLAGS) -D__SNEKS__=1
 

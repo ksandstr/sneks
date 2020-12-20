@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <ctype.h>
 #include <errno.h>
 #include <assert.h>
 #include <alloca.h>
@@ -15,6 +16,9 @@
 #include <ccan/str/str.h>
 #include <ccan/htable/htable.h>
 #include <ccan/container_of/container_of.h>
+#include <ccan/siphash/siphash.h>
+#include <ccan/minmax/minmax.h>
+#include <ccan/hash/hash.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -24,6 +28,8 @@
 #include <sneks/lz4.h>
 #include <sneks/bitops.h>
 #include <sneks/process.h>
+#include <sneks/devcookie.h>
+#include <sneks/api/path-defs.h>
 #include <ukernel/rangealloc.h>
 
 #include "muidl.h"
@@ -43,8 +49,7 @@
  *
  * TODO: add list link for replacement.
  */
-struct blk
-{
+struct blk {
 	uint64_t block;
 	unsigned length;
 	uint64_t next_block;
@@ -53,15 +58,13 @@ struct blk
 
 
 /* contained within a per-fs inode info structure. */
-struct inode
-{
+struct inode {
 	unsigned long ino;	/* int64_hash() */
 	/* TODO: add basic stat(2) output's fields here */
 };
 
 
-struct squashfs_file
-{
+struct squashfs_file {
 	struct inode *i;
 	size_t pos;
 	int refs;
@@ -80,9 +83,18 @@ struct inode_ext
 };
 
 
+/* an entry in /dev/.device-nodes, representing a synthetic device node
+ * because mksquashfs isn't as good as mkcramfs used to be.
+ */
+struct dev {
+	char name[16];
+	uint16_t major, minor;
+	bool is_chr;
+};
+
+
 /* TODO: define ->flags. */
-struct fd
-{
+struct fd {
 	struct squashfs_file *file;
 	uint16_t owner, flags;
 };
@@ -90,9 +102,13 @@ struct fd
 
 static size_t rehash_blk(const void *key, void *priv);
 static size_t rehash_inode(const void *key, void *priv);
+static size_t rehash_dev(const void *key, void *priv);
 
 
-static L4_ThreadId_t boot_tid;
+static L4_ThreadId_t boot_tid, dev_tid;
+
+static bool device_nodes_enabled;
+static int64_t dev_ino = -1;
 
 /* mount data */
 static void *fs_image;
@@ -102,9 +118,12 @@ static int fs_block_size_log2;
 static const struct squashfs_super_block *fs_super;
 static struct htable blk_cache = HTABLE_INITIALIZER(
 		blk_cache, &rehash_blk, NULL),
-	inode_cache = HTABLE_INITIALIZER(inode_cache, &rehash_inode, NULL);
+	inode_cache = HTABLE_INITIALIZER(inode_cache, &rehash_inode, NULL),
+	device_nodes = HTABLE_INITIALIZER(device_nodes, &rehash_dev, NULL);
 
 static struct rangealloc *fd_ra;	/* <struct fd>, never 0. */
+
+static const struct cookie_key device_cookie_key;
 
 
 static size_t rehash_blk(const void *key, void *priv) {
@@ -126,6 +145,17 @@ static size_t rehash_inode(const void *key, void *priv) {
 static bool cmp_inode_ino(const void *cand, void *key) {
 	const struct inode *i = cand;
 	return i->ino == *(const unsigned long *)key;
+}
+
+
+static size_t rehash_dev(const void *key, void *priv) {
+	const struct dev *dev = key;
+	return hash(dev->name, strlen(dev->name), 0);
+}
+
+static bool cmp_dev_name(const void *cand, void *key) {
+	const struct dev *dev = key;
+	return streq(dev->name, (const char *)key);
 }
 
 
@@ -378,14 +408,6 @@ done:
 }
 
 
-static void fs_initialize(void)
-{
-	assert(__builtin_popcount(MAX_FD + 1) == 1);
-	fd_ra = RA_NEW(struct fd, MAX_FD + 1);
-	ra_disable_id_0(fd_ra);
-}
-
-
 /* resolve file descriptor for current client. */
 static struct fd *get_fd(L4_Word_t param_fd)
 {
@@ -406,13 +428,120 @@ static struct fd *get_fd(L4_Word_t param_fd)
 /* FIXME: this doesn't handle trailing slashes very well. what should happen
  * in those cases? test them first.
  */
+static int squashfs_resolve(
+	uint32_t *inode_ptr, L4_Word_t *server_ptr,
+	int *ifmt_ptr, L4_Word_t *cookie_ptr,
+	L4_Word_t dirfd, const char *path, int flags)
+{
+	if(dirfd != 0) return -ENOSYS;	/* TODO */
+
+	uint64_t dir_ino = 0;
+	int64_t final_ino = -ENOENT;
+	int type = -1;
+	L4_ThreadId_t server = L4_MyGlobalId();
+	*cookie_ptr = 0;
+
+	/* resolve @path one component at a time. */
+	char comp[SQUASHFS_NAME_LEN + 1];
+	while(*path != '\0') {
+		char *slash = strchr(path, '/');
+		const char *part;
+		if(slash == NULL) {
+			/* last part. */
+			part = path;
+			path += strlen(path);
+		} else {
+			/* piece in the middle. */
+			int comp_len = slash - path;
+			if(unlikely(comp_len > SQUASHFS_NAME_LEN)) return -ENOENT;
+			else if(comp_len == 0) {
+				/* TODO: hit this in a test with double and triple and
+				 * quadruple etc. slashes in a pathspec.
+				 */
+				assert(slash == path);
+				path++;
+				continue;
+			}
+
+			memcpy(comp, path, comp_len);
+			comp[comp_len] = '\0';
+			path = slash + 1;
+			part = comp;
+		}
+
+		if(dir_ino == 0) {
+			if(!streq(part, "initrd")) {
+				/* first component must be initrd. */
+				break;
+			}
+			dir_ino = fs_super->root_inode;
+			assert(dir_ino != 0);
+		} else if(device_nodes_enabled && !L4_IsNilThread(dev_tid)
+			&& dir_ino == dev_ino && !streq(part, ".device-nodes"))
+		{
+			size_t hash = hash(part, strlen(part), 0);
+			struct dev *dev = htable_get(&device_nodes, hash,
+				&cmp_dev_name, part);
+			if(dev == NULL) {
+				/* NOTE: should we support subdirectories of /dev? currently
+				 * this does not.
+				 */
+				return -ENOENT;
+			}
+			printf("%s: found device node `%s': %c-%u-%u\n", __func__,
+				dev->name, dev->is_chr ? 'c' : 'b', dev->major, dev->minor);
+			server = dev_tid;
+			final_ino = (dev->is_chr ? 0x80000000 : 0)
+				| (dev->major & 0x7fff) << 15 | (dev->minor & 0x7fff);
+			type = dev->is_chr ? SQUASHFS_CHRDEV_TYPE : SQUASHFS_BLKDEV_TYPE;
+			*cookie_ptr = gen_cookie(&device_cookie_key, L4_SystemClock(),
+				final_ino, pidof_NP(muidl_get_sender()));
+			break;
+		} else {
+			int64_t ino = lookup(&type, dir_ino, part);
+			if(ino < 0) return ino;
+			else if(type == SQUASHFS_DIR_TYPE) dir_ino = ino;
+			else if(path[0] != '\0') {
+				printf("%s: type=%d isn't a directory? but path=`%s'\n",
+					__func__, type, path);
+				return -ENOTDIR;
+			} else {
+				final_ino = ino;
+				break;
+			}
+		}
+	}
+
+	if(final_ino < 0) return final_ino;
+
+	static uint16_t sfs_type_table[] = {
+		[SQUASHFS_DIR_TYPE] = SNEKS_PATH_S_IFDIR,
+		[SQUASHFS_REG_TYPE] = SNEKS_PATH_S_IFREG,
+		[SQUASHFS_SYMLINK_TYPE] = SNEKS_PATH_S_IFLNK,
+		[SQUASHFS_BLKDEV_TYPE] = SNEKS_PATH_S_IFBLK,
+		[SQUASHFS_CHRDEV_TYPE] = SNEKS_PATH_S_IFCHR,
+		[SQUASHFS_FIFO_TYPE] = SNEKS_PATH_S_IFIFO,
+		[SQUASHFS_SOCKET_TYPE] = SNEKS_PATH_S_IFSOCK,
+	};
+	if(type < 0 || type >= ARRAY_SIZE(sfs_type_table)) {
+		printf("%s: unknown inode type=%d\n", __func__, type);
+		return -ENOSYS;
+	}
+
+	*inode_ptr = final_ino;
+	*server_ptr = server.raw;
+	*ifmt_ptr = sfs_type_table[type];
+
+	return 0;
+}
+
+
+/* TODO: deprecated, remove with Sneks::Fs */
 static int squashfs_openat(
 	L4_Word_t *fd_p,
 	L4_Word_t dirfd, const char *path, int32_t flags, mode_t mode)
 {
-	// printf("squashfs: openat path=`%s'\n", path);
-
-	if(dirfd != 0) return -ENOSYS;	/* FIXME */
+	if(dirfd != 0) return -ENOSYS;
 
 	uint64_t dir_ino = 0;
 	int64_t final_ino = -ENOENT;
@@ -446,8 +575,6 @@ static int squashfs_openat(
 			part = comp;
 		}
 
-		// printf("path component: `%s'\n", part);
-
 		if(dir_ino == 0) {
 			if(!streq(part, "initrd")) {
 				/* first component must be initrd. */
@@ -470,11 +597,6 @@ static int squashfs_openat(
 		}
 	}
 
-#if 0
-	printf("%s: final_ino=%u, type=%d\n", __func__,
-		(unsigned)final_ino, type);
-#endif
-
 	if(final_ino < 0) return final_ino;
 
 	struct squashfs_file *f = malloc(sizeof *f);
@@ -483,11 +605,6 @@ static int squashfs_openat(
 	};
 	struct fd *fd = ra_alloc(fd_ra, -1);
 	*fd = (struct fd){ .owner = pidof_NP(muidl_get_sender()), .file = f };
-#if 0
-	printf("%s: allocated fd=%p (%d) for owner=%#x\n", __func__,
-		fd, ra_ptr2id(fd_ra, fd), fd->owner);
-#endif
-
 	*fd_p = ra_ptr2id(fd_ra, fd);
 	return 0;
 }
@@ -550,16 +667,9 @@ end:
 }
 
 
-static int squashfs_read(
-	uint8_t *data_buf, unsigned *data_len_p,
-	L4_Word_t param_fd, int32_t read_pos, L4_Word_t count)
+static ssize_t read_from_inode(
+	struct inode *nod, void *data_buf, size_t length, size_t read_pos)
 {
-	int n = 0;
-
-	struct fd *fd = get_fd(param_fd);
-	if(fd == NULL) return -EBADF;
-
-	struct inode *nod = fd->file->i;
 	unsigned type = squashfs_i(nod)->X.base.inode_type;
 	if(type == SQUASHFS_DIR_TYPE) return -EISDIR;
 	else if(type != SQUASHFS_REG_TYPE) return -EBADF;
@@ -571,9 +681,9 @@ static int squashfs_read(
 		return -EIO;
 	}
 
-	uint32_t done = 0, pos = read_pos == ~0u ? fd->file->pos : read_pos,
-		bytes = min_t(uint32_t, count, reg->file_size - pos);
-	if(bytes == 0) goto end;
+	uint32_t done = 0, pos = read_pos,
+		bytes = min_t(uint32_t, length, reg->file_size - pos);
+	if(bytes == 0) return 0;
 
 #if 0
 	printf("%s: pos=%u, bytes=%u, blksizelog2=%d\n", __func__, pos, bytes,
@@ -586,10 +696,7 @@ static int squashfs_read(
 	int64_t data_block = 0;
 	if(seek > 1) {
 		data_block = seek_block_list(&block, &offset, seek - 1);
-		if(data_block < 0) {
-			n = data_block;
-			goto end;
-		}
+		if(data_block < 0) return data_block;
 		seek = 0;
 	}
 	data_block += reg->start_block;
@@ -613,19 +720,32 @@ static int squashfs_read(
 			struct blk *b = cache_get(data_block, lenword);
 			if(b == NULL) return -ENOMEM;	/* or translate an errptr */
 			int seg = min_t(int, bytes - done, b->length);
-			memcpy(&data_buf[done],
+			memcpy(data_buf + done,
 				&b->data[pos & ((1 << fs_block_size_log2) - 1)], seg);
 			done += seg;
 			pos += seg;
 		}
 		data_block += SQUASHFS_COMPRESSED_SIZE_BLOCK(lenword);
 	}
-	n = 0;
 
-end:
-	if(read_pos == ~0u) fd->file->pos = pos;
-	*data_len_p = done;
-	// printf("%s: pos'=%u, done=%d, n=%d\n", __func__, pos, done, n);
+	return done;
+}
+
+
+static int squashfs_read(
+	uint8_t *data_buf, unsigned *data_len_p,
+	L4_Word_t param_fd, int32_t read_pos, L4_Word_t count)
+{
+	struct fd *fd = get_fd(param_fd);
+	if(fd == NULL) return -EBADF;
+
+	ssize_t n = read_from_inode(fd->file->i, data_buf, count,
+		read_pos == ~0u ? fd->file->pos : read_pos);
+	if(n >= 0) {
+		if(read_pos == ~0u) fd->file->pos += n;
+		*data_len_p = n;
+		n = 0;
+	}
 	return n;
 }
 
@@ -636,6 +756,7 @@ static void squashfs_ipc_loop(void *initrd_start, size_t initrd_size)
 		.openat = &squashfs_openat,
 		.close = &squashfs_close,
 		.read = &squashfs_read,
+		.resolve = &squashfs_resolve,
 	};
 	for(;;) {
 		L4_Word_t status = _muidl_squashfs_impl_dispatch(&vtab);
@@ -718,6 +839,107 @@ static unsigned mount_squashfs_image(void *start, size_t sz)
 }
 
 
+static void parse_device_node(char *line, int length)
+{
+	char *comment = strchr(line, '#');
+	if(comment != NULL) *comment = '\0';
+
+	const char *name = line;
+	char *type = strchr(line, '\t');
+	if(type == NULL) goto malformed;
+	*type++ = '\0';
+	char *major = strchr(type, '\t');
+	if(major == NULL) goto malformed;
+	*major++ = '\0';
+	char *minor = strchr(major, '\t');
+	if(minor == NULL) goto malformed;
+	*minor++ = '\0';
+	char *trail = minor + 1;
+	while(*trail != '\0' && !isspace(*trail)) trail++;
+	*trail = '\0';
+
+	struct dev *dev = malloc(sizeof *dev);
+	memset(dev->name, 0, sizeof dev->name);
+	memcpy(dev->name, name, min(strlen(name), sizeof dev->name - 1));
+	switch(type[0]) {
+		case 'c': dev->is_chr = true; break;
+		case 'b': dev->is_chr = false; break;
+		default: goto malformed;
+	}
+	dev->major = strtol(major, NULL, 10);
+	dev->minor = strtol(minor, NULL, 10);
+
+#if 0
+	printf("%s: name=`%s', type=`%s', major=`%s', minor=`%s'\n",
+		__func__, name, type, major, minor);
+	printf("%s\tparsed to name=`%s', is_chr=%s, major=%u, minor=%u\n",
+		__func__, dev->name, dev->is_chr ? "true" : "false",
+		dev->major, dev->minor);
+#endif
+
+	htable_add(&device_nodes, rehash_dev(dev, NULL), dev);
+	return;
+
+malformed:
+	printf("fs.squashfs: malformed device-nodes entry `%s'\n", line);
+	abort();
+}
+
+
+static void read_device_nodes(unsigned long ino)
+{
+	struct inode *nod = get_inode(ino);
+	if(nod == NULL) abort();
+	char buf[200];
+	int pos = 0, done = 0, n;
+	do {
+		n = read_from_inode(nod, buf + pos, sizeof buf - pos - 1, done);
+		if(n < 0) {
+			printf("fs.squashfs: %s: read error n=%d\n", __func__, n);
+			abort();
+		}
+		done += n;
+		pos += n;
+		buf[pos] = '\0';
+		int len;
+		char *lf = strchr(buf, '\n');
+		if(lf == NULL) len = strlen(buf);
+		else {
+			*lf = '\0';
+			len = lf - buf;
+			assert(len == strlen(buf));
+		}
+		parse_device_node(buf, len);
+		if(len == pos) pos = 0;
+		else {
+			memmove(buf, buf + len + 1, pos - len - 1);
+			pos -= len + 1;
+		}
+	} while(n > 0 || pos > 0);
+	printf("%s: have %d device nodes\n", __func__, (int)htable_count(&device_nodes));
+}
+
+
+static void fs_initialize(void)
+{
+	assert(__builtin_popcount(MAX_FD + 1) == 1);
+	fd_ra = RA_NEW(struct fd, MAX_FD + 1);
+	ra_disable_id_0(fd_ra);
+
+	if(device_nodes_enabled) {
+		int typ = 0;
+		int64_t ino = lookup(&typ, fs_super->root_inode, "dev");
+		if(ino >= 0 && typ == SQUASHFS_DIR_TYPE) {
+			dev_ino = ino;
+			ino = lookup(&typ, dev_ino, ".device-nodes");
+			if(ino >= 0 && typ == SQUASHFS_REG_TYPE) {
+				read_device_nodes(ino);
+			}
+		}
+	}
+}
+
+
 static void ignore_opt_error(const char *fmt, ...) {
 	/* foo */
 }
@@ -725,9 +947,35 @@ static void ignore_opt_error(const char *fmt, ...) {
 
 static char *set_tid(const char *optarg, void *tidptr)
 {
+	assert(tidptr == &boot_tid || tidptr == &dev_tid);
 	char *copy = strdup(optarg), *sep = strchr(copy, ':');
-	*(sep++) = '\0';
-	boot_tid = L4_GlobalId(atoi(copy), atoi(sep));
+	*sep++ = '\0';
+	*(L4_ThreadId_t *)tidptr = L4_GlobalId(atoi(copy), atoi(sep));
+	free(copy);
+	return NULL;
+}
+
+
+static char *decode_l64a_16u8(const char *optarg, void *dest)
+{
+	char input[41];
+	strncpy(input, optarg, sizeof input);
+	input[sizeof input - 1] = '\0';
+	assert(streq(optarg, input));
+
+	int ip = 0, op = 0;
+	do {
+		char *sep = strchr(&input[ip], ':');
+		if(sep != NULL) *sep = '\0';
+		unsigned val = a64l(&input[ip]);
+		assert(streq(l64a(val), &input[ip]));
+		if(sep != NULL) ip += sep - &input[ip] + 1;
+		for(int i=0; i < 3 && op < 16; i++, op++, val >>= 8) {
+			*(uint8_t *)(dest + op) = val & 0xff;
+		}
+	} while(op < 16);
+	for(int i = op; i < 16; i++) *(uint8_t *)(dest + i) = '\0';
+
 	return NULL;
 }
 
@@ -735,6 +983,10 @@ static char *set_tid(const char *optarg, void *tidptr)
 static const struct opt_table opts[] = {
 	OPT_WITH_ARG("--boot-initrd", &set_tid, NULL, &boot_tid,
 		"start up in initrd mode (not for general consumption)"),
+	OPT_WITH_ARG("--device-cookie-key", &decode_l64a_16u8, NULL,
+		&device_cookie_key.key, "cookie key (base64)"),
+	OPT_WITH_ARG("--device-registry-tid", &set_tid, NULL, &dev_tid,
+		"tid:version of the system device registry"),
 	OPT_ENDTABLE
 };
 
@@ -744,7 +996,15 @@ int main(int argc, char *argv[])
 	opt_register_table(opts, NULL);
 	if(!opt_parse(&argc, argv, &ignore_opt_error)) {
 		printf("fs.squashfs: option parsing failed!\n");
-		return 1;
+		return EXIT_FAILURE;
+	}
+
+	if(L4_IsNilThread(boot_tid)) {
+		printf("fs.squashfs: no boot_tid?\n");
+		/* TODO: support mounting an image from a filesystem, or a block
+		 * device
+		 */
+		return EXIT_FAILURE;
 	}
 
 	/* do init protocol. */
@@ -769,6 +1029,7 @@ int main(int argc, char *argv[])
 	if(L4_IpcFailed(tag)) goto ipcfail;
 
 	if(status == 0) {
+		device_nodes_enabled = pidof_NP(boot_tid) >= SNEKS_MIN_SYSID;
 		fs_initialize();
 		squashfs_ipc_loop(initrd_start, initrd_size);
 	}
@@ -778,5 +1039,5 @@ int main(int argc, char *argv[])
 ipcfail:
 	printf("fs.squashfs: initrd protocol fail, tag=%#lx, ec=%lu\n",
 		tag.raw, L4_ErrorCode());
-	return 1;
+	return EXIT_FAILURE;
 }
