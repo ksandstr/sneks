@@ -1,0 +1,18 @@
+
+#ifndef _SYS_STAT_H
+#define _SYS_STAT_H
+
+#include <sneks/api/path-defs.h>
+
+
+#define S_IFMT SNEKS_PATH_S_IFMT
+#define S_IFDIR SNEKS_PATH_S_IFDIR
+#define S_IFCHR SNEKS_PATH_S_IFCHR
+#define S_IFBLK SNEKS_PATH_S_IFBLK
+#define S_IFREG SNEKS_PATH_S_IFREG
+#define S_IFIFO SNEKS_PATH_S_IFIFO
+#define S_IFLNK SNEKS_PATH_S_IFLNK
+#define S_IFSOCK SNEKS_PATH_S_IFSOCK
+
+
+#endif
