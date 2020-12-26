@@ -1252,6 +1252,15 @@ static int uapi_setresugid(
 }
 
 
+static int uapi_resolve(
+	unsigned *object_p, L4_Word_t *server_raw_p,
+	int *ifmt_p, L4_Word_t *cookie_p,
+	L4_Word_t dirfd, const char *path, int flags)
+{
+	return -ENOSYS;
+}
+
+
 /* clear UTCB bit in root for this thread, because it won't have been covered
  * in add_systask()
  */
@@ -1286,6 +1295,9 @@ int uapi_loop(void *param_ptr)
 #ifdef BUILD_SELFTEST
 		.get_systask_threads = &uapi_get_systask_threads,
 #endif
+
+		/* Sneks::Path */
+		.resolve = &uapi_resolve,
 	};
 	for(;;) {
 		L4_Word_t st = _muidl_root_uapi_dispatch(&vtab);

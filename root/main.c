@@ -1752,6 +1752,7 @@ int main(void)
 		.sysinfo_size_log2 = PAGE_BITS,
 		.api.proc = uapi_tid,
 		.api.vm = vm_tid,
+		.api.rootfs = uapi_tid,
 		.memory.page_size_log2 = PAGE_BITS,
 		.memory.biggest_page_log2 = PAGE_BITS,
 		.posix.pipe = pipeserv,

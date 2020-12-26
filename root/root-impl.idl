@@ -5,6 +5,7 @@
 
 #include <api/io.idl>
 #include <api/proc.idl>
+#include <api/path.idl>
 #include <sys/abend.idl>
 
 
@@ -17,7 +18,7 @@ interface BootCon: Sneks::IO {
 
 
 /* impl spec for root's uapi server. */
-interface RootUapi: Sneks::Proc {
+interface RootUapi: Sneks::Proc, Sneks::Path {
 	/* emp-tay */
 };
 
