@@ -15,6 +15,8 @@
 #include <l4/types.h>
 #include <l4/kip.h>
 
+#include <sneks/devcookie.h>
+
 
 #define THREAD_STACK_SIZE 4096
 
@@ -80,11 +82,14 @@ extern void mm_enable_sysmem(L4_ThreadId_t sysmem_tid);
 
 /* from main.c . */
 
-extern L4_ThreadId_t vm_tid, sysmsg_tid;
+extern L4_ThreadId_t vm_tid, sysmsg_tid, initrd_tid;
 extern L4_KernelInterfacePage_t *the_kip;
+extern struct cookie_key device_cookie_key;
 
 extern void send_phys_to_sysmem(
 	L4_ThreadId_t sysmem_tid, bool self, L4_Fpage_t fp);
+
+extern L4_ThreadId_t spawn_systask_from_initrd(const char *path, ...);
 
 
 /* from thrd.c */
@@ -151,6 +156,14 @@ extern void zombify(struct process *p);
 
 extern int uapi_loop(void *param_ptr);
 extern void uapi_init(void);
+
+
+/* from device.c */
+
+extern L4_ThreadId_t devices_tid;
+
+extern int devices_loop(void *param_ptr);
+extern void devices_init(void);
 
 
 /* from fsio.c */

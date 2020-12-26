@@ -2,6 +2,7 @@
 #ifndef __API_PATH_IDL__
 #define __API_PATH_IDL__
 
+#include <muidl.idl>
 #include <l4x2.idl>
 #include <posixlike.idl>
 
@@ -33,12 +34,16 @@ interface Path
 	/* @dirfd == 0 refers to the filesystem's root directory. this may be
 	 * distinct from the filesystem's mount point, which is a directory on the
 	 * parent filesystem; the exception being when the parent does not exist.
+	 *
+	 * TODO: remove the explicit register specs and funny label once muidl
+	 * gets a nicer generated propagation feature.
 	 */
+	[Label(0xb00b)]
 	void resolve(
 		out object inode, out L4X2::ThreadId server,
 		out long ifmt, out cookie cookie,
-		in L4X2::word dirfd, in path path, in long flags)
-			raises(Posix::Errno);
+		[MR(2)] in L4X2::word dirfd, in path path, [MR(3)] in long flags)
+			raises(Posix::Errno, muidl::NoReply);
 };
 
 };

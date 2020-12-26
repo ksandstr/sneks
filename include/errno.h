@@ -17,6 +17,7 @@
 #define EFAULT	14	/* bad address */
 #define EBUSY	16	/* device or resource busy */
 #define EEXIST	17	/* file exists */
+#define ENODEV	19	/* no such device */
 #define ENOTDIR	20	/* not a directory */
 #define EISDIR	21	/* is a directory */
 #define EINVAL	22	/* invalid value */

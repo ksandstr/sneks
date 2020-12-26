@@ -28,7 +28,7 @@ distclean: clean
 
 
 root: root.ld crt0.o $(IDL_OBJS) main.o runtime.o thrd.o uapi.o sig.o mm.o \
-		ser_io.o fsio.o random.o \
+		ser_io.o fsio.o random.o devices.o \
 		mung-rangealloc.o mung-slab.o \
 		lfht-epoch.o lfht-nbsl.o lfht-percpu.o \
 		ccan-crypto-xtea.o

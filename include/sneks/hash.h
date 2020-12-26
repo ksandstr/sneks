@@ -5,6 +5,7 @@
 #define __SNEKS_HASH_H__
 
 #include <stdint.h>
+#include <ccan/hash/hash.h>
 
 
 extern uint32_t hash32shiftmult(uint32_t key);

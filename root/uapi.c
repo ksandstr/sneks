@@ -1257,7 +1257,35 @@ static int uapi_resolve(
 	int *ifmt_p, L4_Word_t *cookie_p,
 	L4_Word_t dirfd, const char *path, int flags)
 {
-	return -ENOSYS;
+	if(dirfd != 0) return -EBADF;
+	if(path[0] != '/') return -ENOENT;
+
+	/* TODO: drop this once fs.squashfs no longer forces /initrd up front,
+	 * before end of wip/dev-nodes.
+	 */
+	char realpath[strlen(path) + 8];
+	memcpy(realpath, "/initrd", 7);
+	memcpy(realpath + 7, path, strlen(path) + 1);
+
+	/* TODO: replace with muidl propagation */
+	L4_MsgTag_t tag = { .X.label = 0xe808, .X.u = 3, .X.t = 2 };
+	L4_Set_Propagation(&tag);
+	L4_Set_VirtualSender(muidl_get_sender());
+	L4_LoadMR(0, tag.raw);
+	L4_LoadMR(1, 0xb00b);
+	L4_LoadMR(2, dirfd);
+	L4_LoadMR(3, flags);
+	L4_StringItem_t rp = L4_StringItem(sizeof realpath, realpath);
+	L4_LoadMRs(4, 2, rp.raw);
+	tag = L4_Send(initrd_tid);
+	if(L4_IpcFailed(tag)) {
+		printf("%s: failed to propagate, ec=%#lx\n", __func__,
+			L4_ErrorCode());
+		return -EFAULT;	/* TODO: better error code? */
+	} else {
+		muidl_raise_no_reply();
+		return 0;
+	}
 }
 
 

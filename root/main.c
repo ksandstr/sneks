@@ -65,10 +65,13 @@ struct root_arg {
 static size_t hash_raw_word(const void *ptr, void *priv);
 
 L4_KernelInterfacePage_t *the_kip;
-L4_ThreadId_t vm_tid = { .raw = 0 }, sysmsg_tid = { .raw = 0 };
+L4_ThreadId_t vm_tid = { .raw = 0 }, sysmsg_tid = { .raw = 0 },
+	initrd_tid = { .raw = 0 };
 
 static L4_ThreadId_t sigma0_tid, sysmem_tid;
 static int sysmem_pages = 0, sysmem_self_pages = 0;
+
+struct cookie_key device_cookie_key;
 
 /* memory set aside for sysmem, e.g. boot modules that were copied into the
  * dlmalloc heap before start_sysmem(). emptied and cleared in start_sysmem();
@@ -1149,6 +1152,26 @@ initfail:
 }
 
 
+/* encode @src as 6 groups of 1-4 base64 characters separated by colons. an
+ * alternate encoding would pad short groups with '.' to always 4 bytes, or
+ * omit separators when the length is already 4, but that's hardly useful.
+ */
+static void encode_l64a_16u8(char *dest, const uint8_t src[static 16])
+{
+	int a = 0;
+	do {
+		if(a > 0) *dest++ = ':';
+		int val = 0;
+		for(int i=0; i < 3 && a < 16; i++, a++) val |= src[a] << (i * 8);
+		char *s = l64a(val);
+		assert(a64l(s) == val);
+		int l = strlen(s);
+		memcpy(dest, s, l + 1);
+		dest += l;
+	} while(a < 16);
+}
+
+
 static L4_ThreadId_t mount_initrd(void)
 {
 	/* three seconds is fine. we're not riding rabbits here. (also QEMU on a
@@ -1166,11 +1189,17 @@ static L4_ThreadId_t mount_initrd(void)
 	}
 
 	L4_ThreadId_t self = L4_MyGlobalId();
-	char tid[32];
-	snprintf(tid, sizeof tid, "%lu:%lu",
+	char boot_tid[32], dev_tid[32];
+	snprintf(boot_tid, sizeof boot_tid, "%lu:%lu",
 		L4_ThreadNo(self), L4_Version(self));
+	snprintf(dev_tid, sizeof dev_tid, "%lu:%lu",
+		L4_ThreadNo(devices_tid), L4_Version(devices_tid));
+	char devcky[40] = "";
+	encode_l64a_16u8(devcky, device_cookie_key.key);
+	/* NOTE: this shadows the global initrd_tid! */
 	L4_ThreadId_t initrd_tid = spawn_systask_mod("fs.squashfs",
-		"--boot-initrd", tid, NULL);
+		"--boot-initrd", boot_tid, "--device-cookie-key", devcky,
+		"--device-registry-tid", dev_tid, NULL);
 	if(L4_IsNilThread(initrd_tid)) {
 		panic("can't start fs.squashfs to mount initrd!");
 	}
@@ -1644,6 +1673,12 @@ static int rootserv_loop(void *parameter)
 }
 
 
+static void stupid_sync(thrd_t t) {
+	L4_LoadMR(0, 0);
+	L4_Send(thrd_tidof_NP(t));
+}
+
+
 int main(void)
 {
 	int n = sneks_setup_console_stdio();
@@ -1694,8 +1729,7 @@ int main(void)
 	/* stupid-sync with uapi so that it's ready to handle sysmem's requests.
 	 * without this, sysmem and uapi wind up in a send-send deadlock.
 	 */
-	L4_LoadMR(0, 0);
-	L4_Send(thrd_tidof_NP(uapi));
+	stupid_sync(uapi);
 	random_init(rdtsc());
 
 	put_sysinfo("uapi:tid", 1, thrd_tidof_NP(uapi).raw);
@@ -1735,7 +1769,17 @@ int main(void)
 		sysmem_pages, sysmem_self_pages);
 	random_init(rdtsc());
 
-	L4_ThreadId_t initrd_tid = mount_initrd();
+	devices_init();
+	thrd_t devices;
+	n = thrd_create(&devices, &devices_loop, NULL);
+	if(n != thrd_success) {
+		printf("can't start device resolver!\n");
+		abort();
+	}
+	stupid_sync(devices);
+
+	generate_u(device_cookie_key.key, sizeof device_cookie_key.key);
+	initrd_tid = mount_initrd();
 	put_sysinfo("rootfs:tid", 1, initrd_tid.raw);
 
 	sysmsg_tid = spawn_systask_from_initrd(
