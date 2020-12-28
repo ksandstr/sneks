@@ -51,6 +51,9 @@ extern long long int strtoll(const char *nptr, char **endptr, int base);
 extern unsigned long int strtoul(const char *nptr, char **endptr, int base);
 extern double strtod(const char *nptr, char **endptr);
 
+extern long a64l(const char *str64);
+extern char *l64a(long value);
+
 extern void qsort(
 	void *data, size_t count, size_t size,
 	int (*compare_fn)(const void *, const void *));

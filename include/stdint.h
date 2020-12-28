@@ -7,6 +7,10 @@
 #include <stddef.h>
 
 
+#define INT32_MAX (2147483647)
+#define INT32_MIN (-2147483648)
+
+
 #define UINT64_C(x) x ## ULL
 
 
