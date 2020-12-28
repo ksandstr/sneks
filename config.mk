@@ -45,7 +45,13 @@ CLEAN_PATS=*-service.s *-client.s *-common.s *-defs.h ccan-*.a
 # build CCAN sources as guests.
 ccan-%.o ::
 	@echo "  CC $@ <ccan>"
-	@$(CC) -c -o $@ $(CCAN_DIR)/ccan/$*/$*.c $(CFLAGS) -nostartfiles -nodefaultlibs
+	@$(CC) -c -o $@ $(CCAN_DIR)/ccan/$*/$*.c $(CFLAGS) -nostartfiles \
+		-nodefaultlibs
+
+ccan-crypto-%.o ::
+	@echo "  CC $@ <ccan/crypto>"
+	@$(CC) -c -o $@ $(CCAN_DIR)/ccan/crypto/$*/$*.c $(CFLAGS) \
+		-nostartfiles -nodefaultlibs
 
 
 # also complex CCAN modules. build-ccan-module.pl emits CC lines as

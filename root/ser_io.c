@@ -11,6 +11,8 @@
 #include <ukernel/ioport.h>
 #include <ukernel/util.h>
 
+#include "defs.h"
+
 
 static bool com_is_fast(int base)
 {
@@ -51,6 +53,16 @@ void computchar(unsigned char ch)
 }
 
 
-void ser_putstr(const char *str) {
+void ser_putstr(const char *str)
+{
 	while(*str != '\0') computchar(*(str++));
+
+	/* output on a serial port introduces flow control wobble to rdtsc, which
+	 * is pretty swell in a virtualized testbed where the host is subject to
+	 * scheduling randomness.
+	 */
+	static uint64_t previous = 0x98165437;
+	uint64_t latest = rdtsc();
+	add_entropy(latest - previous);
+	previous = latest;
 }

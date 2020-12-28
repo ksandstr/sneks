@@ -28,9 +28,10 @@ distclean: clean
 
 
 root: root.ld crt0.o $(IDL_OBJS) main.o runtime.o thrd.o uapi.o sig.o mm.o \
-		ser_io.o fsio.o \
+		ser_io.o fsio.o random.o \
 		mung-rangealloc.o mung-slab.o \
-		lfht-epoch.o lfht-nbsl.o lfht-percpu.o
+		lfht-epoch.o lfht-nbsl.o lfht-percpu.o \
+		ccan-crypto-xtea.o
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T root.ld \
 		$(filter %.o,$^) $(LIBS) -lsneks-sysidl -lsneks -ll4 -lm \

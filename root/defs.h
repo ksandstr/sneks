@@ -4,6 +4,8 @@
 #ifndef __ROOT_DEFS_H__
 #define __ROOT_DEFS_H__
 
+#include <stdio.h>
+#include <stdint.h>
 #include <stdbool.h>
 #include <threads.h>
 #include <ccan/list/list.h>
@@ -62,6 +64,14 @@ struct process
 };
 
 
+/* TODO: move this else-the-fucking-where */
+static inline uint64_t rdtsc(void) {
+	uint64_t output;
+	asm volatile ("rdtsc" : "=A" (output));
+	return output;
+}
+
+
 /* from mm.c. sends pre-heap sbrk()'d pages to sysmem and switches to sysmem
  * brk() handling.
  */
@@ -86,6 +96,12 @@ extern void rt_thrd_tests(void);
 extern L4_ThreadId_t thrd_tidof_NP(thrd_t t);
 
 extern int next_early_utcb_slot;	/* for add_systask() */
+
+
+/* from random.c */
+extern void random_init(uint64_t x);
+extern void add_entropy(uint64_t x);
+extern void generate_u(void *outbuf, size_t length);
 
 
 /* from sig.c */

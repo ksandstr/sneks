@@ -1649,11 +1649,16 @@ int main(void)
 	int n = sneks_setup_console_stdio();
 	if(n < 0) panic("console setup failed!");
 
+	random_init(rdtsc());
 	printf("hello, world!\n");
 	the_kip = L4_GetKernelInterface();
 	sigma0_tid = L4_Pager();
 	rt_thrd_init();
 	rename_first_threads();
+	random_init(rdtsc());
+
+	random_init((uintptr_t)the_kip);
+	random_init(sigma0_tid.raw);
 
 	L4_Fpage_t sm_utcb = L4_Nilpage, sm_kip = L4_Nilpage;
 	L4_ThreadId_t sm_pager = L4_nilthread;
@@ -1664,6 +1669,7 @@ int main(void)
 
 	uapi_init();
 	L4_ThreadId_t con_tid = console_init(&root_args);
+	random_init(rdtsc());
 
 	/* configure sysinfo. */
 	thrd_t kmsg;
@@ -1675,6 +1681,7 @@ int main(void)
 	put_sysinfo("kmsg:tid", 1, thrd_tidof_NP(kmsg).raw);
 	printf("sysmem was initialized w/ %d pages and %d own pages\n",
 		sysmem_pages, sysmem_self_pages);
+	random_init(rdtsc());
 
 	/* launch the userspace API server. */
 	configure_uapi(sm_kip, sm_utcb);
@@ -1689,6 +1696,7 @@ int main(void)
 	 */
 	L4_LoadMR(0, 0);
 	L4_Send(thrd_tidof_NP(uapi));
+	random_init(rdtsc());
 
 	put_sysinfo("uapi:tid", 1, thrd_tidof_NP(uapi).raw);
 	uapi_tid = thrd_tidof_NP(uapi);
@@ -1725,6 +1733,7 @@ int main(void)
 	 */
 	printf("sysmem has been given %d pages and %d own pages\n",
 		sysmem_pages, sysmem_self_pages);
+	random_init(rdtsc());
 
 	L4_ThreadId_t initrd_tid = mount_initrd();
 	put_sysinfo("rootfs:tid", 1, initrd_tid.raw);
