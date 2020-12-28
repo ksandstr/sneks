@@ -3,6 +3,7 @@
 #ifndef __SNEKS_THREAD_H__
 #define __SNEKS_THREAD_H__
 
+#include <threads.h>
 #include <ccan/list/list.h>
 #include <l4/types.h>
 

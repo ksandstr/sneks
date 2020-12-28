@@ -10,6 +10,10 @@
 #include <sys/wait.h>
 
 
+#define EXIT_SUCCESS 0
+#define EXIT_FAILURE 1
+
+
 extern void *malloc(size_t size) __attribute__((malloc));
 extern void free(void *ptr);
 extern void *calloc(size_t nmemb, size_t size) __attribute__((malloc));
