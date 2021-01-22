@@ -3,9 +3,9 @@ export CFGDIR:=$(abspath ../..)
 include $(CFGDIR)/config.mk
 
 LIB_SRC:=$(wildcard *.c)
-LIB_OBJS:=$(LIB_SRC:.c=.o)
+LIB_OBJS:=$(LIB_SRC:.c=.o) chrdev-impl-common.o chrdev-impl-service.o
 
-CFLAGS:=$(subst -D__KERNEL__,,$(CFLAGS)) -mstackrealign
+CFLAGS:=$(subst -D__KERNEL__,,$(CFLAGS)) -D__SNEKS__=1 -mstackrealign
 
 
 all: libsneks-chrdev.a
