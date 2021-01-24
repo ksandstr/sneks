@@ -1,4 +1,5 @@
 
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
@@ -41,6 +42,40 @@ START_LOOP_TEST(basic, iter, 0, 1)
 END_TEST
 
 DECLARE_TEST("io:pipe", basic);
+
+
+/* test that when O_NONBLOCK hasn't been set, a reader should block on an
+ * empty pipe until a write occurs.
+ */
+START_TEST(blocking_read)
+{
+	plan_tests(3);
+
+	const char the_byte = 'w';	/* w */
+	int fds[2], n = pipe(fds);
+	fail_if(n < 0);
+	int child = fork();
+	if(child == 0) {
+		close(fds[0]);
+		usleep(20000);	/* a short nap */
+		n = write(fds[1], &the_byte, 1);
+		exit(n == 1 ? EXIT_SUCCESS : EXIT_FAILURE);
+	}
+
+	close(fds[1]);
+	char received = 0;
+	n = read(fds[0], &received, 1);
+	ok(n == 1, "got a single byte");
+	ok1(received == the_byte);
+	close(fds[0]);
+
+	int st, dead = wait(&st);
+	fail_unless(dead == child, "wait failed, n=%d", dead);
+	ok1(WIFEXITED(st) && WEXITSTATUS(st) == EXIT_SUCCESS);
+}
+END_TEST
+
+DECLARE_TEST("io:pipe", blocking_read);
 
 
 /* EOF/broken pipe behaviour. */
