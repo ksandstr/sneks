@@ -39,7 +39,7 @@ libsneks.a: $(LIB_OBJS) setjmp.o
 	@ranlib $@
 
 
-%-client.s %-common.s: $(CFGDIR)/idl/api/%.idl
+%-client.s %-common.s $(CFGDIR)/include/sneks/api/%-defs.h: $(CFGDIR)/idl/api/%.idl
 	@echo "  IDL $< <client>"
 	@$(MUIDL) $(MUIDLFLAGS) --client --common --defs $<
 	@mkdir -p $(CFGDIR)/include/sneks/api
