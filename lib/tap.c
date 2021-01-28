@@ -215,14 +215,14 @@ void _fail_unless(
 {
 	if(unlikely(!result)) {
 		if(fmt == NULL) {
-			printf("Bail out!  `%s' failed in %s:%d", expr, file, line);
+			printf("Bail out!  `%s' failed in %s:%d\n", expr, file, line);
 		} else {
 			va_list ap;
 			va_start(ap, fmt);
 			char buf[512];
 			vsnprintf(buf, sizeof buf, fmt, ap);
 			va_end(ap);
-			printf("Bail out!  %s: `%s' in %s:%d", buf, expr, file, line);
+			printf("Bail out!  %s: `%s' in %s:%d\n", buf, expr, file, line);
 		}
 
 		/* fail_if() and fail_unless() have assert nature, so abort() it is. */
