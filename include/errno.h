@@ -20,9 +20,10 @@
 #define ENOTDIR	20	/* not a directory */
 #define EISDIR	21	/* is a directory */
 #define EINVAL	22	/* invalid value */
-#define ENOSYS	28	/* function not implemented */
+#define ENOSPC	28	/* no space left on device */
 #define EPIPE	32	/* broken pipe */
 #define EDEADLK 35	/* resource deadlock would occur */
+#define ENOSYS	38	/* function not implemented */
 #define EWOULDBLOCK 41	/* NOTE: distinct from EAGAIN! */
 #define EOVERFLOW 75	/* value too large for defined data type */
 #define ETIMEDOUT 110	/* connection timed out */
