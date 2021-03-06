@@ -23,10 +23,6 @@ START_LOOP_TEST(sinkdev, iter, 0, 2)
 		dev_path, btos(is_null), btos(is_sink));
 	plan(7);
 
-#ifdef __sneks__
-	todo_start("impl missing");
-#endif
-
 	int fd = open(dev_path, O_RDWR);
 	if(fd < 0) diag("fd=%d, errno=%d", fd, errno);
 	skip_start(!ok(fd > 0, "open device"), 6, "no fd") {

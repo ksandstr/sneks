@@ -56,8 +56,6 @@ START_LOOP_TEST(valid_dev_cookie, iter, 0, 3)
 		diag("n=%d", n);
 	}
 
-	todo_start("impl missing");
-
 	skip_start(!diff_object, 2, "using same object") {
 		const char *diff_path = "/dev/zero";
 		assert(!streq(diff_path, test_path));
@@ -104,8 +102,6 @@ START_TEST(invalid_dev_cookie)
 	}
 
 	cookie ^= 0xdeadbeef;	/* well and truly fuxx0r'd */
-
-	todo_start("impl missing");
 
 	n = try_cookie(object, server, cookie);
 	diag("try_cookie returned n=%d", n);
