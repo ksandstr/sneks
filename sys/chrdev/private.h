@@ -18,8 +18,10 @@ struct chrdev_callbacks
 	void (*confirm)(chrfile_t *, unsigned, bool);
 	int (*close)(chrfile_t *);
 	int (*ioctl)(chrfile_t *, unsigned long, va_list args);
+	/* constructors */
 	int (*fork)(chrfile_t *, chrfile_t *);
 	int (*pipe)(chrfile_t *, chrfile_t *, int);
+	int (*dev_open)(chrfile_t *, char, int, int, int);
 };
 
 

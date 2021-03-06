@@ -61,6 +61,15 @@ extern void chrdev_fork_func(int (*fn)(chrfile_t *dst, chrfile_t *src));
 extern void chrdev_pipe_func(
 	int (*fn)(chrfile_t *readside, chrfile_t *writeside, int flags));
 
+/* maps to Sneks::DeviceNode/open, for creation of device handles. libchrdev
+ * decodes the "object" parameter into type, major, minor. @type is 'c' for
+ * character devices and 'b' for block devices; the callback should return
+ * -ENODEV for any combination of type-major-minor, or set flag in @flags, it
+ * doesn't recognize.
+ */
+extern void chrdev_dev_open_func(
+	int (*fn)(chrfile_t *h, char type, int major, int minor, int flags));
+
 /* returns like main() */
 extern int chrdev_run(size_t sizeof_chrdev_file, int argc, char *argv[]);
 

@@ -8,7 +8,8 @@
 #include "private.h"
 
 
-static int enosys();
+static int enosys();	/* works for 3 or fewer args? wtf. */
+static int no_device(chrfile_t *, char, int, int, int);
 static void no_confirm(chrfile_t *, unsigned, bool);
 
 
@@ -21,11 +22,13 @@ struct chrdev_callbacks callbacks = {
 	.ioctl = &enosys,
 	.pipe = &enosys,
 	.fork = &enosys,
+	.dev_open = &no_device,
 };
 
 
-static int enosys() {
-	return -ENOSYS;
+static int enosys() { return -ENOSYS; }
+static int no_device(chrfile_t *a, char b, int c, int d, int e) {
+	return -ENODEV;
 }
 
 
@@ -76,4 +79,9 @@ void chrdev_fork_func(int (*fn)(chrfile_t *, chrfile_t *)) {
 
 void chrdev_pipe_func(int (*fn)(chrfile_t *, chrfile_t *, int)) {
 	callbacks.pipe = fn;
+}
+
+
+void chrdev_dev_open_func(int (*fn)(chrfile_t *h, char, int, int, int)) {
+	callbacks.dev_open = fn;
 }

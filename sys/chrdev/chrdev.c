@@ -13,6 +13,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <l4/types.h>
 #include <l4/thread.h>
@@ -20,6 +21,7 @@
 #include <ccan/htable/htable.h>
 #include <ccan/darray/darray.h>
 #include <ccan/minmax/minmax.h>
+#include <ccan/compiler/compiler.h>
 
 #include <sneks/process.h>
 #include <sneks/thread.h>
@@ -90,6 +92,8 @@ struct chrdev_client
 
 static void consume_lc_queue(void);
 static void chrdev_confirm(L4_Word_t, void *);
+static PURE_FUNCTION struct chrdev_client *caller(bool create);
+static void client_dtor(struct chrdev_client *c);
 
 
 static pid_t my_pid;
@@ -128,6 +132,55 @@ static struct chrdev_handle *cf2h(chrfile_t *file) {
 	uintptr_t p = (uintptr_t)file;
 	p -= offsetof(struct chrdev_handle, impl);
 	return (struct chrdev_handle *)p;
+}
+
+
+/* remove handle from client and htable. */
+static void remove_handle(struct chrdev_handle *h)
+{
+	struct chrdev_client *c = h->owner;
+	assert(c->handles.size > 0);
+	assert(h->client_ix < c->handles.size);
+	assert(c->handles.item[h->client_ix] == h);
+	if(h->client_ix < c->handles.size - 1) {
+		/* move the last one in the deleted handle's place. */
+		struct chrdev_handle *last = c->handles.item[c->handles.size - 1];
+		assert(last->owner == c);
+		last->client_ix = h->client_ix;
+		c->handles.item[h->client_ix] = last;
+	}
+	c->handles.size--;
+
+	/* (returns false when called from unalloc_handle(), so we don't assert
+	 * the return value.)
+	 */
+	htable_del(&handle_ht, rehash_handle(h, NULL), h);
+}
+
+
+static int handle_dtor(struct chrdev_handle *h)
+{
+	int n = (*callbacks.close)(CHRFILE(h));
+	/* ... an error from the close callback won't stop the file from being
+	 * destroyed; we'll just pass it upward.
+	 */
+
+	remove_handle(h);
+	free(h);
+
+	return n;
+}
+
+
+static void client_dtor(struct chrdev_client *c)
+{
+	while(c->handles.size > 0) {
+		handle_dtor(c->handles.item[0]);
+	}
+	bool ok = htable_del(&client_ht, int_hash(c->pid), c);
+	assert(ok);
+	darray_free(c->handles);
+	free(c);
 }
 
 
@@ -204,46 +257,6 @@ static int fork_client(struct chrdev_client *parent, pid_t child_pid)
 }
 
 
-static int handle_dtor(struct chrdev_handle *h)
-{
-	int n = (*callbacks.close)(CHRFILE(h));
-	/* ... an error from the close callback won't stop the file from being
-	 * destroyed; we'll just pass it upward.
-	 */
-
-	/* remove handle from client and htable, then dispose. */
-	struct chrdev_client *c = h->owner;
-	assert(c->handles.size > 0);
-	assert(h->client_ix < c->handles.size);
-	assert(c->handles.item[h->client_ix] == h);
-	if(h->client_ix < c->handles.size - 1) {
-		/* move the last one in the deleted handle's place. */
-		struct chrdev_handle *last = c->handles.item[c->handles.size - 1];
-		assert(last->owner == c);
-		last->client_ix = h->client_ix;
-		c->handles.item[h->client_ix] = last;
-	}
-	c->handles.size--;
-	bool ok = htable_del(&handle_ht, rehash_handle(h, NULL), h);
-	assert(ok);
-	free(h);
-
-	return n;
-}
-
-
-static void client_dtor(struct chrdev_client *c)
-{
-	while(c->handles.size > 0) {
-		handle_dtor(c->handles.item[0]);
-	}
-	bool ok = htable_del(&client_ht, int_hash(c->pid), c);
-	assert(ok);
-	darray_free(c->handles);
-	free(c);
-}
-
-
 static bool bits_exist(struct chrdev_client *c, int bits)
 {
 	bits &= 0xffff;
@@ -271,6 +284,60 @@ static int new_bits(struct chrdev_client *c)
 	if(iters == USHRT_MAX - 1) return -ENOMEM; /* TODO: better error code? */
 
 	return bits;
+}
+
+
+/* creates a raw handle, to be passed to new_handle() or unalloc_handle()
+ * according to whether the creator's initializer succeeds or fails.
+ */
+static int alloc_handle(struct chrdev_handle **hp)
+{
+	assert(hp != NULL);
+
+	struct chrdev_handle *h = malloc(sizeof *h + impl_size);
+	if(h == NULL) goto Enomem;
+	struct chrdev_client *c = caller(true);
+	if(c == NULL) goto Enomem;
+	*h = (struct chrdev_handle){
+		.owner = c, .bits = new_bits(c),
+		.client_ix = c->handles.size,
+	};
+	if(h->bits < 0) {
+		/* it's slightly weird to pop ENOMEM here, but ENFILE and EMFILE refer
+		 * to system- and processwide limits which device etc. impls don't
+		 * care about so they'd be even wronger still.
+		 */
+		goto Enomem;
+	}
+	darray_push(c->handles, h);	/* TODO: catch ENOMEM */
+	assert(c->handles.item[h->client_ix] == h);
+
+	*hp = h;
+	return 0;
+
+Enomem:
+	free(h);
+	return -ENOMEM;
+}
+
+
+/* returns negative errno on failure, or identifying bits of @h on success. */
+static int new_handle(struct chrdev_handle *h)
+{
+	bool ok = htable_add(&handle_ht, rehash_handle(h, NULL), h);
+	if(!ok) return -ENOMEM;
+	assert(h->owner != NULL && h->owner == caller(false));
+
+	return h->bits & 0xffff;
+}
+
+
+static void unalloc_handle(struct chrdev_handle *h)
+{
+	if(h != NULL) {
+		remove_handle(h);
+		free(h);
+	}
 }
 
 
@@ -457,9 +524,7 @@ static struct chrdev_client *caller(bool create)
 	}
 	sysmsg_add_filter(lifecycle_msg, &(L4_Word_t){ pid }, 1);
 	*c = (struct chrdev_client){
-		.pid = pid,
-		.handles = darray_new(),
-		.next_bits = 1,
+		.pid = pid, .next_bits = 1, .handles = darray_new(),
 	};
 	bool ok = htable_add(&client_ht, hash, c);
 	assert(ok);
@@ -737,57 +802,83 @@ static void chrdev_get_status(
 }
 
 
+/* Sneks::Pipe calls */
+
 static int chrdev_pipe(L4_Word_t *rd_p, L4_Word_t *wr_p, int flags)
 {
 	sync_confirm();
-	int n;
 
 	if(flags != 0) return -EINVAL;
 
-	struct chrdev_handle *readh = malloc(sizeof *readh + impl_size),
-		*writeh = malloc(sizeof *writeh + impl_size);
-	if(readh == NULL || writeh == NULL) goto Enomem;
+	struct chrdev_handle *readh = NULL, *writeh = NULL;
+	int n = alloc_handle(&readh);
+	if(n < 0) goto fail;
+	n = alloc_handle(&writeh);
+	if(n < 0) goto fail;
 
-	struct chrdev_client *c = caller(true);
-	if(c == NULL) goto Enomem;
-	*readh = (struct chrdev_handle){
-		.owner = c, .bits = new_bits(c),
-		.client_ix = c->handles.size,
-	};
-	*writeh = (struct chrdev_handle){
-		.owner = c, .bits = new_bits(c),
-		.client_ix = c->handles.size + 1,
-	};
-	if(readh->bits < 0 || writeh->bits < 0) {
-		if(c->handles.size == 0) client_dtor(c);
-		/* it's weird to pop ENOMEM here, but ENFILE and EMFILE refer to
-		 * system- and processwide limits which device impls don't care about
-		 * so they'd be even wronger still.
-		 */
-		goto Enomem;
-	}
 	n = (*callbacks.pipe)(CHRFILE(readh), CHRFILE(writeh), flags);
-	if(n < 0) {
-		if(c->handles.size == 0) client_dtor(c);
-		goto fail;
-	}
+	if(n < 0) goto fail;
 
-	bool ok = htable_add(&handle_ht, rehash_handle(readh, NULL), readh);
-	ok = ok && htable_add(&handle_ht, rehash_handle(writeh, NULL), writeh);
-	assert(ok);	/* TODO: catch and handle */
-	darray_appends(c->handles, readh, writeh);	/* ... this too */
-	assert(c->handles.item[readh->client_ix] == readh);
-	assert(c->handles.item[writeh->client_ix] == writeh);
-
-	*rd_p = readh->bits & 0xffff;
-	*wr_p = writeh->bits & 0xffff;
+	n = new_handle(readh);
+	if(n < 0) goto fail; else *rd_p = n;
+	n = new_handle(writeh);
+	if(n < 0) goto fail; else *wr_p = n;
 	return 0;
 
-Enomem: n = -ENOMEM;
 fail:
-	free(readh); free(writeh);
+	unalloc_handle(readh); unalloc_handle(writeh);
 	assert(n < 0);
 	return n;
+}
+
+
+/* Sneks::DeviceNode calls */
+
+static int chrdev_open(int *handle_p,
+	uint32_t object, L4_Word_t cookie, int flags)
+{
+	sync_confirm();
+
+	/* (we'll ignore @cookie because UAPI will have already checked it for us,
+	 * and we don't have the key material anyway.)
+	 */
+
+	/* TODO: use these somewhere? */
+	flags &= ~(O_RDONLY | O_WRONLY | O_RDWR);
+	if(flags != 0) return -EINVAL;
+
+	struct chrdev_handle *h;
+	int n = alloc_handle(&h);
+	if(n < 0) return n;
+	static const char objtype[] = { [2] = 'c' };
+	n = (*callbacks.dev_open)(CHRFILE(h), objtype[(object >> 30) & 0x3],
+		(object >> 15) & 0x7fff, object & 0x7fff, flags);
+	if(n < 0) {
+		unalloc_handle(h);
+		return n;
+	}
+
+	n = new_handle(h);
+	if(n < 0) return n;
+	else {
+		*handle_p = n;
+		return 0;
+	}
+}
+
+
+static int chrdev_ioctl_void(int *result_p, int handle, unsigned request)
+{
+	/* TODO */
+	return -ENOSYS;
+}
+
+
+static int chrdev_ioctl_int(int *result_p,
+	int handle, unsigned request, int *arg_p)
+{
+	/* TODO */
+	return -ENOSYS;
 }
 
 
@@ -808,6 +899,9 @@ int chrdev_run(size_t sizeof_file, int argc, char *argv[])
 		.set_notify = &chrdev_set_notify,
 		.get_status = &chrdev_get_status,
 		.pipe = &chrdev_pipe,
+		.open = &chrdev_open,
+		.ioctl_void = &chrdev_ioctl_void,
+		.ioctl_int = &chrdev_ioctl_int,
 	};
 
 	for(;;) {
