@@ -29,7 +29,7 @@ MUIDLFLAGS=-I $(MUIDL_DIR)/share/idl -I $(MUNG_DIR)/idl -I $(CFGDIR)/idl \
 CLEAN_PATS=*-service.s *-client.s *-common.s *-defs.h ccan-*.a
 
 
-.deps: $(shell $(CFGDIR)/scripts/find-impl-defs.pl)
+.deps: $(shell $(CFGDIR)/scripts/find-idl-defs.pl)
 	@mkdir -p .deps
 
 
