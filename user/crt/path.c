@@ -14,6 +14,7 @@
 
 #include <sneks/sysinfo.h>
 #include <sneks/api/path-defs.h>
+#include <sneks/api/file-defs.h>
 #include <sneks/api/dev-defs.h>
 #include <sneks/api/io-defs.h>
 
@@ -47,7 +48,22 @@ int openat(int dirfd, const char *pathname, int flags, ...)
 			n = __dev_open(server, &handle, object, cookie, flags);
 			actual = L4_ActualSender();
 			break;
-		/* TODO: other types */
+		case S_IFREG: case S_IFIFO: case S_IFSOCK:
+			n = __file_open(server, &handle, object, cookie, flags);
+			if((ifmt & S_IFMT) != S_IFREG) {
+				/* fifos and sockets generally won't be handled by the
+				 * Sneks::File provider. allow propagated handling when
+				 * resolve's `server' output wasn't the socket or fifo server.
+				 */
+				actual = L4_ActualSender();
+			}
+			break;
+		case S_IFLNK:
+			/* symbolic links returned from Sneks::Path/resolve are a result
+			 * of O_NOFOLLOW in @flags, so this status should be returned.
+			 */
+			errno = ELOOP;
+			return -1;
 		default: errno = ENOSYS; return -1;
 	}
 	if(n != 0) return NTOERR(n);

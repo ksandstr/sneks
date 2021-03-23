@@ -16,6 +16,7 @@
 #include <sneks/rbtree.h>
 #include <sneks/process.h>
 #include <sneks/api/io-defs.h>
+#include <sneks/api/file-defs.h>
 #include <ukernel/rangealloc.h>
 
 #include <l4/types.h>
@@ -358,10 +359,21 @@ long write(int fd, const void *buf, size_t count)
 }
 
 
-uint64_t lseek(int fd, uint64_t offset, int whence)
+off_t lseek(int fd, off_t offset, int whence)
 {
-	errno = ENOSYS;
-	return -1;
+	void *ctx = NULL;
+	if(!__fd_valid(&ctx, fd)) {
+		errno = EBADF;
+		return -1;
+	}
+	switch(whence) {
+		case SEEK_CUR: case SEEK_SET: case SEEK_END: break;
+		default: errno = EINVAL; return -1;
+	}
+
+	struct fd_bits *b = __fdbits(&ctx, fd);
+	int n = __file_seek(b->server, b->handle, &offset, whence);
+	return NTOERR(n, offset);
 }
 
 

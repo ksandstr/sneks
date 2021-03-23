@@ -9,6 +9,19 @@
  */
 #include <sys/types.h>
 
+/* TODO: get these from API decls once find-idl-defs.pl understands the
+ * ubiquitous #include <stdio.h>.
+ */
+#ifndef SEEK_SET
+#define SEEK_SET 0
+#endif
+#ifndef SEEK_CUR
+#define SEEK_CUR 1
+#endif
+#ifndef SEEK_END
+#define SEEK_END 2
+#endif
+
 
 typedef unsigned int useconds_t;
 
@@ -29,7 +42,7 @@ extern int pause(void);
 extern int close(int fd);
 extern long read(int fd, void *buf, size_t count);
 extern long write(int fd, const void *buf, size_t count);
-extern uint64_t lseek(int fd, uint64_t offset, int whence);
+extern off_t lseek(int fd, off_t offset, int whence);
 
 extern int dup(int oldfd);
 extern int dup2(int oldfd, int newfd);

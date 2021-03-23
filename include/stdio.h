@@ -15,6 +15,9 @@
 #define EOF (-1)
 
 /* whence for fseek() */
+/* TODO: get these from API decls once find-idl-defs.pl understands the
+ * ubiquitous #include <stdio.h>.
+ */
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
