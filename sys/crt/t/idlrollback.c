@@ -44,10 +44,12 @@ static void undo_write(L4_Word_t value, void *priv)
 }
 
 
-static int iolimit_write(int32_t fd, const uint8_t *buf, unsigned length)
+static int iolimit_write(
+	int fd, off_t offset, const uint8_t *buf, unsigned length)
 {
 	struct iolimit_ctx *ctx = tss_get(iolimit_ctx_key);
 	if(ctx->limit == 0 && length > 0) return -EPIPE;
+	assert(offset == -1);
 
 	L4_Sleep(L4_TimePeriod(20 * 1000));
 
@@ -69,6 +71,7 @@ static int iolimit_fn(void *param)
 
 	static const struct sneks_io_vtable vtab = {
 		.write = &iolimit_write,
+		/* everything else: yolo! */
 	};
 
 	for(;;) {
@@ -116,7 +119,7 @@ START_LOOP_TEST(broken_write, iter, 0, 1)
 
 	uint16_t written = 0;
 	const char sixteen[] = "01234567890abcdef";
-	n = __io_write(thrd_to_tid(iolimit), &written, 0,
+	n = __io_write(thrd_to_tid(iolimit), &written, 0, -1,
 		(const void *)sixteen, 16);
 	diag("n=%d, written=%u", n, written);
 	ok(n == 0, "IO::write");
@@ -128,7 +131,7 @@ START_LOOP_TEST(broken_write, iter, 0, 1)
 		fail_if(n != thrd_success, "thrd_create: n=%d", n);
 	}
 	written = 0;
-	n = __io_write(thrd_to_tid(iolimit), &written, 0,
+	n = __io_write(thrd_to_tid(iolimit), &written, 0, -1,
 		(const void *)sixteen, 16);
 	diag("n=%d, written=%u", n, written);
 	imply_ok1(!do_cancel, n == 0 && written == 4);
@@ -145,7 +148,7 @@ START_LOOP_TEST(broken_write, iter, 0, 1)
 	} skip_end;
 
 	written = 0;
-	n = __io_write(thrd_to_tid(iolimit), &written, 0,
+	n = __io_write(thrd_to_tid(iolimit), &written, 0, -1,
 		(const void *)sixteen, 16);
 	diag("n=%d, written=%u", n, written);
 	imply_ok1(!do_cancel, n == -EPIPE);

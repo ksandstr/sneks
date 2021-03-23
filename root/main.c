@@ -1434,8 +1434,7 @@ static void parse_initrd_args(struct htable *dest)
 
 /* TODO: move into bootcon.c */
 
-static int bootcon_read(
-	int32_t cookie, off_t length,
+static int bootcon_read(int cookie, off_t length, off_t offset,
 	uint8_t *buf, unsigned *len_p)
 {
 	*len_p = 0;
@@ -1443,8 +1442,8 @@ static int bootcon_read(
 }
 
 
-static int bootcon_write(
-	int32_t cookie, const uint8_t *buf, unsigned buf_len)
+static int bootcon_write(int cookie, off_t offset,
+	const uint8_t *buf, unsigned buf_len)
 {
 	extern void computchar(unsigned char ch);
 	for(unsigned i=0; i < buf_len; i++) computchar(buf[i]);

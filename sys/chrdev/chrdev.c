@@ -704,11 +704,13 @@ static void wr_confirm(bool writing, int fd, unsigned count)
 }
 
 
-static int chrdev_write(int fd, const uint8_t *buf, unsigned count)
+static int chrdev_write(
+	int fd, off_t offset, const uint8_t *buf, unsigned count)
 {
 	sync_confirm();
 	struct chrdev_handle *h = resolve_fd(fd);
 	if(h == NULL) return -EBADF;
+	if(offset != -1) return -EBADF;	/* not seekable */
 
 	/* clamp count to USHRT_MAX because IO::write returns unsigned short. this
 	 * is kind of bad and should get fixed at some point.
@@ -733,11 +735,13 @@ static int chrdev_write(int fd, const uint8_t *buf, unsigned count)
 }
 
 
-static int chrdev_read(int fd, int count, uint8_t *buf, unsigned *buf_len_p)
+static int chrdev_read(int fd, int count, off_t offset,
+	uint8_t *buf, unsigned *buf_len_p)
 {
 	sync_confirm();
 	struct chrdev_handle *h = resolve_fd(fd);
 	if(h == NULL) return -EBADF;
+	if(offset != -1) return -EBADF;	/* not seekable */
 
 	int n = (*callbacks.read)(CHRFILE(h), buf, count);
 	if(n == -EWOULDBLOCK && (~h->bits & HF_NONBLOCK)) {

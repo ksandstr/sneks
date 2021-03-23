@@ -39,11 +39,18 @@ interface IO
 	/* when write (read) blocks on a full (empty) buffer, wakeup happens in
 	 * the form of an EAGAIN error result. when O_NONBLOCK is set, instead
 	 * EWOULDBLOCK is raised.
+	 *
+	 * unlike pwrite(2), @offset can be -1 in which case the file's own
+	 * position is both used and modified.
 	 */
-	unsigned short write(in handle fd, in ioseg buf)
+	unsigned short write(in handle fd, in Posix::off_t offset, in ioseg buf)
 		raises(Posix::Errno, muidl::NoReply);
 
-	void read(in handle fd, in Posix::off_t length, out ioseg buf)
+	/* unlike pread(2), @offset can be -1 in which case the file's own
+	 * position is both used and modified.
+	 */
+	void read(in handle fd, in Posix::off_t length, in Posix::off_t offset,
+		out ioseg buf)
 		raises(Posix::Errno, muidl::NoReply);
 
 	/* raises like POSIX close(2) */

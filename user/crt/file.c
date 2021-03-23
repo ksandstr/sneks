@@ -330,7 +330,7 @@ long read(int fd, void *buf, size_t count)
 	__permit_recv_interrupt();
 	do {
 		length = count;
-		n = __io_read(b->server, b->handle, count, buf, &length);
+		n = __io_read(b->server, b->handle, count, -1, buf, &length);
 	} while(n == -EAGAIN);
 	__forbid_recv_interrupt();
 	if(n == -EWOULDBLOCK) n = -EAGAIN;
@@ -351,7 +351,7 @@ long write(int fd, const void *buf, size_t count)
 	int n;
 	struct fd_bits *b = __fdbits(&ctx, fd);
 	do {
-		n = __io_write(b->server, &rc, b->handle, buf, count);
+		n = __io_write(b->server, &rc, b->handle, -1, buf, count);
 	} while(n == -EAGAIN);
 	if(n == -EWOULDBLOCK) n = -EAGAIN;
 	return NTOERR(n, rc);
