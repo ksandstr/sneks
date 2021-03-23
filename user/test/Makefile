@@ -49,6 +49,8 @@ testsuite: $(LDSCRIPT) $(TESTSUITE_OBJS) $(CFGDIR)/lib/tap.o ccan-opt.a
 initrd-install: testsuite
 	@mkdir -p $(INITRD)/user
 	@install $< $(INITRD)/user/
+	@mkdir -p $(INITRD)/user/test/io/reg
+	@echo -n "0123456789abcdef" >$(INITRD)/user/test/io/reg/testfile
 
 
 # hostsuite stuff. perhaps dirtier than necessary.
