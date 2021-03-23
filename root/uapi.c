@@ -30,7 +30,6 @@
 #include <sneks/process.h>
 #include <sneks/api/vm-defs.h>
 #include <sneks/api/proc-defs.h>
-#include <sneks/sys/fs-defs.h>
 #include <sneks/sys/msg-defs.h>
 #include <sneks/sys/info-defs.h>
 
@@ -618,45 +617,32 @@ static int map_elf_image(
 	L4_Word_t *lo_p, L4_Word_t *hi_p, L4_Word_t *start_addr_p)
 {
 	if(filename[0] != '/') return -ENOENT;
-	while(*filename == '/') filename++;
+	while(filename[1] == '/') filename++;
 
-	L4_Word_t handle = ~0ul;
-	L4_ThreadId_t fs = L4_nilthread;
+	FILE *file = fopen(filename, "rb");
+	if(file == NULL) return -errno;
 
-	/* FIXME: fetch rootfs using a canonical method */
-	struct sneks_rootfs_info ri;
-	int n = __info_rootfs_block(L4_Pager(), &ri);
-	if(n != 0) goto end;
-	fs.raw = ri.service;
-	n = __fs_openat(fs, &handle, 0, filename, 0, 0);
-	if(n != 0) {
-		printf("openat failed, n=%d\n", n);
-		goto end;
-	}
+	int handle = fhandle_NP(file);
+	L4_ThreadId_t fs = fserver_NP(file);
 
 	Elf32_Ehdr ehdr;
-	unsigned ehdr_len = sizeof ehdr;
-	n = __fs_read(fs, (void *)&ehdr, &ehdr_len, handle, 0, sizeof ehdr);
-	if(n != 0) {
-		printf("fs_read failed, n=%d\n", n);
-		goto end;
-	} else if(ehdr_len != sizeof ehdr) {
-		printf("short read, got %u wanted %u\n",
-			ehdr_len, (unsigned)sizeof ehdr);
+	size_t n = fread(&ehdr, sizeof ehdr, 1, file);
+	if(n != 1) {
+		printf("%s: fread() failed\n", __func__);
 		goto end;
 	} else if(memcmp(&ehdr.e_ident, ELFMAG, SELFMAG) != 0) {
-		printf("incorrect ELF magic!\n");
-		goto end;
+		printf("%s: incorrect ELF magic!\n", __func__);
+		errno = EINVAL;
+		goto end;	/* go sip from thy leaden goblet, knife ears */
 	}
 	*start_addr_p = ehdr.e_entry;
 
-	const Elf32_Phdr ep;
 	unsigned phoff = ehdr.e_phoff;
 	for(int i=0; i < ehdr.e_phnum; i++, phoff += ehdr.e_phentsize) {
-		unsigned ep_len = sizeof ep;
-		n = __fs_read(fs, (void *)&ep, &ep_len, handle, phoff, ep_len);
-		if(n != 0 || ep_len < sizeof ep) {
-			printf("fs_read failed or short, n=%d\n", n);
+		Elf32_Phdr ep;
+		n = fread(&ep, sizeof ep, 1, file);
+		if(n != 1) {
+			printf("%s: fread() failed or short\n", __func__);
 			goto end;
 		}
 		if(ep.p_type != PT_LOAD) continue;	/* skip GNU stack item */
@@ -693,12 +679,13 @@ static int map_elf_image(
 			}
 		}
 	}
-	assert(n == 0);
 
 end:
-	/* FIXME: do copy that floppy. */
-	// if(handle != ~0ul) __fs_close(fs, handle);
-	return n <= 0 ? n : -EIO;
+	/* FIXME: arrange for VM to dup the handle, then fclose() the file
+	 * properly. "do copy that floppy," as it previously said.
+	 */
+	//fclose(file);
+	return -errno;
 }
 
 

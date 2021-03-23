@@ -176,7 +176,7 @@ extern FILE *sfdopen_NP(L4_ThreadId_t server, L4_Word_t handle, const char *mode
  * isn't much of an issue.
  */
 extern L4_ThreadId_t fserver_NP(FILE *f);	/* these two are like fileno(3) */
-extern L4_Word_t fhandle_NP(FILE *f);
+extern int fhandle_NP(FILE *f);
 
 
 #endif

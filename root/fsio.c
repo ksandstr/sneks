@@ -5,9 +5,15 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <assert.h>
+#include <fcntl.h>
 #include <errno.h>
-#include <sneks/sys/fs-defs.h>
+#include <ccan/minmax/minmax.h>
+
 #include <sneks/sys/info-defs.h>
+#include <sneks/api/path-defs.h>
+#include <sneks/api/file-defs.h>
+#include <sneks/api/io-defs.h>
 
 #include <l4/types.h>
 #include <l4/thread.h>
@@ -15,8 +21,7 @@
 
 struct sfdpriv {
 	L4_ThreadId_t server;
-	L4_Word_t handle;
-	ssize_t position;	/* negative is end-relative */
+	int handle;
 };
 
 
@@ -49,7 +54,7 @@ L4_ThreadId_t fserver_NP(FILE *f) {
 }
 
 
-L4_Word_t fhandle_NP(FILE *f) {
+int fhandle_NP(FILE *f) {
 	struct sfdpriv *priv = f->cookie;
 	return priv->handle;
 }
@@ -58,16 +63,10 @@ L4_Word_t fhandle_NP(FILE *f) {
 static ssize_t sfd_read(void *cookie, char *buf, size_t size)
 {
 	struct sfdpriv *priv = cookie;
-	/* FIXME: is this how it works? even when size < SNEKS_FS_READ_MAX? */
-	unsigned len = size;
-	int n = __fs_read(priv->server, (uint8_t *)buf, &len,
-		priv->handle, priv->position, size);
-	if(n == 0) {
-		priv->position += len;
-		return len;
-	} else {
-		return idl2errno(n);
-	}
+	unsigned len = min_t(size_t, INT_MAX, size);
+	int n = __io_read(priv->server, priv->handle, len, -1,
+		(uint8_t *)buf, &len);
+	return n == 0 ? len : idl2errno(n);
 }
 
 
@@ -81,22 +80,17 @@ static ssize_t sfd_write(void *cookie, const char *buf, size_t size)
 static int sfd_seek(void *cookie, off64_t *offset, int whence)
 {
 	struct sfdpriv *priv = cookie;
-	switch(whence) {
-		case SEEK_SET: priv->position = *offset; break;
-		case SEEK_CUR: priv->position += *offset; break;
-		case SEEK_END: priv->position = -(int64_t)*offset; break;
-	}
-	if(priv->position < 0) *offset = 0;		/* FIXME: fstat and subtract */
-	else *offset = priv->position;
-
-	return 0;
+	off_t off = *offset;
+	int n = __file_seek(priv->server, priv->handle, &off, whence);
+	*offset = off;
+	return idl2errno(n);
 }
 
 
 static int sfd_close(void *cookie)
 {
 	struct sfdpriv *priv = cookie;
-	int n = __fs_close(priv->server, priv->handle);
+	int n = __io_close(priv->server, priv->handle);
 	free(priv);
 	return idl2errno(n);
 }
@@ -116,22 +110,49 @@ FILE *sfdopen_NP(L4_ThreadId_t server, L4_Word_t handle, const char *mode)
 }
 
 
-FILE *fopen(const char *path, const char *mode)
+FILE *fopen(const char *path, const char *modestr)
 {
 	L4_ThreadId_t fs = __get_rootfs();
 	if(L4_IsNilThread(fs)) return NULL;
-	L4_Word_t handle;
-	/* FIXME: translate @mode to Sneks::Fs mode & flags */
-	int n = __fs_openat(fs, &handle, 0, path, 0, 0);
+
+	/* FIXME: translate @mode to Sneks::{Path,File} mode & flags */
+	mode_t mode = 0;
+	int flags = O_RDONLY;
+	if((flags & O_ACCMODE) != O_RDONLY || path == NULL || path[0] != '/') {
+		errno = -EINVAL;
+		return NULL;
+	}
+	unsigned object;
+	L4_ThreadId_t server;
+	L4_Word_t cookie;
+	int ifmt, n = __path_resolve(fs, &object, &server.raw,
+		&ifmt, &cookie, 0, path, flags | mode);
 	if(n != 0) {
 		idl2errno(n);
 		return NULL;
 	}
-	FILE *f = sfdopen_NP(fs, handle, mode);
+	if((ifmt & SNEKS_PATH_S_IFMT) != SNEKS_PATH_S_IFREG) {
+		errno = EBADF;	/* bizarre, but works */
+		return NULL;
+	}
+
+	L4_Set_VirtualSender(L4_nilthread);
+	assert(L4_IsNilThread(L4_ActualSender()));
+	L4_ThreadId_t actual = L4_nilthread;
+	int handle;
+	n = __file_open(server, &handle, object, cookie, flags);
+	if(n != 0) {
+		idl2errno(n);
+		return NULL;
+	}
+	actual = L4_ActualSender();
+	if(!L4_IsNilThread(actual)) server = actual;
+
+	FILE *f = sfdopen_NP(fs, handle, modestr);
 	if(f != NULL) return f;
 	else {
 		/* dodgy, but unavoidable */
-		n = __fs_close(fs, handle);
+		n = __io_close(fs, handle);
 		if(n > 0) {
 			fprintf(stderr, "%s: cleanup can't reach server, n=%d\n",
 				__func__, n);

@@ -19,9 +19,11 @@
 #include <stdbool.h>
 #include <stdatomic.h>
 #include <string.h>
+#include <limits.h>
 #include <assert.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <sys/mman.h>
 #include <ccan/likely/likely.h>
@@ -47,9 +49,10 @@
 #include <sneks/sysinfo.h>
 #include <sneks/sanity.h>
 #include <sneks/systask.h>
-#include <sneks/api/proc-defs.h>
 #include <sneks/sys/info-defs.h>
-#include <sneks/sys/fs-defs.h>
+#include <sneks/api/proc-defs.h>
+#include <sneks/api/file-defs.h>
+#include <sneks/api/io-defs.h>
 
 #include "nbsl.h"
 #include "epoch.h"
@@ -1893,6 +1896,15 @@ static L4_Fpage_t pf_cow(struct vp *virt)
 }
 
 
+static ssize_t read_at(const struct lazy_mmap *mm,
+	void *buf, unsigned length, size_t offset)
+{
+	assert(offset <= INT_MAX);
+	int n = __io_read(mm->fd_serv, mm->ino, length, offset, buf, &length);
+	if(n != 0) return n > 0 ? -EIO : n; else return length;
+}
+
+
 /* finds the cached page, or reads it from @mm if it's not in cache.
  * @bump is # of pages from @mm start. @vp is the virtual page that'll take
  * ownership of a freshly-loaded page. return value is negative errno, or 0
@@ -1921,18 +1933,20 @@ static int fetch_cached_page(
 		/* allocate, read, and try to insert. */
 		struct pl *link = get_free_pl();
 		void *page = (void *)((uintptr_t)link->page_num << PAGE_BITS);
-		unsigned n_bytes = 0;
-		if(~mm->flags & MAP_ANONYMOUS) {
-			n_bytes = PAGE_SIZE;
-			int n = __fs_read(mm->fd_serv, page, &n_bytes, mm->ino,
-				(mm->offset + bump) * PAGE_SIZE, PAGE_SIZE);
-			if(unlikely(n != 0)) {
+		unsigned n_bytes;
+		if(mm->flags & MAP_ANONYMOUS) n_bytes = 0;
+		else {
+			ssize_t n = read_at(mm, page, PAGE_SIZE,
+				(mm->offset + bump) * PAGE_SIZE);
+			if(unlikely(n < 0)) {
 				push_page(&page_free_list, link);
 				e_free(link);
-				return n > 0 ? -EIO : n;
+				return n;
 			}
+			n_bytes = n;
 			if(n_bytes < PAGE_SIZE) {
-				TRACE_FAULT("vm:%s: short read (got %u bytes)\n", __func__, n_bytes);
+				TRACE_FAULT("vm:%s: short read (got %u bytes)\n",
+					__func__, n_bytes);
 			}
 		}
 		if(n_bytes < PAGE_SIZE) {
@@ -1989,17 +2003,17 @@ static int pf_mmap_shared(
 		/* allocate. */
 		struct pl *link = get_free_pl();
 		void *page = (void *)((uintptr_t)link->page_num << PAGE_BITS);
-		unsigned n_bytes = 0;
-		if(~mm->flags & MAP_ANONYMOUS) {
-			n_bytes = PAGE_SIZE;
-			int n = __fs_read(mm->fd_serv, page, &n_bytes, mm->ino,
-				mm->offset * PAGE_SIZE + ((faddr & ~PAGE_MASK) - mm->addr),
-				PAGE_SIZE);
-			if(unlikely(n != 0)) {
+		unsigned n_bytes;
+		if(mm->flags & MAP_ANONYMOUS) n_bytes = 0;
+		else {
+			ssize_t n = read_at(mm, page, PAGE_SIZE,
+				mm->offset * PAGE_SIZE + ((faddr & ~PAGE_MASK) - mm->addr));
+			if(unlikely(n < 0)) {
 				push_page(&page_free_list, link);
 				e_free(link);
 				return n;
 			}
+			n_bytes = n;
 #ifdef TRACE_FAULTS
 			if(n_bytes < PAGE_SIZE) {
 				TRACE_FAULT("vm:%s: short read (got %u bytes)\n", __func__, n_bytes);

@@ -798,8 +798,8 @@ static L4_ThreadId_t spawn_systask(
 			if(off < ep->p_filesz) {
 				n = fseek(fh, ep->p_offset + off, SEEK_SET);
 				if(n != 0) {
-					fprintf(stderr, "%s: can't seek to %u?\n", __func__,
-						(unsigned)ep->p_offset);
+					fprintf(stderr, "%s: can't seek to %u? errno=%d\n", __func__,
+						(unsigned)ep->p_offset, errno);
 					abort();
 				}
 				int sz = min_t(int, PAGE_SIZE, ep->p_filesz - off);
@@ -908,7 +908,8 @@ L4_ThreadId_t spawn_systask_from_initrd(const char *path, ...)
 {
 	FILE *elf = fopen(path, "rb");
 	if(elf == NULL) {
-		fprintf(stderr, "%s: fopen failed, errno=%d\n", __func__, errno);
+		fprintf(stderr, "%s: fopen of `%s' failed, errno=%d\n",
+			__func__, path, errno);
 		return L4_nilthread;
 	}
 

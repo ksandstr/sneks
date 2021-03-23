@@ -1,11 +1,12 @@
 
 /* implementation spec for fs.squashfs. not for client use. */
 
-#include <sys/fs.idl>
 #include <api/path.idl>
+#include <api/file.idl>
+#include <api/io.idl>
 
 
-interface SquashfsImpl: Sneks::Fs, Sneks::Path
+interface SquashfsImpl: Sneks::Path, Sneks::File, Sneks::IO
 {
 	/* nothing extra. */
 };
