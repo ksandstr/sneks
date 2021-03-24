@@ -1,0 +1,83 @@
+
+#ifndef __API_DIRECTORY_IDL__
+#define __API_DIRECTORY_IDL__
+
+#include <muidl.idl>
+#include <posixlike.idl>
+
+#include <api/io.idl>
+#include <api/path.idl>
+
+
+module Sneks {
+
+/* directories. */
+[StubPrefix(__dir), IfaceLabel(0xe80a)]
+interface Directory
+{
+	struct dentry {
+		Posix::ino_t ino;
+		Posix::off_t off;
+		unsigned short reclen;	/* reclen >= sizeof(dentry) + namlen + 1 */
+		octet type;
+		octet namlen;			/* strlen(name), never 0 */
+		/* char name[namlen + 1] follows, empty names being forbidden and the
+		 * last byte a null terminator.
+		 */
+	};
+
+	/* values of dentry.type. these match S_IFMT values from Sneks::Path. */
+	const long DT_UNKNOWN = 0;
+	const long DT_FIFO = 1;
+	const long DT_CHR = 2;
+	const long DT_DIR = 4;
+	const long DT_BLK = 6;
+	const long DT_REG = 8;
+	const long DT_LNK = 10;
+	const long DT_SOCK = 12;
+
+	const long DENTSBUF_MAX = 1024;
+	typedef sequence<octet, DENTSBUF_MAX> dentsbuf;
+
+	void opendir(out IO::handle dir,
+		in Path::object object, in Path::cookie cookie, in long flags)
+		raises(Posix::Errno, muidl::NoReply);
+
+	/* sets current position of @dir to @offset. essentially lseek(2) for a
+	 * limited range of offset values and without the `whence' parameter.
+	 *
+	 * @position is a non-negative value returned from getdents() representing
+	 * an absolute position within a directory. seekdir() accepts a zero value
+	 * for the start of any directory, all values returned by getdents() and
+	 * seekdir() including those not seen when contents of multiple blocks
+	 * were returned, and rejects all others. the previous position of @dir is
+	 * returned.
+	 *
+	 * raises EBADF when @dir isn't valid, and EINVAL when @offset isn't
+	 * valid.
+	 */
+	void seekdir(in IO::handle dir, inout Posix::off_t position)
+		raises(Posix::Errno, muidl::NoReply);
+
+	/* reads as many directory entries as possible from @dir at @offset.
+	 *
+	 * if @offset is -1, uses @dir's current position and increments it
+	 * afterward if any entries were read. an @offset of 0 means start of
+	 * directory. the previous position of @dir is returned in @offset
+	 * regardless of whether it was used or modified.
+	 *
+	 * the next position within the directory is returned in @endpos. passing
+	 * returned values of @endpos as subsequent values of @offset amounts to
+	 * readdir(3).
+	 *
+	 * returns the number of <struct dentry> read, or 0 for end-of-directory.
+	 */
+	unsigned short getdents(in IO::handle dir, inout Posix::off_t offset,
+		out Posix::off_t endpos, out dentsbuf data)
+		raises(Posix::Errno, muidl::NoReply);
+};
+
+};
+
+#endif
+
