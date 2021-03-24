@@ -12,10 +12,7 @@
 #include <sneks/test.h>
 
 
-/* TODO: make the test file available to hostsuite somehow */
-#ifdef __sneks__
-
-static char testfile_path[] = "/user/test/io/reg/testfile";
+static char testfile_path[] = TESTDIR "user/test/io/reg/testfile";
 static char expected_testfile_data[] = "0123456789abcdef";
 
 
@@ -127,5 +124,3 @@ START_TEST(seek_for_length)
 END_TEST
 
 DECLARE_TEST("io:reg", seek_for_length);
-
-#endif
