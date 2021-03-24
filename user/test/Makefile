@@ -56,6 +56,13 @@ initrd-install: testsuite
 test-files-install:
 	@mkdir -p $(INITRD)/user/test/io/reg
 	@echo -n "0123456789abcdef" >$(INITRD)/user/test/io/reg/testfile
+	@mkdir -p $(INITRD)/user/test/io/dir
+	@for i in a b c d e f g h i j k l; do \
+		mkdir -p $(INITRD)/user/test/io/dir/$$i; \
+	done
+	@for i in 0 1 2 3 4 5 6 7 8 9; do \
+		echo "shoop da woop $$i" >$(INITRD)/user/test/io/dir/$$i; \
+	done
 
 
 # hostsuite stuff. perhaps dirtier than necessary.
