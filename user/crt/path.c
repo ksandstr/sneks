@@ -15,6 +15,7 @@
 #include <sneks/sysinfo.h>
 #include <sneks/api/path-defs.h>
 #include <sneks/api/file-defs.h>
+#include <sneks/api/directory-defs.h>
 #include <sneks/api/dev-defs.h>
 #include <sneks/api/io-defs.h>
 
@@ -57,6 +58,10 @@ int openat(int dirfd, const char *pathname, int flags, ...)
 				 */
 				actual = L4_ActualSender();
 			}
+			break;
+		case S_IFDIR:
+			n = __dir_opendir(server, &handle, object, cookie, flags);
+			actual = L4_ActualSender();
 			break;
 		case S_IFLNK:
 			/* symbolic links returned from Sneks::Path/resolve are a result
