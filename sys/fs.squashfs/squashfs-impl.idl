@@ -3,10 +3,12 @@
 
 #include <api/path.idl>
 #include <api/file.idl>
+#include <api/directory.idl>
 #include <api/io.idl>
 
 
-interface SquashfsImpl: Sneks::Path, Sneks::File, Sneks::IO
+interface SquashfsImpl:
+	Sneks::Path, Sneks::File, Sneks::Directory, Sneks::IO
 {
 	/* nothing extra. */
 };

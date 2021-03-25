@@ -13,6 +13,10 @@
 #include <errno.h>
 #include <assert.h>
 #include <alloca.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <dirent.h>
+#include <sys/types.h>
 #include <ccan/opt/opt.h>
 #include <ccan/endian/endian.h>
 #include <ccan/array_size/array_size.h>
@@ -35,6 +39,7 @@
 #include <sneks/devcookie.h>
 #include <sneks/api/path-defs.h>
 #include <sneks/api/file-defs.h>
+#include <sneks/api/directory-defs.h>
 #include <sneks/api/io-defs.h>
 #include <ukernel/rangealloc.h>
 
@@ -67,13 +72,46 @@ struct blk {
 struct inode {
 	unsigned long ino;	/* int64_hash() */
 	/* TODO: add basic stat(2) output's fields here */
+	union {
+		struct {
+			int max_index;
+		} dir;
+	};
 };
 
 
-struct squashfs_file {
+/* directory entry. indexed in dentry_index_hash by dir_ino and index, and
+ * dentry_name_hash by dir_ino and name.
+ *
+ * TODO: it's reasonable to handle these in a cache and replace them as some
+ * space estimation high watermark is hit. that'll be unlikely to happen until
+ * libsneks-fs.a rules the skies.
+ */
+struct dentry {
+	ino_t ino, dir_ino;
+	uint32_t index;
+	uint8_t type;	/* SNEKS_DIRECTORY_DT_* */
+	unsigned short name_len; /* up to SQUASHFS_NAME_LEN */
+	char name[]; /* null terminated for comfort */
+};
+
+
+struct squashfs_file
+{
 	struct inode *i;
 	size_t pos;
 	int refs;
+	union {
+		struct {
+			/* bits for reading the next directory entry, for speeding
+			 * getdents() up a tad.
+			 */
+			struct squashfs_dir_header hdr;
+			uint64_t block;
+			int offset, cur_index, cur_hdr, last_fetch;
+			size_t bytes_read;	/* increases towards ->file_size */
+		} dir;
+	};
 };
 
 
@@ -110,12 +148,24 @@ static size_t rehash_blk(const void *key, void *priv);
 static size_t rehash_inode(const void *key, void *priv);
 static size_t rehash_dev(const void *key, void *priv);
 static size_t rehash_fd_owner(const void *key, void *priv);
+static size_t rehash_dentry_by_index(const void *key, void *priv);
+static size_t rehash_dentry_by_name(const void *key, void *priv);
 
+
+static char sfs_type_table[] = {
+	[SQUASHFS_DIR_TYPE] = DT_DIR,
+	[SQUASHFS_REG_TYPE] = DT_REG,
+	[SQUASHFS_SYMLINK_TYPE] = DT_LNK,
+	[SQUASHFS_BLKDEV_TYPE] = DT_BLK,
+	[SQUASHFS_CHRDEV_TYPE] = DT_CHR,
+	[SQUASHFS_FIFO_TYPE] = DT_FIFO,
+	[SQUASHFS_SOCKET_TYPE] = DT_SOCK,
+};
 
 static L4_ThreadId_t boot_tid, dev_tid;
 
 static bool device_nodes_enabled;
-static int64_t dev_ino = -1;
+static ino_t dev_ino = -1;
 
 /* mount data */
 static void *fs_image;
@@ -128,7 +178,11 @@ static struct htable blk_cache = HTABLE_INITIALIZER(
 	inode_cache = HTABLE_INITIALIZER(inode_cache, &rehash_inode, NULL),
 	device_nodes = HTABLE_INITIALIZER(device_nodes, &rehash_dev, NULL),
 	fd_by_owner_hash = HTABLE_INITIALIZER(fd_by_owner_hash,
-		&rehash_fd_owner, NULL);
+		&rehash_fd_owner, NULL),
+	dentry_index_hash = HTABLE_INITIALIZER(dentry_index_hash,
+		&rehash_dentry_by_index, NULL),
+	dentry_name_hash = HTABLE_INITIALIZER(dentry_name_hash,
+		&rehash_dentry_by_name, NULL);
 
 static struct rangealloc *fd_ra;	/* <struct fd>, never 0. */
 
@@ -162,14 +216,26 @@ static size_t rehash_dev(const void *key, void *priv) {
 	return hash(dev->name, strlen(dev->name), 0);
 }
 
+static bool cmp_dev_name(const void *cand, void *key) {
+	const struct dev *dev = key;
+	return streq(dev->name, (const char *)key);
+}
+
+
 static size_t rehash_fd_owner(const void *key, void *priv) {
 	const struct fd *fd = key;
 	return int_hash(fd->owner);
 }
 
-static bool cmp_dev_name(const void *cand, void *key) {
-	const struct dev *dev = key;
-	return streq(dev->name, (const char *)key);
+
+static size_t rehash_dentry_by_index(const void *key, void *priv) {
+	const struct dentry *d = key;
+	return int_hash(d->dir_ino) ^ int_hash(d->index);
+}
+
+static size_t rehash_dentry_by_name(const void *key, void *priv) {
+	const struct dentry *d = key;
+	return int_hash(d->dir_ino) ^ hash_string(d->name);
 }
 
 
@@ -216,7 +282,6 @@ static int read_block(
 			printf("LZ4 decompression failed, n=%d\n", n);
 			abort();
 		}
-		// printf("decompressed %d -> %d bytes\n", (int)sz, n);
 	} else {
 		n = min(sz, bufmax);
 		memcpy(output, fs_image + pos, n);
@@ -247,19 +312,13 @@ static struct blk *cache_get(uint64_t block, int length)
 		free(b);
 		b = NULL;
 	}
-#if 0
-	else {
-		printf("%s: inserted block=%#x; length=%u, next=%#x\n", __func__,
-			(unsigned)block, b->length, (unsigned)b->next_block);
-	}
-#endif
 
 	return b;
 }
 
 
-/* read @length bytes of metadata from *@block:*@offset. skip through metadata
- * blocks and update *@block and *@offset through. to optimize lookups, pass a
+/* read @length bytes of metadata from *@block:*@offset. updates *@block and
+ * *@offset to reflect the next position. to optimize lookups, pass a
  * cache_get() result in *@blk_p, or leave @blk_p NULL when it doesn't matter.
  */
 static int read_metadata(
@@ -308,6 +367,10 @@ static struct inode *read_inode(unsigned long ino)
 	if(nod_ext == NULL) return NULL;	/* TODO: pop ENOMEM */
 	struct inode *nod = &nod_ext->fs_inode;
 	nod->ino = ino;
+	/* TODO: switch according to inode type once there's more than one thing
+	 * in the union.
+	 */
+	nod->dir.max_index = INT_MAX;
 
 	uint64_t block = fs_super->inode_table_start + SQUASHFS_INODE_BLK(ino);
 	int offset = SQUASHFS_INODE_OFFSET(ino);
@@ -316,28 +379,23 @@ static struct inode *read_inode(unsigned long ino)
 	int n = read_metadata(base, &blk, &block, &offset, sizeof *base);
 	if(n < sizeof *base) goto Eio;
 
-#if 0
-	printf("%s: ino=%u, inode_type=%u\n", __func__, (unsigned)ino,
-		base->inode_type);
-#endif
 	int sz = inode_size(base->inode_type);
 	if(sz > 0) {
 		n = read_metadata(base + 1, &blk, &block, &offset, sz - sizeof *base);
 		if(n < sz - sizeof *base) goto Eio;
 		squashfs_i(nod)->rest_start = block;
 		squashfs_i(nod)->offset = offset;
-		// printf("... block=%#x, offset=%d\n", (unsigned)block, offset);
 	} else {
 		printf("fs.squashfs: unknown inode type %d\n", (int)base->inode_type);
 		free(nod);
-		return NULL;	/* FIXME: -EINVAL */
+		return NULL;	/* TODO: -EINVAL */
 	}
 
 	return nod;
 
 Eio:
 	free(nod);
-	return NULL;		/* FIXME: -EIO */
+	return NULL;		/* TODO: -EIO */
 }
 
 
@@ -355,70 +413,185 @@ static struct inode *get_inode(unsigned long ino)
 			return NULL;	/* TODO: ENOMEM */
 		}
 	}
-	// printf("%s: ino=%u, nod=%p\n", __func__, (unsigned)ino, nod);
 
 	return nod;
 }
 
 
-static int64_t lookup(int *type, uint64_t dir_ino, const char *name)
+static void rewind_directory(struct squashfs_file *file,
+	const struct squashfs_dir_inode *dir)
+{
+	/* TODO: handle LDIRs as well? (that dir_index stuff.) */
+	assert(dir->inode_type == SQUASHFS_DIR_TYPE);
+
+	file->dir.cur_index = -1;
+	file->dir.bytes_read = 0;
+	file->dir.hdr.count = 0;
+	file->dir.cur_hdr = 1;
+	file->dir.last_fetch = 0;
+	file->dir.block = fs_super->directory_table_start + dir->start_block;
+	file->dir.offset = dir->offset;
+}
+
+
+static struct dentry *read_dentry(struct squashfs_file *file,
+	struct blk **blk_p, int index, int *err_p)
+{
+	if(index > file->i->dir.max_index) {
+		return NULL; /* previously found EOD */
+	}
+
+	struct squashfs_dir_inode *dir = &squashfs_i(file->i)->X.dir;
+	/* TODO: handle LDIRs as well. (that dir_index stuff.) */
+	assert(dir->inode_type == SQUASHFS_DIR_TYPE);
+
+	if(index <= file->dir.cur_index) {
+		/* redo from start */
+		rewind_directory(file, dir);
+	}
+
+	struct squashfs_dir_entry *dent = alloca(sizeof *dent
+		+ SQUASHFS_NAME_LEN + 1);
+	int name_len = 0;
+	/* TODO: the dir->file_size condition is an inexact hacky bodge that'll
+	 * break when the slop gets great enough. figure out what bytes this isn't
+	 * accounting for by staring at the Linux squashfs source.
+	 */
+	while(file->dir.cur_index < index
+		&& file->dir.bytes_read < dir->file_size - sizeof *dent)
+	{
+		if(file->dir.cur_hdr == file->dir.hdr.count + 1) {
+			int n = read_metadata(&file->dir.hdr, blk_p,
+				&file->dir.block, &file->dir.offset, sizeof file->dir.hdr);
+			if(n < sizeof file->dir.hdr) goto Eio;
+			file->dir.bytes_read += n;
+			file->dir.cur_hdr = 0;
+		}
+
+		int n = read_metadata(dent, blk_p, &file->dir.block,
+			&file->dir.offset, sizeof *dent);
+		if(n < sizeof *dent) goto Eio;
+		file->dir.bytes_read += n;
+		name_len = dent->size + 1;
+		n = read_metadata(dent->name, blk_p, &file->dir.block,
+			&file->dir.offset, name_len);
+		if(n < name_len) goto Eio;
+		file->dir.bytes_read += n;
+		dent->name[name_len] = '\0';
+		file->dir.cur_index++;
+		file->dir.cur_hdr++;
+	}
+	/* TODO: file_size condition needs to get exact, see comment above the
+	 * while loop
+	 */
+	if(file->dir.bytes_read >= dir->file_size - sizeof *dent
+		&& file->dir.cur_index < index)
+	{
+		/* end of directory. */
+		file->i->dir.max_index = file->dir.cur_index;
+		*err_p = 0;
+		return NULL;
+	}
+
+	assert(name_len > 0);
+	struct dentry *out = malloc(sizeof *out + name_len + 1);
+	if(out == NULL) {
+		*err_p = -ENOMEM;
+		goto Error;
+	}
+	*out = (struct dentry){
+		.dir_ino = file->i->ino,
+		.ino = SQUASHFS_MKINODE(file->dir.hdr.start_block, dent->offset),
+		.type = dent->type >= ARRAY_SIZE(sfs_type_table) ? SNEKS_DIRECTORY_DT_UNKNOWN
+			: sfs_type_table[dent->type],
+		.name_len = name_len,
+		.index = index,
+	};
+	memcpy(out->name, dent->name, name_len);
+	out->name[name_len] = '\0';
+	return out;
+
+Eio: *err_p = -EIO;
+Error:
+	file->dir.cur_index = INT_MAX;
+	assert(*err_p < 0);
+	return NULL;
+}
+
+
+static struct dentry *get_dentry(struct squashfs_file *file,
+	struct blk **blk_p, int index, int *err_p)
+{
+	struct dentry key = { .dir_ino = file->i->ino, .index = index };
+	size_t hash = rehash_dentry_by_index(&key, NULL);
+	struct htable_iter it;
+	for(struct dentry *cand = htable_firstval(&dentry_index_hash, &it, hash);
+		cand != NULL; cand = htable_nextval(&dentry_index_hash, &it, hash))
+	{
+		if(cand->dir_ino == key.dir_ino && cand->index == key.index) return cand;
+	}
+
+	struct dentry *dent = read_dentry(file, blk_p, index, err_p);
+	if(dent != NULL) {
+		assert(hash == rehash_dentry_by_index(dent, NULL));
+		bool ok = htable_add(&dentry_index_hash, hash, dent);
+		ok = ok && htable_add(&dentry_name_hash, rehash_dentry_by_name(dent, NULL), dent);
+		if(!ok) {
+			*err_p = -ENOMEM;
+			htable_del(&dentry_index_hash, hash, dent);
+			free(dent);
+			dent = NULL;
+		}
+	}
+
+	return dent;
+}
+
+
+static struct dentry *find_dentry(ino_t dir_ino, const char *name)
+{
+	size_t hash = int_hash(dir_ino) ^ hash_string(name);
+	struct htable_iter it;
+	for(struct dentry *cand = htable_firstval(&dentry_name_hash, &it, hash);
+		cand != NULL; cand = htable_nextval(&dentry_name_hash, &it, hash))
+	{
+		if(cand->dir_ino == dir_ino && streq(name, cand->name)) {
+			return cand;
+		}
+	}
+	return NULL;
+}
+
+
+static ino_t lookup(int *type, ino_t dir_ino, const char *name)
 {
 	assert(type != NULL);
 	assert(name[0] != '\0');
 
-	struct inode *nod = get_inode(dir_ino);
-	if(nod == NULL) return -EIO;	/* FIXME: translate error pointer */
-	struct squashfs_dir_inode *dir = &squashfs_i(nod)->X.dir;
-
-#if 0
-	printf("%s: dir_ino=%u, inode_number=%u, start_block=%#x, offset=%u\n",
-		__func__, (unsigned)dir_ino, dir->inode_number,
-		dir->start_block, dir->offset);
-#endif
-
-	uint64_t block = dir->start_block + fs_super->directory_table_start;
-	int offset = dir->offset;
-
-	/* TODO: handle LDIRs as well. (that dir_index stuff.) */
-	assert(dir->inode_type == SQUASHFS_DIR_TYPE);
-
-	struct blk *blk = NULL;
-
-	int namelen = strlen(name);
-	int64_t ino = -ENOENT;
-	struct squashfs_dir_entry *dent = alloca(sizeof *dent
-		+ SQUASHFS_NAME_LEN + 1);
-	int n_read = 0;
-	while(n_read < dir->file_size) {
-		struct squashfs_dir_header hdr;
-		int n = read_metadata(&hdr, &blk, &block, &offset, sizeof hdr);
-		if(n < sizeof hdr) return -EIO;
-		n_read += n;
-
-		for(int i=0; i <= hdr.count; i++) {
-			n = read_metadata(dent, &blk, &block, &offset, sizeof *dent);
-			if(n < sizeof *dent) return -EIO;
-			n_read += n;
-			int size = dent->size + 1;
-			n = read_metadata(dent->name, &blk, &block, &offset, size);
-			if(n < size) return -EIO;
-			n_read += n;
-			if(name[0] < dent->name[0]) goto done;	/* sorted order. */
-			dent->name[size] = '\0';
-			if(size == namelen && streq(dent->name, name)) {
-				ino = SQUASHFS_MKINODE(hdr.start_block, dent->offset);
-				*type = dent->type;
-				goto done;
-			}
-		}
-#if 0
-		printf("%s: at end of loop, n_read=%d, file_size=%u\n",
-			__func__, n_read, dir->file_size);
-#endif
+	struct dentry *dent = find_dentry(dir_ino, name);
+	if(dent != NULL) {
+		*type = dent->type;
+		return dent->ino;
 	}
 
-done:
-	return ino;
+	struct inode *nod = get_inode(dir_ino);
+	if(nod == NULL) return -EIO;	/* TODO: proper status return */
+
+	struct squashfs_dir_inode *dir = &squashfs_i(nod)->X.dir;
+	struct squashfs_file fake = { .i = nod, .pos = 0, .refs = 1 };
+	rewind_directory(&fake, dir);
+	struct blk *blk = NULL;
+	int dix = 0, n = 0;
+	while(dent = get_dentry(&fake, &blk, dix++, &n), dent != NULL) {
+		int cmp = strcmp(name, dent->name);
+		if(cmp < 0) break;	/* b/c alphabetical sorting */
+		if(cmp == 0) {
+			*type = dent->type;
+			return dent->ino;
+		}
+	}
+
+	return n == 0 ? -ENOENT : n;
 }
 
 
@@ -427,10 +600,6 @@ static struct fd *get_fd(int param_fd)
 {
 	if(unlikely(param_fd > MAX_FD)) return NULL;
 	struct fd *fd = ra_id2ptr(fd_ra, param_fd & MAX_FD);
-#if 0
-	printf("%s: param_fd=%d, fd=%p, ->file=%p, ->owner=%u, ->flags=%#x\n",
-		__func__, param_fd & MAX_FD, fd, fd->file, fd->owner, fd->flags);
-#endif
 	if(unlikely(fd->file == NULL)) return NULL;
 	int caller = pidof_NP(muidl_get_sender());
 	if(unlikely(fd->owner != caller && caller < SNEKS_MIN_SYSID)) return NULL;
@@ -439,7 +608,7 @@ static struct fd *get_fd(int param_fd)
 }
 
 
-/* FIXME: this doesn't handle trailing slashes very well. what should happen
+/* TODO: this doesn't handle trailing slashes very well. what should happen
  * in those cases? test them first.
  */
 static int squashfs_resolve(
@@ -459,9 +628,9 @@ static int squashfs_resolve(
 	char comp[SQUASHFS_NAME_LEN + 1];
 	while(*path != '\0') {
 		char *slash = strchr(path, '/');
+		const bool is_last = (slash == NULL);
 		const char *part;
-		if(slash == NULL) {
-			/* last part. */
+		if(is_last) {
 			part = path;
 			path += strlen(path);
 		} else {
@@ -502,25 +671,31 @@ static int squashfs_resolve(
 				 */
 				return -ENOENT;
 			}
+#if 0
 			printf("%s: found device node `%s': %c-%u-%u\n", __func__,
 				dev->name, dev->is_chr ? 'c' : 'b', dev->major, dev->minor);
+#endif
 			server = dev_tid;
 			final_ino = (dev->is_chr ? 0x80000000 : 0)
 				| (dev->major & 0x7fff) << 15 | (dev->minor & 0x7fff);
-			type = dev->is_chr ? SQUASHFS_CHRDEV_TYPE : SQUASHFS_BLKDEV_TYPE;
+			type = dev->is_chr ? DT_CHR : DT_BLK;
 			*cookie_ptr = gen_cookie(&device_cookie_key, L4_SystemClock(),
 				final_ino, pidof_NP(muidl_get_sender()));
 			break;
 		} else {
-			int64_t ino = lookup(&type, dir_ino, part);
+			ino_t ino = lookup(&type, dir_ino, part);
 			if(ino < 0) return ino;
-			else if(type == SQUASHFS_DIR_TYPE) dir_ino = ino;
-			else if(path[0] != '\0') {
-				printf("%s: type=%d isn't a directory? but path=`%s'\n",
-					__func__, type, path);
-				return -ENOTDIR;
+			if(!is_last) {
+				if(type == DT_DIR) dir_ino = ino;
+				else return -ENOTDIR;
 			} else {
-				/* TODO: use a different algorithm and a different cookie key
+				if((flags & O_DIRECTORY) && type != DT_DIR) {
+					/* only directories, please. */
+					return -ENOTDIR;
+				}
+				/* success!
+				 *
+				 * TODO: use a different algorithm and a different cookie key
 				 * here once actual access control comes about. filesystem
 				 * cookies should have properties that cross-systask device
 				 * cookies don't, such as a limited number of uses (per
@@ -537,25 +712,9 @@ static int squashfs_resolve(
 
 	if(final_ino < 0) return final_ino;
 
-	static uint16_t sfs_type_table[] = {
-		[SQUASHFS_DIR_TYPE] = SNEKS_PATH_S_IFDIR,
-		[SQUASHFS_REG_TYPE] = SNEKS_PATH_S_IFREG,
-		[SQUASHFS_SYMLINK_TYPE] = SNEKS_PATH_S_IFLNK,
-		[SQUASHFS_BLKDEV_TYPE] = SNEKS_PATH_S_IFBLK,
-		[SQUASHFS_CHRDEV_TYPE] = SNEKS_PATH_S_IFCHR,
-		[SQUASHFS_FIFO_TYPE] = SNEKS_PATH_S_IFIFO,
-		[SQUASHFS_SOCKET_TYPE] = SNEKS_PATH_S_IFSOCK,
-	};
-	if(type < 0 || type >= ARRAY_SIZE(sfs_type_table)
-		|| sfs_type_table[type] == 0)
-	{
-		printf("%s: unknown inode type=%d\n", __func__, type);
-		return -ENOSYS;
-	}
-
 	*object_ptr = final_ino;
 	*server_ptr = server.raw;
-	*ifmt_ptr = sfs_type_table[type];
+	*ifmt_ptr = type << 12;	/* deliberate correspondence to S_IFMT */
 
 	return 0;
 }
@@ -565,7 +724,7 @@ static int squashfs_open(int *handle_p,
 	unsigned object, L4_Word_t cookie, int flags)
 {
 	/* TODO: same thing as the big comment above gen_cookie() call in
-	 * squashfs_resolve(), for same reasons.
+	 * squashfs_resolve() and squashfs_opendir(), for same reasons.
 	 */
 	if(!validate_cookie(cookie, &device_cookie_key, L4_SystemClock(),
 		object, pidof_NP(muidl_get_sender())))
@@ -576,8 +735,18 @@ static int squashfs_open(int *handle_p,
 	struct inode *nod = get_inode(object);
 	if(nod == NULL) return -EINVAL;
 
+	/* exclude objects that aren't regular inodes. as for sockets and fifos,
+	 * who can say.
+	 */
+	switch(squashfs_i(nod)->X.base.inode_type) {
+		case SQUASHFS_REG_TYPE: break;
+		default: return -EINVAL;
+	}
+
 	struct squashfs_file *f = malloc(sizeof *f);
 	*f = (struct squashfs_file){ .i = nod, .pos = 0, .refs = 1 };
+
+	/* TODO: split this off for squashfs_opendir() and later dup & fork */
 	struct fd *fd = ra_alloc(fd_ra, -1);
 	*fd = (struct fd){ .owner = pidof_NP(muidl_get_sender()), .file = f };
 	bool ok = htable_add(&fd_by_owner_hash, rehash_fd_owner(fd, NULL), fd);
@@ -596,6 +765,9 @@ static int squashfs_seek(int handle, int *offset_p, int whence)
 {
 	struct fd *fd = get_fd(handle);
 	if(fd == NULL) return -EBADF;
+	if(squashfs_i(fd->file->i)->X.base.inode_type != SQUASHFS_REG_TYPE) {
+		return -EINVAL;
+	}
 
 	const struct squashfs_reg_inode *reg = &squashfs_i(fd->file->i)->X.reg;
 	switch(whence) {
@@ -630,11 +802,7 @@ static int squashfs_close(int param_fd)
 	struct fd *fd = get_fd(param_fd);
 	if(unlikely(fd == NULL)) return -EBADF;
 
-	bool ok = htable_del(&fd_by_owner_hash, rehash_fd_owner(fd, NULL), fd);
-	if(!ok) {
-		/* FIXME: make this an error once squashfs_openat() etc. go away. */
-		printf("%s: param_fd=%d not in by_owner_hash?\n", __func__, param_fd);
-	}
+	htable_del(&fd_by_owner_hash, rehash_fd_owner(fd, NULL), fd);
 	if(--fd->file->refs == 0) free(fd->file);
 	fd->file = NULL;
 	fd->owner = 0;
@@ -651,10 +819,6 @@ static int squashfs_close(int param_fd)
  */
 static int64_t seek_block_list(uint64_t *block, int *offset, int target)
 {
-#if 0
-	printf("%s: block=%#x, offset=%d, target=%d\n", __func__,
-		(unsigned)*block, *offset, target);
-#endif
 	target++;
 	int64_t res = 0;
 	uint32_t *lens = malloc(PAGE_SIZE);
@@ -705,11 +869,6 @@ static ssize_t read_from_inode(
 		bytes = min_t(uint32_t, length, reg->file_size - pos);
 	if(bytes == 0) return 0;
 
-#if 0
-	printf("%s: pos=%u, bytes=%u, blksizelog2=%d\n", __func__, pos, bytes,
-		(int)fs_block_size_log2);
-#endif
-
 	uint64_t block = squashfs_i(nod)->rest_start;
 	int offset = squashfs_i(nod)->offset,
 		seek = pos >> fs_block_size_log2;
@@ -720,10 +879,6 @@ static ssize_t read_from_inode(
 		seek = 0;
 	}
 	data_block += reg->start_block;
-#if 0
-	printf("\tpre-loop data_block=%lu, block=%u, offset=%u\n",
-		(unsigned long)data_block, (unsigned)block, offset);
-#endif
 
 	while(done < bytes) {
 		uint32_t lenword;
@@ -731,10 +886,6 @@ static ssize_t read_from_inode(
 		if(n < 0) return n;
 		lenword = LE32_TO_CPU(lenword);
 		if(lenword == 0) continue;
-#if 0
-		printf("\tloop data_block=%lu, block=%u, offset=%u, seek=%d\n",
-			(unsigned long)data_block, (unsigned)block, offset, seek);
-#endif
 
 		if(seek-- <= 0) {
 			struct blk *b = cache_get(data_block, lenword);
@@ -784,6 +935,102 @@ static int squashfs_write(int a, off_t b, const uint8_t *c, unsigned d) {
 }
 
 
+static int squashfs_opendir(int *handle_p,
+	unsigned object, L4_Word_t cookie, int flags)
+{
+	/* TODO: same thing as the big comment above gen_cookie() call in
+	 * squashfs_resolve() and squashfs_open(), for same reasons.
+	 */
+	if(!validate_cookie(cookie, &device_cookie_key, L4_SystemClock(),
+		object, pidof_NP(muidl_get_sender())))
+	{
+		return -EINVAL;
+	}
+
+	struct inode *nod = get_inode(object);
+	if(nod == NULL) return -EINVAL;
+	if(squashfs_i(nod)->X.base.inode_type != SQUASHFS_DIR_TYPE) {
+		return -ENOTDIR;
+	}
+	const struct squashfs_dir_inode *dir = &squashfs_i(nod)->X.dir;
+
+	struct squashfs_file *f = malloc(sizeof *f);
+	if(f == NULL) return -ENOMEM;
+	*f = (struct squashfs_file){ .i = nod, .pos = 0, .refs = 1 };
+	rewind_directory(f, dir);
+
+	struct fd *fd = ra_alloc(fd_ra, -1);
+	*fd = (struct fd){ .owner = pidof_NP(muidl_get_sender()), .file = f };
+	bool ok = htable_add(&fd_by_owner_hash, rehash_fd_owner(fd, NULL), fd);
+	if(!ok) {
+		ra_free(fd_ra, fd);
+		free(f);
+		return -ENOMEM;
+	}
+
+	*handle_p = ra_ptr2id(fd_ra, fd);
+	return 0;
+}
+
+
+static int squashfs_seekdir(int dirfd, int *position_ptr)
+{
+	struct fd *fd = get_fd(dirfd);
+	if(fd == NULL) return -EBADF;
+	/* (what a mouthful!) */
+	if(squashfs_i(fd->file->i)->X.base.inode_type != SQUASHFS_DIR_TYPE) {
+		return -EBADF;
+	}
+
+	int newpos = max(*position_ptr, 0);
+	*position_ptr = fd->file->pos;
+	fd->file->pos = newpos;
+	fd->file->dir.last_fetch = 0;
+
+	return 0;
+}
+
+
+static int squashfs_getdents(int dirfd, int *offset_ptr, int *endpos_ptr,
+	uint8_t *data_buf, unsigned *data_len_p)
+{
+	struct fd *fd = get_fd(dirfd);
+	if(fd == NULL) return -EBADF;
+	if(squashfs_i(fd->file->i)->X.base.inode_type != SQUASHFS_DIR_TYPE) {
+		return -EBADF;
+	}
+
+	int dix = *offset_ptr >= 0 ? *offset_ptr : fd->file->pos,
+		n = 0, got = 0, buf_pos = 0,
+		limit = min(USHRT_MAX, max(2, fd->file->dir.last_fetch * 2));
+	*offset_ptr = fd->file->pos;
+	const struct dentry *dent;
+	struct sneks_directory_dentry *out;
+	struct blk *blk = NULL;
+	while(got < limit
+		&& buf_pos + sizeof *out < SNEKS_DIRECTORY_DENTSBUF_MAX
+		&& (dent = get_dentry(fd->file, &blk, dix, &n), dent != NULL))
+	{
+		out = (void *)data_buf + buf_pos;
+		*out = (struct sneks_directory_dentry){
+			.ino = dent->ino, .off = dix + 1,
+			.reclen = sizeof *out + dent->name_len + 1,
+			.type = dent->type,
+			.namlen = dent->name_len,
+		};
+		if(buf_pos + out->reclen > SNEKS_DIRECTORY_DENTSBUF_MAX) break;
+		memcpy(out + 1, dent->name, out->namlen + 1);
+		buf_pos += out->reclen; got++; dix++;
+	}
+	if(n < 0) return n;
+
+	*data_len_p = buf_pos;
+	*endpos_ptr = fd->file->pos = dix;
+	fd->file->dir.last_fetch = fd->file->dir.last_fetch;
+	return got;
+}
+
+
 static void squashfs_ipc_loop(void *initrd_start, size_t initrd_size)
 {
 	static const struct squashfs_impl_vtable vtab = {
@@ -799,6 +1046,11 @@ static void squashfs_ipc_loop(void *initrd_start, size_t initrd_size)
 		/* Sneks::File */
 		.open = &squashfs_open,
 		.seek = &squashfs_seek,
+
+		/* Sneks::Directory */
+		.opendir = &squashfs_opendir,
+		.seekdir = &squashfs_seekdir,
+		.getdents = &squashfs_getdents,
 	};
 	for(;;) {
 		L4_Word_t status = _muidl_squashfs_impl_dispatch(&vtab);
@@ -820,6 +1072,7 @@ static void squashfs_ipc_loop(void *initrd_start, size_t initrd_size)
 }
 
 
+#if 0
 static void dump_root_inode(void)
 {
 	struct inode *nod = get_inode(fs_super->root_inode);
@@ -838,6 +1091,7 @@ static void dump_root_inode(void)
 		r.dir.nlink, r.dir.file_size,
 		r.dir.offset, r.dir.parent_inode);
 }
+#endif
 
 
 static unsigned mount_squashfs_image(void *start, size_t sz)
@@ -867,6 +1121,7 @@ static unsigned mount_squashfs_image(void *start, size_t sz)
 	const char *c_mode = fs_super->compression < ARRAY_SIZE(c_modes)
 		? c_modes[fs_super->compression] : NULL;
 	if(c_mode == NULL) c_mode = "[unknown]";
+#if 0
 	printf("squashfs superblock:\n"
 		"   inodes=%u, block_size=%u, fragments=%u, compression=%s\n"
 		"   block_log=%u, flags=%#x, no_ids=%u, s_major=%u, s_minor=%u\n"
@@ -875,6 +1130,7 @@ static unsigned mount_squashfs_image(void *start, size_t sz)
 		fs_super->block_log, fs_super->flags, fs_super->no_ids,
 		fs_super->s_major, fs_super->s_minor, (unsigned)fs_super->root_inode,
 		(unsigned)fs_super->bytes_used);
+#endif
 
 	switch(fs_super->compression) {
 		case LZ4_COMPRESSION:
@@ -885,7 +1141,7 @@ static unsigned mount_squashfs_image(void *start, size_t sz)
 			return EINVAL;
 	}
 
-	dump_root_inode();
+	//dump_root_inode();
 
 	return 0;
 }
@@ -980,11 +1236,11 @@ static void fs_initialize(void)
 
 	if(device_nodes_enabled) {
 		int typ = 0;
-		int64_t ino = lookup(&typ, fs_super->root_inode, "dev");
-		if(ino >= 0 && typ == SQUASHFS_DIR_TYPE) {
+		ino_t ino = lookup(&typ, fs_super->root_inode, "dev");
+		if(ino >= 0 && typ == DT_DIR) {
 			dev_ino = ino;
 			ino = lookup(&typ, dev_ino, ".device-nodes");
-			if(ino >= 0 && typ == SQUASHFS_REG_TYPE) {
+			if(ino >= 0 && typ == DT_REG) {
 				read_device_nodes(ino);
 			}
 		}

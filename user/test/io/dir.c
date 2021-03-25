@@ -47,10 +47,6 @@ START_LOOP_TEST(basic_opendir, iter, 0, 1)
 	diag("posix_open=%s", btos(posix_open));
 	plan_tests(3 + 22);
 
-#ifdef __sneks__
-	todo_start("impl missing");
-#endif
-
 	DIR *dirp;
 	if(!posix_open) dirp = opendir(test_directory);
 	else {
@@ -100,10 +96,6 @@ START_LOOP_TEST(dirent_offsets, iter, 0, 1)
 	}
 #endif
 	plan_tests(7);
-
-#ifdef __sneks__
-	todo_start("impl missing");
-#endif
 
 	DIR *dirp = opendir(test_directory);
 	skip_start(!ok(dirp != NULL, "opendir(3)"), 6, "no dir, errno=%d", errno) {
@@ -172,10 +164,6 @@ static int include_even(const struct dirent *);
 START_TEST(scandir_basic)
 {
 	plan_tests(3);
-
-#ifdef __sneks__
-	todo_start("impl missing");
-#endif
 
 	errno = 0;
 	struct dirent **even_only;
