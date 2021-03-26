@@ -761,8 +761,18 @@ static void squashfs_ipc_loop(void *initrd_start, size_t initrd_size)
 	for(;;) {
 		L4_Word_t status = _muidl_squashfs_impl_dispatch(&vtab);
 		if(status != 0 && !MUIDL_IS_L4_ERROR(status)) {
-			printf("fs.squashfs: dispatch status=%#lx (last tag %#lx)\n",
-				status, muidl_get_tag().raw);
+			if(status == MUIDL_UNKNOWN_LABEL) {
+				L4_ThreadId_t sender = muidl_get_sender();
+				printf("fs.squashfs: unknown label %#lx from %lu:%lu\n",
+					L4_Label(muidl_get_tag()),
+					L4_ThreadNo(sender), L4_Version(sender));
+				L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 1, .X.u = 1 }.raw);
+				L4_LoadMR(1, ENOSYS);
+				L4_Reply(sender);
+			} else {
+				printf("fs.squashfs: dispatch status=%#lx (last tag %#lx)\n",
+					status, muidl_get_tag().raw);
+			}
 		}
 	}
 }
