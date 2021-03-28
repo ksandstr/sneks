@@ -769,6 +769,12 @@ static int chrdev_close(int fd)
 }
 
 
+static int chrdev_dup(int *newfd_p, int oldfd)
+{
+	return -ENOSYS;
+}
+
+
 static int chrdev_set_notify(int *exmask_p,
 	int fd, int events, L4_Word_t notify_tid_raw)
 {
@@ -900,6 +906,7 @@ int chrdev_run(size_t sizeof_file, int argc, char *argv[])
 		.write = &chrdev_write,
 		.read = &chrdev_read,
 		.close = &chrdev_close,
+		.dup = &chrdev_dup,
 		.set_notify = &chrdev_set_notify,
 		.get_status = &chrdev_get_status,
 		.pipe = &chrdev_pipe,

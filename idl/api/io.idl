@@ -57,6 +57,10 @@ interface IO
 	[Label(0xabcd)]	/* provisional, for epoll's use */
 	void close([MR(2)] in handle fd)
 		raises(Posix::Errno);
+
+	/* dup2(2) analogue */
+	void dup(out handle newfd, in handle oldfd)
+		raises(Posix::Errno);
 };
 
 };

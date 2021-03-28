@@ -922,6 +922,12 @@ static int squashfs_read(int param_fd, int count, off_t offset,
 }
 
 
+static int squashfs_dup(int *newfd_p, int oldfd)
+{
+	return -ENOSYS;
+}
+
+
 static int squashfs_set_flags(int *old_flags_ptr,
 	int fd, int or_mask, int and_mask)
 {
@@ -1039,6 +1045,7 @@ static void squashfs_ipc_loop(void *initrd_start, size_t initrd_size)
 		.read = &squashfs_read,
 		.set_flags = &squashfs_set_flags,
 		.write = &squashfs_write,
+		.dup = &squashfs_dup,
 
 		/* Sneks::Path */
 		.resolve = &squashfs_resolve,

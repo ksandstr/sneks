@@ -1464,6 +1464,12 @@ static int bootcon_set_flags(int *old, int fd, int or, int and)
 }
 
 
+static int bootcon_dup(int *new_p, int old) {
+	*new_p = old;
+	return 0;
+}
+
+
 static int bootcon_thread_fn(void *param_ptr)
 {
 	// struct htable *root_args = param_ptr;
@@ -1477,6 +1483,7 @@ static int bootcon_thread_fn(void *param_ptr)
 		.write = &bootcon_write,
 		.close = &bootcon_close,
 		.set_flags = &bootcon_set_flags,
+		.dup = &bootcon_dup,
 	};
 	for(;;) {
 		L4_Word_t status = _muidl_boot_con_dispatch(&vtab);
