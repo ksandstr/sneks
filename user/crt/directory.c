@@ -20,7 +20,7 @@
 
 
 #define DIRP_VALID(dirp, ctx) \
-	((dirp) != NULL && __fd_valid((ctx), (dirp)->dirfd))
+	((dirp) != NULL && __fdbits((dirp)->dirfd) != NULL)
 
 
 struct __stdio_dir
@@ -73,11 +73,8 @@ int closedir(DIR *dirp)
 
 DIR *fdopendir(int fd)
 {
-	struct fd_bits *bits = __fdbits(NULL, fd);
-	if(bits == NULL) {
-		errno = EBADF;
-		return NULL;
-	}
+	struct fd_bits *bits = __fdbits(fd);
+	if(bits == NULL) return NULL;
 	int pos = 0;
 	int n = __dir_seekdir(bits->server, bits->handle, &pos);
 	if(n != 0) {
@@ -112,7 +109,6 @@ int dirfd(DIR *dirp)
 
 struct dirent *readdir(DIR *dirp)
 {
-	void *ctx = NULL;
 	if(!DIRP_VALID(dirp, &ctx)) {
 		errno = EBADF;
 		return NULL;
@@ -123,7 +119,7 @@ struct dirent *readdir(DIR *dirp)
 		const int read_start = max_t(int, 0,
 			(int)sizeof(struct sneks_directory_dentry) -
 				offsetof(struct dirent, d_name));
-		struct fd_bits *bits = __fdbits(&ctx, dirp->dirfd);
+		struct fd_bits *bits = __fdbits(dirp->dirfd);
 		int offset = dirp->tellpos, endpos = -1;
 		dirp->raw_bytes = SNEKS_DIRECTORY_DENTSBUF_MAX;
 		int n = __dir_getdents(bits->server, &dirp->remain, bits->handle,
@@ -171,10 +167,9 @@ struct dirent *readdir(DIR *dirp)
 
 void seekdir(DIR *dirp, long loc)
 {
-	void *ctx = NULL;
 	if(!DIRP_VALID(dirp, &ctx)) return;
 
-	struct fd_bits *bits = __fdbits(&ctx, dirp->dirfd);
+	struct fd_bits *bits = __fdbits(dirp->dirfd);
 	__dir_seekdir(bits->server, bits->handle, &(int){ loc });
 	/* sadly there is no chance to report this error. */
 	dirp->tellpos = loc;

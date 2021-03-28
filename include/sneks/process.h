@@ -68,7 +68,7 @@ struct sneks_fdlist
 	unsigned short next; /* # of bytes from start to next item, or 0 to end */
 	unsigned short fd;
 	L4_ThreadId_t serv;
-	L4_Word_t cookie;
+	L4_Word_t cookie;	/* TODO: change this to Sneks::IO::handle */
 } __attribute__((packed));
 
 

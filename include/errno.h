@@ -21,6 +21,8 @@
 #define ENOTDIR	20	/* not a directory */
 #define EISDIR	21	/* is a directory */
 #define EINVAL	22	/* invalid value */
+#define ENFILE	23	/* file table overflow (system) */
+#define EMFILE	24	/* too many open files (process) */
 #define ENOSPC	28	/* no space left on device */
 #define EROFS	30	/* read-only file system */
 #define EPIPE	32	/* broken pipe */

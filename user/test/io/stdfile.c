@@ -75,6 +75,8 @@ START_LOOP_TEST(many_dups, iter, 0, 3)
 	diag("n_dups=%d, use_pipe=%s", n_dups, btos(use_pipe));
 	plan_tests(8);
 
+	todo_start("impl of Sneks::IO/dup missing from squashfs, libsneks-chrdev.a");
+
 	int n = sigaction(SIGPIPE,
 		&(struct sigaction){ .sa_handler = SIG_IGN }, NULL);
 	fail_unless(n == 0, "sigaction: errno=%d", errno);

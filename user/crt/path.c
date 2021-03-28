@@ -74,11 +74,10 @@ int openat(int dirfd, const char *pathname, int flags, ...)
 	if(n != 0) return NTOERR(n);
 	if(!L4_IsNilThread(actual)) server = actual;
 
-	void *ctx = NULL;
 	/* TODO: put FD_CLOEXEC in fflags (the 0 down there) when flags &
 	 * O_CLOEXEC. neither is defined right now.
 	 */
-	int fd = __alloc_fd_bits(&ctx, -1, server, handle, 0);
+	int fd = __create_fd(-1, server, handle, 0);
 	if(fd < 0) {
 		errno = -fd;
 		__io_close(server, handle);

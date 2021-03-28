@@ -6,11 +6,14 @@
 #ifndef _SNEKS_USER_CRT_PRIVATE_H
 #define _SNEKS_USER_CRT_PRIVATE_H
 
+#include <stdint.h>
 #include <stdbool.h>
 #include <stdnoreturn.h>
 #include <setjmp.h>
 #include <errno.h>
 #include <ucontext.h>
+#include <ccan/intmap/intmap.h>
+
 #include <l4/types.h>
 #include <l4/kip.h>
 
@@ -33,49 +36,31 @@ extern int __idl2errno(int n, ...);
 
 extern int __l4_last_errorcode;
 
+struct fd_bits;
+typedef SINTMAP(struct fd_bits *) fd_map_t;
+extern fd_map_t fd_map;
+
 
 struct sneks_fdlist;
 extern void __file_init(struct sneks_fdlist *fdlist);
 
 
-struct fdchunk;
-struct fd_iter {
-	struct fdchunk *chunk;
-};
-
-struct fd_bits {
+struct fd_bits
+{
 	L4_ThreadId_t server;
-	L4_Word_t handle;
-	unsigned refs;
-};
-
-struct fd {
-	uint16_t raw;	/* low bit is for FD_CLOEXEC */
+	intptr_t handle;
+	uint8_t flags;
 };
 
 
-extern struct fd_bits *__fdbits(void **ctx, int fd)
+/* returns NULL when @fd isn't valid and sets errno to EBADF. */
+extern struct fd_bits *__fdbits(int fd)
 	__attribute__((pure));
-extern bool __fd_valid(void **ctx, int fd);
-#define __server(ctx, fd) (__fdbits((ctx), (fd))->server)
-#define __handle(ctx, fd) (__fdbits((ctx), (fd))->handle)
 
-/* creation. if @fd < 0, allocates a different file descriptor. otherwise if
- * @fd is already valid, returns -EEXIST.
+/* creation. if @fd < 0, allocates the lowest available file descriptor.
+ * otherwise if @fd is already valid, returns -EEXIST.
  */
-extern int __alloc_fd_bits(
-	void **ctx, int fd,
-	L4_ThreadId_t server, L4_Word_t handle, int fflags);
-
-/* these return -1 when there were no file descriptors, or when @prev was the
- * last one, respectively. __fd_iter_ctx() returns an useful value for @ctx in
- * __server etc.
- */
-extern int __fd_first(struct fd_iter *it);
-extern int __fd_next(struct fd_iter *it, int prev);
-static inline void *__fd_iter_ctx(struct fd_iter *it) {
-	return it->chunk;
-}
+extern int __create_fd(int fd, L4_ThreadId_t server, intptr_t handle, int flags);
 
 
 /* from sigaction.c */

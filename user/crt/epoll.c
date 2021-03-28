@@ -124,7 +124,6 @@ static int poll_levels(
 	uint16_t notif[SNEKS_POLL_STBUF_SIZE];
 	L4_Word_t hbuf[SNEKS_POLL_STBUF_SIZE];
 	int got = 0, start = 0;
-	void *ctx = NULL;
 	while(got < maxevents && start < n_ls) {
 		int len = 0, spid = ls[start]->spid;
 		while(start + len < n_ls && spid == ls[start + len]->spid
@@ -134,7 +133,8 @@ static int poll_levels(
 			hbuf[len] = i->handle; notif[len] = i->ev.events & 0xffff;
 			len++;
 		}
-		int n = __io_get_status(__server(&ctx, ls[start]->fd),
+		struct fd_bits *bits = __fdbits(ls[start]->fd);
+		int n = __io_get_status(bits->server,
 			hbuf, len, notif, len,
 			hbuf, &(unsigned){ SNEKS_POLL_STBUF_SIZE });
 		if(n != 0) {
@@ -396,13 +396,13 @@ static int epoll_resync_consume(
 		if(hit == ex->ev.events) ex->fd = 0xffff;
 	}
 
-	void *ctx = NULL;
 	int bufpid = -1, buflen = 0;
 	L4_ThreadId_t bufserv = L4_nilthread;
 	L4_Word_t hbuf[SNEKS_POLL_STBUF_SIZE];
 	for(int i=0; i < n_fds; i++) {
 		if(fds[i].fd == 0xffff) continue;
-		if(!__fd_valid(&ctx, fds[i].fd)) continue;
+		struct fd_bits *bits = __fdbits(fds[i].fd);
+		if(bits == NULL) continue;
 		if(bufpid != fds[i].spid || buflen == ARRAY_SIZE(hbuf)) {
 			if(buflen > 0) {
 				assert(!L4_IsNilThread(bufserv));
@@ -411,7 +411,7 @@ static int epoll_resync_consume(
 				buflen = 0;
 			}
 			bufpid = fds[i].spid;
-			bufserv = __server(&ctx, fds[i].fd);
+			bufserv = bits->server;
 			assert(bufpid == pidof_NP(bufserv));
 		}
 		hbuf[buflen++] = fds[i].handle;
@@ -617,7 +617,7 @@ int epoll_create1(int flags)
 	htable_init_sized(&ep->fds, &rehash_interest, NULL, 32);
 
 	/* TODO: transfer EPFL_CLOEXEC (or some such) in @flags to FD_CLOEXEC */
-	int fd = __alloc_fd_bits(NULL, -1, poll_tid, (L4_Word_t)ep, 0);
+	int fd = __create_fd(-1, poll_tid, (intptr_t)ep, 0);
 	if(fd < 0) {
 		htable_clear(&ep->fds);
 		free(ep);
@@ -637,8 +637,7 @@ static int refresh_notify(size_t hash, L4_ThreadId_t server, L4_Word_t handle)
 	list_for_each(&all_epolls, ep, all_link) {
 		struct htable_iter it;
 		for(const struct interest *reg = htable_firstval(&ep->fds, &it, hash);
-			reg != NULL;
-			reg = htable_nextval(&ep->fds, &it, hash))
+			reg != NULL; reg = htable_nextval(&ep->fds, &it, hash))
 		{
 			if(reg->handle != handle || reg->spid != spid) continue;
 			newmask |= reg->ev.events;
@@ -660,14 +659,16 @@ static void epoll_close(L4_Word_t handle)
 		list_del_from(&waiting_epolls, &ep->wait_link);
 	}
 	list_del_from(&all_epolls, &ep->all_link);
-	void *ctx = NULL;
 	struct htable_iter it;
 	for(struct interest *i = htable_first(&ep->fds, &it);
-		i != NULL;
-		i = htable_next(&ep->fds, &it))
+		i != NULL; i = htable_next(&ep->fds, &it))
 	{
-		refresh_notify(rehash_interest(i, NULL),
-			__server(&ctx, i->fd), i->handle);
+		struct fd_bits *bits = __fdbits(i->fd);
+		if(bits != NULL) {
+			assert(bits->handle == i->handle);
+			refresh_notify(rehash_interest(i, NULL),
+				bits->server, i->handle);
+		}
 		free(i);
 	}
 	htable_clear(&ep->fds);
@@ -710,25 +711,24 @@ static bool check_notify(int spid)
 
 int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
 {
-	void *ctx = NULL;
-	if(unlikely(!__fd_valid(&ctx, epfd))) goto Ebadf;
-	L4_ThreadId_t serv = __server(&ctx, epfd);
+	struct fd_bits *epbits = __fdbits(epfd);
+	if(epbits == NULL) return -1;
+	L4_ThreadId_t serv = epbits->server;
+
 	assert(!L4_IsNilThread(L4_LocalIdOf(poll_tid)));
 	if(unlikely(!L4_SameThreads(serv, poll_tid))) goto Einval;
-	struct epoll *ep = (struct epoll *)__handle(&ctx, epfd);
+	struct epoll *ep = (struct epoll *)epbits->handle;
 
-	if(unlikely(!__fd_valid(&ctx, fd))) goto Ebadf;
-	L4_ThreadId_t server = __server(&ctx, fd);
+	struct fd_bits *fdbits = __fdbits(fd);
+	if(fdbits == NULL) return -1;
 	struct interest key = {
-		.spid = pidof_NP(server),
-		.handle = __handle(&ctx, fd),
+		.spid = pidof_NP(fdbits->server), .handle = fdbits->handle,
 	};
 	size_t hash = rehash_interest(&key, NULL);
 	struct interest *old;
 	struct htable_iter it;
 	for(old = htable_firstval(&ep->fds, &it, hash);
-		old != NULL;
-		old = htable_nextval(&ep->fds, &it, hash))
+		old != NULL; old = htable_nextval(&ep->fds, &it, hash))
 	{
 		if(old->fd == fd) {
 			assert(old->spid == key.spid);
@@ -770,7 +770,7 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
 				 */
 				if(likely(check_notify(key.spid))) return 0;
 			}
-			int n = refresh_notify(hash, server, key.handle);
+			int n = refresh_notify(hash, fdbits->server, key.handle);
 			if(n < 0) {
 				htable_del(&ep->fds, hash, new);
 				free(new);
@@ -780,7 +780,7 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
 				/* add these events to queue so they're picked up */
 				L4_MsgTag_t tag = (L4_MsgTag_t){ .X.label = key.spid, .X.u = 2 };
 				L4_Set_Propagation(&tag);
-				L4_Set_VirtualSender(server);
+				L4_Set_VirtualSender(fdbits->server);
 				L4_LoadMR(0, tag.raw);
 				L4_LoadMR(1, n);
 				L4_LoadMR(2, key.handle);
@@ -804,7 +804,7 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
 				ep->n_level--;
 			}
 			free(old);
-			int n = refresh_notify(hash, server, key.handle);
+			int n = refresh_notify(hash, fdbits->server, key.handle);
 			return min(n, 0);
 		}
 
@@ -814,7 +814,7 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
 		case EPOLL_CTL_MOD: {
 			if(old == NULL) goto Enoent;
 			old->ev = *event; old->ev.events |= EPOLLHUP;
-			int n = refresh_notify(hash, server, key.handle);
+			int n = refresh_notify(hash, fdbits->server, key.handle);
 			return min(n, 0);
 		}
 	}
@@ -823,7 +823,6 @@ Einval: errno = EINVAL; return -1;
 Enomem: errno = ENOMEM; return -1;
 Enoent: errno = ENOENT; return -1;
 Eexist: errno = EEXIST; return -1;
-Ebadf: errno = EBADF; return -1;
 Eperm: errno = EPERM; return -1;
 }
 
@@ -832,25 +831,20 @@ int epoll_wait(int epfd,
 	struct epoll_event *events, int maxevents,
 	int timeout)
 {
-	void *ctx = NULL;
-	if(unlikely(!__fd_valid(&ctx, epfd))) {
-		errno = EBADF;
-		return -1;
-	}
-	L4_ThreadId_t serv = __server(&ctx, epfd);
+	struct fd_bits *epbits = __fdbits(epfd);
+	if(epbits == NULL) return -1;
 	assert(!L4_IsNilThread(L4_LocalIdOf(poll_tid)));
-	if(unlikely(maxevents <= 0 || !L4_SameThreads(serv, poll_tid))) {
+	if(unlikely(maxevents <= 0 || !L4_SameThreads(epbits->server, poll_tid))) {
 		errno = EINVAL;
 		return -1;
 	}
 
-	L4_Word_t handle = __handle(&ctx, epfd);
 	L4_Word_t err;
 	__permit_recv_interrupt();
 	do {
 		err = 0;
 		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 3 }.raw);
-		L4_LoadMR(1, handle);
+		L4_LoadMR(1, epbits->handle);
 		L4_LoadMR(2, (L4_Word_t)events);
 		L4_LoadMR(3, (maxevents & 0xffff) | (timeout == 0 ? 0x10000 : 0));
 		L4_Accept(L4_UntypedWordsAcceptor);

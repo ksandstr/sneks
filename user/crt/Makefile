@@ -15,7 +15,7 @@ CRT_SRC:=$(wildcard *.c)
 CRT_ASM:=$(wildcard *-32.S)
 CRT_OBJS:=crt0.o $(CRT_SRC:.c=.o) $(CRT_ASM:-32.S=.o) \
 	$(patsubst %,$(CFGDIR)/lib/%,$(LIB_OBJS)) \
-	mung-rangealloc.o mung-slab.o
+	ccan-intmap.o
 
 CFLAGS:=$(subst -D__KERNEL__,,$(CFLAGS)) -D__SNEKS__=1 -mstackrealign
 

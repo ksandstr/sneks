@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <ccan/darray/darray.h>
+#include <ccan/intmap/intmap.h>
 
 #include <l4/types.h>
 #include <l4/thread.h>
@@ -72,33 +73,42 @@ int atexit(void (*fn)(void))
 }
 
 
+/* app shitcode ahoy! */
+struct spawn_bufs {
+	darray(int) fds;
+	darray(L4_Word_t) handles, servers;
+};
+
+
+static bool collect_spawn_fds(sintmap_index_t fd, struct fd_bits *bits,
+	struct spawn_bufs *bufs)
+{
+	/* all of the realloc */
+	darray_push(bufs->fds, fd);
+	darray_push(bufs->handles, (L4_Word_t)bits->handle);
+	darray_push(bufs->servers, bits->server.raw);
+	return true;
+}
+
+
 int spawn_NP(const char *filename, char *const argv[], char *const envp[])
 {
 	char *args = p_to_argbuf(argv), *envs = p_to_argbuf(envp);
-	uint16_t pid = 0;
-	/* app shitcode ahoy!
-	 *
-	 * FIXME: also, don't propagate all the file descriptors. that's silly.
-	 * stdout, stdin, stderr should suffice. however since sneks doesn't
-	 * really have any file descriptors besides those three, this'll do for
-	 * now.
+	uint16_t new_pid = 0;
+	/* TODO: don't propagate all the file descriptors, that's silly. stdout,
+	 * stdin, stderr should suffice.
 	 */
-	darray(int32_t) fds = darray_new();
-	darray(L4_Word_t) cookies = darray_new(), servs = darray_new();
-	struct fd_iter it;
-	for(int fd = __fd_first(&it); fd >= 0; fd = __fd_next(&it, fd)) {
-		void *ctx = __fd_iter_ctx(&it);
-		darray_push(fds, fd);
-		darray_push(cookies, __handle(&ctx, fd));
-		darray_push(servs, __server(&ctx, fd).raw);
-	}
-	int n = __proc_spawn(__the_sysinfo->api.proc, &pid, filename, args, envs,
-		servs.item, servs.size, cookies.item, cookies.size,
-		fds.item, fds.size);
+	struct spawn_bufs bufs = {
+		.fds = darray_new(), .handles = darray_new(), .servers = darray_new(),
+	};
+	sintmap_iterate(&fd_map, &collect_spawn_fds, &bufs);
+	int n = __proc_spawn(__the_sysinfo->api.proc, &new_pid, filename, args, envs,
+		bufs.servers.item, bufs.servers.size, bufs.handles.item, bufs.handles.size,
+		bufs.fds.item, bufs.fds.size);
 	free(args); free(envs);
-	darray_free(fds); darray_free(cookies); darray_free(servs);
+	darray_free(bufs.fds); darray_free(bufs.handles); darray_free(bufs.servers);
 
-	return NTOERR(n, pid);
+	return NTOERR(n, new_pid);
 }
 
 
