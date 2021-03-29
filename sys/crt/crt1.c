@@ -88,7 +88,7 @@ noreturn void panic(const char *msg)
 
 
 void malloc_panic(void) {
-	panic("malloc_panic() called!");
+	panic("sys/crt: malloc_panic() called!");
 }
 
 

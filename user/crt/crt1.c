@@ -47,7 +47,7 @@ void __assert_failure(
 
 
 void malloc_panic(void) {
-	L4_KDB_PrintString("malloc_panic() called!");
+	L4_KDB_PrintString("user/crt: malloc_panic() called!");
 	abort();
 }
 

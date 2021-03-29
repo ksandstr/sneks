@@ -20,7 +20,7 @@ CFLAGS:=$(CFLAGS) -D__SNEKS__=1
 # it's our utility library, we get to call it whatever we damn well please. in
 # this case it'll be just libsneks, and woe betide the fool who depends on it
 # out of tree.
-all: libsneks.a
+all: libsneks.a $(wildcard $(CFGDIR)/include/sneks/{api,sys}/*-defs.h)
 
 
 clean:
