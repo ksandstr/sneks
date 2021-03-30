@@ -12,7 +12,7 @@
 
 enum null_dev { DEV_NULL = 1, DEV_ZERO, DEV_FULL };
 
-struct chrdev_file {
+struct chrdev_file_impl {
 	enum null_dev dev;
 };
 
@@ -54,15 +54,6 @@ static int null_write(chrfile_t *h, const uint8_t *buf, unsigned buf_len)
 }
 
 
-/* TODO: this should be libchrdev default behaviour when fork_func is NULL or
- * not set.
- */
-static int null_fork(chrfile_t *copy, chrfile_t *parent) {
-	*copy = *parent;
-	return 0;
-}
-
-
 /* TODO: see above. */
 static int null_close(chrfile_t *h) {
 	return 0;
@@ -96,8 +87,7 @@ int main(int argc, char *argv[])
 	chrdev_read_func(&null_read);
 	chrdev_write_func(&null_write);
 	chrdev_close_func(&null_close);
-	chrdev_fork_func(&null_fork);
 	chrdev_dev_open_func(&null_open);
 
-	return chrdev_run(sizeof(struct chrdev_file), argc, argv);
+	return chrdev_run(sizeof(struct chrdev_file_impl), argc, argv);
 }

@@ -40,11 +40,67 @@
 
 #define NUM_LC_EVENTS 128	/* at most 1024 */
 
-#define HF_NONBLOCK (SNEKS_IO_O_NONBLOCK << 16)
-#define HF_WRITE_BLOCKED (1 << 16)
+/* handle flags. Sneks::IO::O_* starts at 2048, so far. */
+#define HF_WRITE_BLOCKED 1
+#define HF_NONBLOCK SNEKS_IO_O_NONBLOCK
 
-#define CHRFILE(handle) ((chrfile_t *)(handle)->impl)
-#define HANDLE(chrfile) cf2h((chrfile))
+#define CHR_IMPL(file) ((chrfile_t *)(file)->impl)
+#define CHR_FILE(impl) ci2f((impl))
+
+/* missing from CCAN darray: the order-destroying removal. */
+#ifndef darray_remove_fast
+#define darray_remove_fast(arr, i) do { \
+		assert((arr).size > 0); \
+		size_t index_ = (i); \
+		assert(index_ < (arr).size); \
+		assert(index_ >= 0); \
+		if(index_ < --(arr).size) { \
+			(arr).item[index_] = (arr).item[(arr).size]; \
+		} \
+	} while(false)
+#endif
+
+
+struct chrdev_client;
+struct chrdev_handle;
+struct chrdev_file;
+
+
+struct chrdev_handle
+{
+	struct chrdev_file *file;
+	struct chrdev_client *owner;
+	uint16_t fd;
+	uint16_t flags;	/* HF_* */
+	int client_ix;	/* index in owner->handles */
+	int file_ix;	/* index in file->handles */
+	uint32_t events;/* set of EPOLLFOO for Poll::set_notify response */
+
+	/* we track the first blocked read/write client in each handle; since
+	 * userspace isn't multithreaded right now, there's no hash table where
+	 * the others would go.
+	 *
+	 * HF_WRITE_BLOCKED says whether this is a reader or a writer.
+	 */
+	L4_ThreadId_t blocker;
+};
+
+
+struct chrdev_file
+{
+	darray(struct chrdev_handle *) handles;
+	uint8_t impl[]	/* device implementor's chrfile_t */
+		__attribute__((aligned(16)));
+};
+
+
+struct chrdev_client
+{
+	pid_t pid;
+	L4_ThreadId_t notify_tid;
+	int next_fd;
+	darray(struct chrdev_handle *) handles;
+};
 
 
 /* lifecycle events. these are queued up in lifecycle_handler_fn() and
@@ -61,32 +117,6 @@ struct lc_event
 			int exitcode, waitstatus;
 		} exit;
 	};
-};
-
-
-struct chrdev_handle
-{
-	struct chrdev_client *owner;
-	int bits;		/* low 16 are fd, rest are HF_* */
-	int client_ix;	/* index in owner->handles */
-	uint32_t events;/* set of EPOLLFOO for Poll::set_notify response */
-
-	/* we track the first blocked read/write client in each handle.
-	 * HF_WRITE_BLOCKED says which side it is.
-	 */
-	L4_ThreadId_t blocker;
-
-	uint8_t impl[]	/* device implementor's chrfile_t */
-		__attribute__((aligned(16)));
-};
-
-
-struct chrdev_client
-{
-	pid_t pid;
-	L4_ThreadId_t notify_tid;
-	int next_bits;
-	darray(struct chrdev_handle *) handles;
 };
 
 
@@ -118,7 +148,7 @@ static size_t rehash_client(const void *ptr, void *priv) {
 
 static size_t rehash_handle(const void *ptr, void *priv) {
 	const struct chrdev_handle *h = ptr;
-	return int_hash(h->owner->pid << 16 | (h->bits & 0xffff));
+	return int_hash(h->owner->pid << 16 | h->fd);
 }
 
 
@@ -128,10 +158,10 @@ static bool cmp_client_to_pid(const void *cand, void *key) {
 }
 
 
-static struct chrdev_handle *cf2h(chrfile_t *file) {
-	uintptr_t p = (uintptr_t)file;
-	p -= offsetof(struct chrdev_handle, impl);
-	return (struct chrdev_handle *)p;
+static struct chrdev_file *ci2f(chrfile_t *chrfile) {
+	uintptr_t p = (uintptr_t)chrfile;
+	p -= offsetof(struct chrdev_file, impl);
+	return (struct chrdev_file *)p;
 }
 
 
@@ -139,34 +169,55 @@ static struct chrdev_handle *cf2h(chrfile_t *file) {
 static void remove_handle(struct chrdev_handle *h)
 {
 	struct chrdev_client *c = h->owner;
-	assert(c->handles.size > 0);
-	assert(h->client_ix < c->handles.size);
 	assert(c->handles.item[h->client_ix] == h);
-	if(h->client_ix < c->handles.size - 1) {
-		/* move the last one in the deleted handle's place. */
-		struct chrdev_handle *last = c->handles.item[c->handles.size - 1];
-		assert(last->owner == c);
-		last->client_ix = h->client_ix;
-		c->handles.item[h->client_ix] = last;
+	darray_remove_fast(c->handles, h->client_ix);
+	assert(h->client_ix == c->handles.size
+		|| c->handles.item[h->client_ix]->client_ix != h->client_ix);
+	c->handles.item[h->client_ix]->client_ix = h->client_ix;
+#ifndef NDEBUG
+	for(size_t i=0; i < c->handles.size; i++) {
+		assert(c->handles.item[i]->client_ix == i);
 	}
-	c->handles.size--;
+#endif
 
-	/* (returns false when called from unalloc_handle(), so we don't assert
-	 * the return value.)
-	 */
-	htable_del(&handle_ht, rehash_handle(h, NULL), h);
+	bool ok = htable_del(&handle_ht, rehash_handle(h, NULL), h);
+	assert(ok);
 }
 
 
 static int handle_dtor(struct chrdev_handle *h)
 {
-	int n = (*callbacks.close)(CHRFILE(h));
-	/* ... an error from the close callback won't stop the file from being
-	 * destroyed; we'll just pass it upward.
-	 */
-
+	struct chrdev_file *f = h->file;
+	assert(f->handles.item[h->file_ix] == h);
+	darray_remove_fast(f->handles, h->file_ix);
+	assert(h->file_ix == f->handles.size
+		|| f->handles.item[h->file_ix]->file_ix != h->file_ix);
+	f->handles.item[h->file_ix]->file_ix = h->file_ix;
+#ifndef NDEBUG
+	for(size_t i=0; i < f->handles.size; i++) {
+		assert(f->handles.item[i]->file_ix == i);
+	}
+#endif
 	remove_handle(h);
 	free(h);
+
+	int n = 0;
+	if(f->handles.size == 0) {
+		n = (*callbacks.close)(CHR_IMPL(f));
+		/* ... an error from the close callback won't stop the file from being
+		 * destroyed; we'll just pass it upward.
+		 */
+#ifndef NDEBUG
+		struct htable_iter it;
+		for(h = htable_first(&handle_ht, &it);
+			h != NULL; h = htable_next(&handle_ht, &it))
+		{
+			assert(h->file != f);
+		}
+#endif
+		darray_free(f->handles);
+		free(f);
+	}
 
 	return n;
 }
@@ -186,33 +237,27 @@ static void client_dtor(struct chrdev_client *c)
 
 static int fork_handle(struct chrdev_handle *h, struct chrdev_client *child)
 {
-	struct chrdev_handle *copy = malloc(sizeof *copy + impl_size);
+	struct chrdev_handle *copy = malloc(sizeof *copy);
 	if(copy == NULL) return -ENOMEM;
 
+	*copy = *h;
 	copy->owner = child;
-	copy->bits = h->bits;
-	copy->events = h->events;
 	copy->blocker = L4_nilthread;
-	copy->bits &= ~HF_WRITE_BLOCKED;
+	copy->flags &= ~HF_WRITE_BLOCKED;
 
-	size_t hash = rehash_handle(copy, NULL);
-	bool ok = htable_add(&handle_ht, hash, copy);
+	bool ok = htable_add(&handle_ht, rehash_handle(copy, NULL), copy);
 	if(!ok) {
 		free(copy);
 		return -ENOMEM;
 	}
 
-	int n = (*callbacks.fork)(CHRFILE(copy), CHRFILE(h));
-	if(n != 0) {
-		printf("chrdev:%s: callback.fork failed, n=%d\n", __func__, n);
-		htable_del(&handle_ht, hash, copy);
-		free(copy);
-		return n;
-	}
-
 	darray_push(child->handles, copy);
 	copy->client_ix = child->handles.size - 1;
-	assert(child->handles.item[copy->client_ix] == copy);
+	assert(copy->owner->handles.item[copy->client_ix] == copy);
+
+	darray_push(copy->file->handles, copy);
+	copy->file_ix = copy->file->handles.size - 1;
+	assert(copy->file->handles.item[copy->file_ix] == copy);
 
 	return 0;
 }
@@ -237,7 +282,7 @@ static int fork_client(struct chrdev_client *parent, pid_t child_pid)
 	*c = (struct chrdev_client){
 		.pid = child_pid,
 		.handles = darray_new(),
-		.next_bits = parent->next_bits,
+		.next_fd = parent->next_fd,
 	};
 	darray_realloc(c->handles, parent->handles.size);
 	assert(L4_IsNilThread(c->notify_tid));
@@ -257,87 +302,57 @@ static int fork_client(struct chrdev_client *parent, pid_t child_pid)
 }
 
 
-static bool bits_exist(struct chrdev_client *c, int bits)
+static bool fd_exists(struct chrdev_client *c, uint16_t fd)
 {
-	bits &= 0xffff;
-	size_t hash = int_hash(c->pid << 16 | bits);
+	size_t hash = int_hash(c->pid << 16 | fd);
 	struct htable_iter it;
 	for(struct chrdev_handle *cand = htable_firstval(&handle_ht, &it, hash);
 		cand != NULL; cand = htable_nextval(&handle_ht, &it, hash))
 	{
-		if((cand->bits & 0xffff) == bits && cand->owner == c) return true;
+		if(cand->fd == fd && cand->owner == c) return true;
 	}
 	return false;
 }
 
 
-static int new_bits(struct chrdev_client *c)
+static int new_fd(struct chrdev_client *c)
 {
-	int bits, iters = 0;
+	int fd, iters = 0;
 	do {
-		bits = c->next_bits++;
-		if(bits == USHRT_MAX) {
-			bits = 1;
-			c->next_bits = 2;
-		}
-	} while(bits_exist(c, bits) && iters < USHRT_MAX - 1);
-	if(iters == USHRT_MAX - 1) return -ENOMEM; /* TODO: better error code? */
+		fd = c->next_fd++;
+		if(fd == USHRT_MAX) c->next_fd = 1;
+	} while(fd_exists(c, fd) && ++iters < USHRT_MAX);
+	if(iters == USHRT_MAX) return -ENFILE;
 
-	return bits;
+	return fd;
 }
 
 
-/* creates a raw handle, to be passed to new_handle() or unalloc_handle()
- * according to whether the creator's initializer succeeds or fails.
- */
-static int alloc_handle(struct chrdev_handle **hp)
+static struct chrdev_handle *new_handle(
+	struct chrdev_file *file, struct chrdev_client *c)
 {
-	assert(hp != NULL);
-
-	struct chrdev_handle *h = malloc(sizeof *h + impl_size);
-	if(h == NULL) goto Enomem;
-	struct chrdev_client *c = caller(true);
-	if(c == NULL) goto Enomem;
+	struct chrdev_handle *h = malloc(sizeof *h);
+	if(h == NULL) return NULL;
 	*h = (struct chrdev_handle){
-		.owner = c, .bits = new_bits(c),
-		.client_ix = c->handles.size,
+		.fd = new_fd(c), .owner = c, .file = file,
+		.client_ix = c->handles.size, .file_ix = file->handles.size,
+		.blocker = L4_nilthread,
 	};
-	if(h->bits < 0) {
-		/* it's slightly weird to pop ENOMEM here, but ENFILE and EMFILE refer
-		 * to system- and processwide limits which device etc. impls don't
-		 * care about so they'd be even wronger still.
-		 */
-		goto Enomem;
+	if(h->fd < 0) {
+		/* TODO: return ENFILE w/ an ERR_PTR() system */
+		free(h);
+		return NULL;
 	}
+
+	bool ok = htable_add(&handle_ht, rehash_handle(h, NULL), h);
+	if(!ok) { free(h); return NULL; }
+
 	darray_push(c->handles, h);	/* TODO: catch ENOMEM */
 	assert(c->handles.item[h->client_ix] == h);
+	darray_push(file->handles, h);
+	assert(file->handles.item[h->file_ix] == h);
 
-	*hp = h;
-	return 0;
-
-Enomem:
-	free(h);
-	return -ENOMEM;
-}
-
-
-/* returns negative errno on failure, or identifying bits of @h on success. */
-static int new_handle(struct chrdev_handle *h)
-{
-	bool ok = htable_add(&handle_ht, rehash_handle(h, NULL), h);
-	if(!ok) return -ENOMEM;
-	assert(h->owner != NULL && h->owner == caller(false));
-
-	return h->bits & 0xffff;
-}
-
-
-static void unalloc_handle(struct chrdev_handle *h)
-{
-	if(h != NULL) {
-		remove_handle(h);
-		free(h);
-	}
+	return h;
 }
 
 
@@ -345,16 +360,15 @@ static void unalloc_handle(struct chrdev_handle *h)
  * handling just because it necessarily always resolves file descriptors.
  */
 static struct chrdev_handle *get_handle_nosync(
-	size_t *hash_p, pid_t pid, int fd)
+	size_t *hash_p, pid_t pid, uint16_t fd)
 {
-	fd &= 0xffff;
 	size_t hash = int_hash(pid << 16 | fd);
 	if(hash_p != NULL) *hash_p = hash;
 	struct htable_iter it;
 	for(struct chrdev_handle *cand = htable_firstval(&handle_ht, &it, hash);
 		cand != NULL; cand = htable_nextval(&handle_ht, &it, hash))
 	{
-		if((cand->bits & 0xffff) == fd && cand->owner->pid == pid) {
+		if(cand->fd == fd && cand->owner->pid == pid) {
 			return cand;
 		}
 	}
@@ -362,14 +376,16 @@ static struct chrdev_handle *get_handle_nosync(
 }
 
 
-static struct chrdev_handle *get_handle(size_t *hash_p, pid_t pid, int fd) {
+static struct chrdev_handle *get_handle(
+	size_t *hash_p, pid_t pid, uint16_t fd)
+{
 	consume_lc_queue();
 	return get_handle_nosync(hash_p, pid, fd);
 }
 
 
 /* shorthand for simple operations */
-static struct chrdev_handle *resolve_fd(int fd) {
+static struct chrdev_handle *resolve_fd(uint16_t fd) {
 	return get_handle(NULL, pidof_NP(muidl_get_sender()), fd);
 }
 
@@ -524,7 +540,7 @@ static struct chrdev_client *caller(bool create)
 	}
 	sysmsg_add_filter(lifecycle_msg, &(L4_Word_t){ pid }, 1);
 	*c = (struct chrdev_client){
-		.pid = pid, .next_bits = 1, .handles = darray_new(),
+		.pid = pid, .next_fd = 1, .handles = darray_new(),
 	};
 	bool ok = htable_add(&client_ht, hash, c);
 	assert(ok);
@@ -613,7 +629,7 @@ static void send_poll_event(struct chrdev_handle *r, int events)
 	}
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = my_pid, .X.u = 2 }.raw);
 	L4_LoadMR(1, events);
-	L4_LoadMR(2, r->bits & 0xffff);
+	L4_LoadMR(2, r->fd);
 	L4_MsgTag_t tag = L4_Reply(ntid);
 	if(L4_IpcFailed(tag)) {
 		L4_Word_t ec = L4_ErrorCode();
@@ -637,23 +653,43 @@ static void send_poll_event(struct chrdev_handle *r, int events)
 }
 
 
-void chrdev_notify(chrfile_t *file, int mask)
+/* TODO: notify multiple threads using the blocker_hash (or some such) once
+ * userspace gets multithreading in the vague, distant future.
+ */
+void chrdev_notify(chrfile_t *impl, int mask)
 {
-	struct chrdev_handle *h = HANDLE(file);
-	send_poll_event(h, mask);
-	/* TODO: notify multiple threads, once userspace gets multithreading (in
-	 * the vague, distant future)
-	 */
-	if(L4_IsNilThread(h->blocker)) return;
-	if((mask & (EPOLLHUP | EPOLLERR))
-		|| ((h->bits & HF_WRITE_BLOCKED) && (mask & EPOLLOUT))
-		|| ((~h->bits & HF_WRITE_BLOCKED) && (mask & EPOLLIN)))
-	{
-		assert(pidof_NP(h->blocker) == h->owner->pid);
-		L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 1, .X.u = 1 }.raw);
-		L4_LoadMR(1, EAGAIN);
-		L4_MsgTag_t tag = L4_Reply(h->blocker);
-		if(L4_IpcSucceeded(tag)) h->blocker = L4_nilthread;
+	assert(impl != NULL);
+
+	struct chrdev_file *f = CHR_FILE(impl);
+	L4_ThreadId_t sent[f->handles.size];	/* try at most once each. */
+	int n_sent = 0;
+	struct chrdev_handle **h_it;
+	darray_foreach(h_it, f->handles) {
+		struct chrdev_handle *h = *h_it;
+		send_poll_event(h, mask);
+		if(L4_IsNilThread(h->blocker)) continue;
+		bool found = false;
+		for(int i=0; i < n_sent; i++) {
+			if(sent[i].raw == h->blocker.raw) {
+				found = true;
+				break;
+			}
+		}
+		if(found) continue;
+		if((mask & (EPOLLHUP | EPOLLERR))
+			|| ((h->flags & HF_WRITE_BLOCKED) && (mask & EPOLLOUT))
+			|| ((~h->flags & HF_WRITE_BLOCKED) && (mask & EPOLLIN)))
+		{
+			assert(pidof_NP(h->blocker) == h->owner->pid);
+			L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 1, .X.u = 1 }.raw);
+			L4_LoadMR(1, EAGAIN);
+			L4_MsgTag_t tag = L4_Reply(h->blocker);
+			if(L4_IpcSucceeded(tag)) {
+				assert(n_sent < f->handles.size);
+				sent[n_sent++] = h->blocker;
+				h->blocker = L4_nilthread;
+			}
+		}
 	}
 }
 
@@ -667,9 +703,8 @@ static int chrdev_set_flags(int *old, int fd, int or, int and)
 	struct chrdev_handle *h = resolve_fd(fd);
 	if(h == NULL) return -EBADF;
 
-	*old = h->bits >> 16;
-	unsigned new = (*old & and) | or | (*old & ~permitted_flags);
-	h->bits = (h->bits & 0xffff) | (new << 16);
+	*old = h->flags;
+	h->flags = (*old & and) | or | (*old & ~permitted_flags);
 
 	return 0;
 }
@@ -686,7 +721,7 @@ static void chrdev_confirm(L4_Word_t param, void *priv)
 			getpid(), __func__, pid, fd);
 		return;
 	}
-	(*callbacks.confirm)(CHRFILE(h),
+	(*callbacks.confirm)(CHR_IMPL(h->file),
 		param & 0x7fffffff, !!(param & 0x80000000));
 }
 
@@ -715,9 +750,9 @@ static int chrdev_write(
 	/* clamp count to USHRT_MAX because IO::write returns unsigned short. this
 	 * is kind of bad and should get fixed at some point.
 	 */
-	int n = (*callbacks.write)(CHRFILE(h), buf,
+	int n = (*callbacks.write)(CHR_IMPL(h->file), buf,
 		min_t(unsigned, USHRT_MAX, count));
-	if(n == -EWOULDBLOCK && (~h->bits & HF_NONBLOCK)) {
+	if(n == -EWOULDBLOCK && (~h->flags & HF_NONBLOCK)) {
 		if(!L4_IsNilThread(h->blocker)) {
 			/* TODO: have an affordance for when a multithreaded userspace has
 			 * several threads sleeping on a single character device file.
@@ -725,7 +760,7 @@ static int chrdev_write(
 			fprintf(stderr, "%s: overwriting existing blocker!\n", __func__);
 		}
 		h->blocker = muidl_get_sender();
-		h->bits |= HF_WRITE_BLOCKED;
+		h->flags |= HF_WRITE_BLOCKED;
 		muidl_raise_no_reply();
 		return 0;
 	} else {
@@ -743,14 +778,14 @@ static int chrdev_read(int fd, int count, off_t offset,
 	if(h == NULL) return -EBADF;
 	if(offset != -1) return -EBADF;	/* not seekable */
 
-	int n = (*callbacks.read)(CHRFILE(h), buf, count);
-	if(n == -EWOULDBLOCK && (~h->bits & HF_NONBLOCK)) {
+	int n = (*callbacks.read)(CHR_IMPL(h->file), buf, count);
+	if(n == -EWOULDBLOCK && (~h->flags & HF_NONBLOCK)) {
 		if(!L4_IsNilThread(h->blocker)) {
 			/* TODO: see same in chrdev_write() */
 			fprintf(stderr, "%s: overwriting existing blocker!\n", __func__);
 		}
 		h->blocker = muidl_get_sender();
-		h->bits &= ~HF_WRITE_BLOCKED;
+		h->flags &= ~HF_WRITE_BLOCKED;
 		muidl_raise_no_reply();
 		return 0;
 	} else {
@@ -771,7 +806,17 @@ static int chrdev_close(int fd)
 
 static int chrdev_dup(int *newfd_p, int oldfd)
 {
-	return -ENOSYS;
+	sync_confirm();
+
+	struct chrdev_client *c = caller(false);
+	struct chrdev_handle *h = resolve_fd(oldfd);
+	if(c == NULL || h == NULL) return -EBADF;
+
+	struct chrdev_handle *copy = new_handle(h->file, c);
+	if(copy == NULL) return -ENOMEM;
+
+	*newfd_p = copy->fd;
+	return 0;
 }
 
 
@@ -791,7 +836,7 @@ static int chrdev_set_notify(int *exmask_p,
 	if(h == NULL) return -EBADF;
 
 	h->events = events;
-	*exmask_p = (*callbacks.get_status)(CHRFILE(h)) & (events | EPOLLHUP);
+	*exmask_p = (*callbacks.get_status)(CHR_IMPL(h->file)) & (events | EPOLLHUP);
 	return 0;
 }
 
@@ -805,7 +850,7 @@ static void chrdev_get_status(
 	pid_t spid = pidof_NP(muidl_get_sender());
 	for(int i=0; i < n_handles; i++) {
 		struct chrdev_handle *h = get_handle(NULL, spid, handles[i]);
-		st[i] = h == NULL ? ~0ul : (*callbacks.get_status)(CHRFILE(h));
+		st[i] = h == NULL ? ~0ul : (*callbacks.get_status)(CHR_IMPL(h->file));
 		if(h != NULL && i < n_notif) h->events = notif[i];
 	}
 	*n_st_p = n_handles;
@@ -820,23 +865,32 @@ static int chrdev_pipe(L4_Word_t *rd_p, L4_Word_t *wr_p, int flags)
 
 	if(flags != 0) return -EINVAL;
 
-	struct chrdev_handle *readh = NULL, *writeh = NULL;
-	int n = alloc_handle(&readh);
-	if(n < 0) goto fail;
-	n = alloc_handle(&writeh);
+	int n;
+	struct chrdev_client *c = caller(true);
+	struct chrdev_file *readf = malloc(sizeof *readf + impl_size),
+		*writef = malloc(sizeof *writef + impl_size);
+	if(c == NULL || readf == NULL || writef == NULL) goto Enomem;
+	*readf = (struct chrdev_file){ .handles = darray_new() };
+	*writef = (struct chrdev_file){ .handles = darray_new() };
+
+	n = (*callbacks.pipe)(CHR_IMPL(readf), CHR_IMPL(writef), flags);
 	if(n < 0) goto fail;
 
-	n = (*callbacks.pipe)(CHRFILE(readh), CHRFILE(writeh), flags);
-	if(n < 0) goto fail;
+	struct chrdev_handle *rdh = new_handle(readf, c), *wrh = new_handle(writef, c);
+	if(wrh == NULL || rdh == NULL) {
+		if(wrh == NULL) (*callbacks.close)(CHR_IMPL(writef));
+		assert(rdh == NULL || readf->handles.size == 1);
+		if(rdh != NULL) { handle_dtor(rdh); readf = NULL; }
+		goto Enomem;
+	}
 
-	n = new_handle(readh);
-	if(n < 0) goto fail; else *rd_p = n;
-	n = new_handle(writeh);
-	if(n < 0) goto fail; else *wr_p = n;
+	*rd_p = rdh->fd;
+	*wr_p = wrh->fd;
 	return 0;
 
+Enomem: n = -ENOMEM;
 fail:
-	unalloc_handle(readh); unalloc_handle(writeh);
+	free(readf); free(writef);
 	assert(n < 0);
 	return n;
 }
@@ -857,23 +911,24 @@ static int chrdev_open(int *handle_p,
 	flags &= ~(O_RDONLY | O_WRONLY | O_RDWR);
 	if(flags != 0) return -EINVAL;
 
-	struct chrdev_handle *h;
-	int n = alloc_handle(&h);
-	if(n < 0) return n;
+	struct chrdev_client *c = caller(true);
+	struct chrdev_file *file = malloc(sizeof *file + impl_size);
+	if(c == NULL || file == NULL) { free(file); return -ENOMEM; }
+	*file = (struct chrdev_file){ .handles = darray_new() };
+
 	static const char objtype[] = { [2] = 'c' };
-	n = (*callbacks.dev_open)(CHRFILE(h), objtype[(object >> 30) & 0x3],
+	int n = (*callbacks.dev_open)(CHR_IMPL(file), objtype[(object >> 30) & 0x3],
 		(object >> 15) & 0x7fff, object & 0x7fff, flags);
-	if(n < 0) {
-		unalloc_handle(h);
-		return n;
+	if(n < 0) { free(file); return n; }
+
+	struct chrdev_handle *h = new_handle(file, c);
+	if(h == NULL) {
+		(*callbacks.close)(CHR_IMPL(file));
+		return -ENOMEM;
 	}
 
-	n = new_handle(h);
-	if(n < 0) return n;
-	else {
-		*handle_p = n;
-		return 0;
-	}
+	*handle_p = h->fd;
+	return 0;
 }
 
 
@@ -894,6 +949,11 @@ static int chrdev_ioctl_int(int *result_p,
 
 int chrdev_run(size_t sizeof_file, int argc, char *argv[])
 {
+	/* TODO: surely there's a better way to keep HF_* and SNEKS_IO_O_*
+	 * separate. for now there's just one of each so it's this easy.
+	 */
+	assert(HF_WRITE_BLOCKED != HF_NONBLOCK);
+
 	impl_size = sizeof_file;
 	main_tid = L4_MyLocalId();
 	my_pid = getpid();
@@ -902,14 +962,21 @@ int chrdev_run(size_t sizeof_file, int argc, char *argv[])
 	htable_init(&handle_ht, &rehash_handle, NULL);
 
 	static const struct chrdev_impl_vtable vtab = {
+		/* Sneks::IO */
 		.set_flags = &chrdev_set_flags,
 		.write = &chrdev_write,
 		.read = &chrdev_read,
 		.close = &chrdev_close,
 		.dup = &chrdev_dup,
+
+		/* Sneks::Poll */
 		.set_notify = &chrdev_set_notify,
 		.get_status = &chrdev_get_status,
+
+		/* Sneks::Pipe */
 		.pipe = &chrdev_pipe,
+
+		/* Sneks::DeviceNode */
 		.open = &chrdev_open,
 		.ioctl_void = &chrdev_ioctl_void,
 		.ioctl_int = &chrdev_ioctl_int,

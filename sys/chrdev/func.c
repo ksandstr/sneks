@@ -21,7 +21,6 @@ struct chrdev_callbacks callbacks = {
 	.close = &enosys,
 	.ioctl = &enosys,
 	.pipe = &enosys,
-	.fork = &enosys,
 	.dev_open = &no_device,
 };
 
@@ -69,11 +68,6 @@ void chrdev_close_func(int (*fn)(chrfile_t *)) {
 
 void chrdev_ioctl_func(int (*fn)(chrfile_t *, unsigned long, va_list)) {
 	callbacks.ioctl = fn;
-}
-
-
-void chrdev_fork_func(int (*fn)(chrfile_t *, chrfile_t *)) {
-	callbacks.fork = fn;
 }
 
 

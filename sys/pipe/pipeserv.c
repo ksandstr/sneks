@@ -10,13 +10,13 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 #include <assert.h>
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/epoll.h>
-#include <ccan/list/list.h>
 #include <ccan/minmax/minmax.h>
 #include <ccan/membuf/membuf.h>
 
@@ -38,68 +38,21 @@
 #define IS_EMPTY(hd) (membuf_num_elems(&(hd)->buf) == 0)
 
 
-struct pipehead
-{
+struct pipehead {
 	/* NOTE: ideally we'd have a more cleverer VM ringbuffer here, and
 	 * libsneks-chrdev.a's interface would let strxfer right out of said
 	 * buffer without an extra memcpy; but that can wait until tests become
 	 * good enough to trust something so fancy.
 	 */
 	MEMBUF(char) buf;
-	struct list_head readh, writeh;	/* of <struct chrdev_file> */
+	chrfile_t *readf, *writef;
 };
 
 
-struct chrdev_file
-{
-	/* link in ->head's readh or writeh, per PHF_WRITER in ->flags. */
-	struct list_node ph_link;
+struct chrdev_file_impl {
 	struct pipehead *head;
 	int flags;	/* PHF_* */
 };
-
-
-static void wake(struct list_head *list, int mask)
-{
-	chrfile_t *cur;
-	list_for_each(list, cur, ph_link) {
-		chrdev_notify(cur, mask);
-	}
-}
-
-
-static void pipe_file_dtor(struct chrdev_file *h)
-{
-	/* disconnect from pipe head. */
-	struct list_head *hh = h->flags & PHF_WRITER
-		? &h->head->writeh : &h->head->readh;
-	list_del_from(hh, &h->ph_link);
-
-	/* test for pipe head destruction, or send EOF to waiting readers when the
-	 * last writer is removed.
-	 */
-	if(list_empty(&h->head->writeh) && list_empty(&h->head->readh)) {
-		free(membuf_cleanup(&h->head->buf));
-		free(h->head);
-	} else if(list_empty(&h->head->writeh)) {
-		wake(&h->head->readh, EPOLLHUP);
-	}
-}
-
-
-static void add_handle(struct pipehead *hd, struct chrdev_file *handle) {
-	assert(handle->head == hd);
-	list_add_tail(handle->flags & PHF_WRITER ? &hd->writeh : &hd->readh,
-		&handle->ph_link);
-}
-
-
-static int pipe_fork(chrfile_t *copy, chrfile_t *parent)
-{
-	*copy = *parent;
-	add_handle(parent->head, copy);
-	return 0;
-}
 
 
 static void *membuf_snub(struct membuf *mb, void *rawptr, size_t newsize) {
@@ -108,75 +61,86 @@ static void *membuf_snub(struct membuf *mb, void *rawptr, size_t newsize) {
 }
 
 
-static int pipe_pipe(chrfile_t *readh, chrfile_t *writeh, int flags)
+static int pipe_pipe(chrfile_t *readf, chrfile_t *writef, int flags)
 {
 	if(flags != 0) return -EINVAL;
 
 	struct pipehead *hd = malloc(sizeof *hd);
-	if(hd == NULL) return -ENOMEM;
 	char *firstbuf = aligned_alloc(4096, PIPESZ);
-	if(firstbuf == NULL) {
+	if(hd == NULL || firstbuf == NULL) {
 		free(hd);
 		return -ENOMEM;
 	}
 
 	membuf_init(&hd->buf, firstbuf, PIPESZ, &membuf_snub);
-	list_head_init(&hd->readh);
-	list_head_init(&hd->writeh);
-	*readh = (struct chrdev_file){ .head = hd };
-	add_handle(hd, readh);
-	*writeh = (struct chrdev_file){ .head = hd, .flags = PHF_WRITER };
-	add_handle(hd, writeh);
+	hd->readf = readf; hd->writef = writef;
+	*readf = (chrfile_t){ .head = hd };
+	*writef = (chrfile_t){ .head = hd, .flags = PHF_WRITER };
 
 	return 0;
 }
 
 
-static int pipe_close(chrfile_t *h) {
-	pipe_file_dtor(h);
+static int pipe_close(chrfile_t *f)
+{
+	/* disconnect from pipe head. */
+	assert((f->flags & PHF_WRITER) || f->head->readf == f);
+	assert((~f->flags & PHF_WRITER) || f->head->writef == f);
+	*(f->flags & PHF_WRITER ? &f->head->writef : &f->head->readf) = NULL;
+
+	/* test for pipe head destruction, or send EOF to waiting readers when the
+	 * last writer is removed.
+	 */
+	if(f->head->writef == NULL && f->head->readf == NULL) {
+		free(membuf_cleanup(&f->head->buf));
+		free(f->head);
+	} else if(f->head->writef == NULL) {
+		chrdev_notify(f->head->readf, EPOLLHUP);
+	}
+
 	return 0;
 }
 
 
-static int pipe_get_status(chrfile_t *h)
+static int pipe_get_status(chrfile_t *f)
 {
 	uint32_t st;
-	if(h->flags & PHF_WRITER) {
-		if(list_empty(&h->head->readh)) st = EPOLLERR;	/* EPIPE pending */
+	if(f->flags & PHF_WRITER) {
+		if(f->head->readf == NULL) st = EPOLLERR;	/* EPIPE pending */
 		else {
-			membuf_prepare_space(&h->head->buf, 1);
-			if(!IS_FULL(h->head)) st = EPOLLOUT;
+			membuf_prepare_space(&f->head->buf, 1);
+			if(!IS_FULL(f->head)) st = EPOLLOUT;
 			else st = 0;
 		}
 	} else {
-		if(!IS_EMPTY(h->head)) st = EPOLLIN;
-		else if(list_empty(&h->head->writeh)) st = EPOLLHUP;
+		if(!IS_EMPTY(f->head)) st = EPOLLIN;
+		else if(f->head->writef == NULL) st = EPOLLHUP;
 		else st = 0;
 	}
 	return st;
 }
 
 
-static int pipe_write(chrfile_t *h, const uint8_t *buf, unsigned buf_len)
+static int pipe_write(chrfile_t *f, const uint8_t *buf, unsigned buf_len)
 {
-	if(list_empty(&h->head->readh)) return -EPIPE;	/* bork'd */
+	if(f->head->readf == NULL) return -EPIPE;	/* bork'd */
 	if(buf_len == 0) return 0;
-	membuf_prepare_space(&h->head->buf, buf_len);
-	bool was_empty = IS_EMPTY(h->head);
-	if(IS_FULL(h->head)) return -EWOULDBLOCK;
+	membuf_prepare_space(&f->head->buf, buf_len);
+	bool was_empty = IS_EMPTY(f->head);
+	if(IS_FULL(f->head)) return -EWOULDBLOCK;
 
-	size_t written = min(buf_len, membuf_num_space(&h->head->buf));
-	memcpy(membuf_space(&h->head->buf), buf, written);
-	if(was_empty) wake(&h->head->readh, EPOLLIN);
+	size_t written = min(buf_len, membuf_num_space(&f->head->buf));
+	memcpy(membuf_space(&f->head->buf), buf, written);
+	if(was_empty) chrdev_notify(f->head->readf, EPOLLIN);
 
 	return written;
 }
 
 
-static int pipe_read(chrfile_t *h, uint8_t *buf, unsigned count)
+static int pipe_read(chrfile_t *f, uint8_t *buf, unsigned count)
 {
-	if(IS_EMPTY(h->head)) {
-		if(!list_empty(&h->head->writeh)) return -EWOULDBLOCK;
+	if(IS_EMPTY(f->head)) {
+		if(f->head->writef != NULL) return -EWOULDBLOCK;
 		else {
 			/* send EOF only when all writers have closed and the buffer is
 			 * empty.
@@ -185,24 +149,26 @@ static int pipe_read(chrfile_t *h, uint8_t *buf, unsigned count)
 		}
 	}
 
-	membuf_prepare_space(&h->head->buf, 1);
-	bool was_full = IS_FULL(h->head);
-	size_t got = min_t(size_t, count, membuf_num_elems(&h->head->buf));
-	memcpy(buf, membuf_elems(&h->head->buf), got);
-	if(got > 0 && was_full) wake(&h->head->writeh, EPOLLOUT);
+	membuf_prepare_space(&f->head->buf, 1);
+	bool was_full = IS_FULL(f->head);
+	size_t got = min_t(size_t, count, membuf_num_elems(&f->head->buf));
+	memcpy(buf, membuf_elems(&f->head->buf), got);
+	if(f->head->writef != NULL && got > 0 && was_full) {
+		chrdev_notify(f->head->writef, EPOLLOUT);
+	}
 
 	return got;
 }
 
 
-static void pipe_confirm(chrfile_t *h, unsigned count, bool writing)
+static void pipe_confirm(chrfile_t *f, unsigned count, bool writing)
 {
 	/* for pipes we'll use @writing to double-check that things are coming
 	 * down the right way, even as there's no reason to expect they wouldn't.
 	 * bidirectional socket servers and the like should just trust the
 	 * framework.
 	 */
-	if(writing != !!(h->flags & PHF_WRITER)) {
+	if(writing != !!(f->flags & PHF_WRITER)) {
 		/* and even here, the best we can do is warn a brotha. really we
 		 * should invalidate the file descriptor so that future access always
 		 * pops errors, seeing as we've come to an indeterminate state. but
@@ -211,17 +177,17 @@ static void pipe_confirm(chrfile_t *h, unsigned count, bool writing)
 		fprintf(stderr, "%s: @writing doesn't match PHF_WRITER‽\n", __func__);
 	}
 
-	if(h->flags & PHF_WRITER) {
-		membuf_added(&h->head->buf, count);
+	if(f->flags & PHF_WRITER) {
+		membuf_added(&f->head->buf, count);
 	} else {
-		membuf_consume(&h->head->buf, count);
+		membuf_consume(&f->head->buf, count);
 	}
 }
 
 
-static int pipe_ioctl(chrfile_t *h, unsigned long request, va_list args)
+static int pipe_ioctl(chrfile_t *f, unsigned long request, va_list args)
 {
-	/* for now, we recognize nothing.
+	/* fuck you, i won't do what you tell me.
 	 *
 	 * TODO: we should recognize things at some point as the ioctl
 	 * responsibilities shake out.
@@ -238,8 +204,7 @@ int main(int argc, char *argv[])
 	chrdev_confirm_func(&pipe_confirm);
 	chrdev_close_func(&pipe_close);
 	chrdev_ioctl_func(&pipe_ioctl);
-	chrdev_fork_func(&pipe_fork);
 	chrdev_pipe_func(&pipe_pipe);
 
-	return chrdev_run(sizeof(struct chrdev_file), argc, argv);
+	return chrdev_run(sizeof(struct chrdev_file_impl), argc, argv);
 }

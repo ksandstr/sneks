@@ -1,5 +1,11 @@
 
-/* interface of libsneks-chrdev.a */
+/* interface of libsneks-chrdev.a .
+ *
+ * the library calls its client's designated callback functions to implement
+ * behaviour of character device files, while itself providing common
+ * functionality such as file/handle separation, client and lifecycle
+ * handling, and poll notifications.
+ */
 
 #ifndef _SNEKS_CHRDEV_H
 #define _SNEKS_CHRDEV_H
@@ -15,8 +21,8 @@
 /* this will be defined by the client, its size specified in chrdev_run(), and
  * used to prevent void pointer fuckage in the callback prototypes.
  */
-struct chrdev_file;
-typedef struct chrdev_file chrfile_t;
+struct chrdev_file_impl;
+typedef struct chrdev_file_impl chrfile_t;
 
 
 /* @mask is a set of EPOLL{IN,OUT,ERR,HUP}, and @file identifies the endpoint
@@ -51,9 +57,6 @@ extern void chrdev_confirm_func(
 extern void chrdev_close_func(int (*fn)(chrfile_t *file));
 extern void chrdev_ioctl_func(
 	int (*fn)(chrfile_t *file, unsigned long request, va_list args));
-
-/* callback is invoked for each handle to be copied when a client forks. */
-extern void chrdev_fork_func(int (*fn)(chrfile_t *dst, chrfile_t *src));
 
 /* maps to Sneks::Pipe/pipe, for creation of a pipe buffer and its two
  * endpoints associated with the same client process.
