@@ -924,7 +924,25 @@ static int squashfs_read(int param_fd, int count, off_t offset,
 
 static int squashfs_dup(int *newfd_p, int oldfd)
 {
-	return -ENOSYS;
+	struct fd *fd = get_fd(oldfd);
+	if(fd == NULL) return -EBADF;
+
+	struct fd *copy = ra_alloc(fd_ra, -1);
+	if(copy == NULL) return -ENFILE;
+	*copy = (struct fd){
+		.owner = pidof_NP(muidl_get_sender()),
+		.file = fd->file, .flags = fd->flags,
+	};
+
+	bool ok = htable_add(&fd_by_owner_hash, rehash_fd_owner(copy, NULL), copy);
+	if(!ok) {
+		ra_free(fd_ra, copy);
+		return -ENOMEM;
+	}
+
+	copy->file->refs++;
+	*newfd_p = ra_ptr2id(fd_ra, copy);
+	return 0;
 }
 
 
