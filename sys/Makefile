@@ -1,5 +1,5 @@
 
-SUBDIRS=crt sysmem vm fs.squashfs test msg chrdev pipe null
+SUBDIRS=crt sysmem vm io fs.squashfs test msg chrdev pipe null
 
 # systest has special linkage because it should go last; so it's excluded from
 # the main list.
