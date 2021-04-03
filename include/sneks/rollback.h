@@ -16,6 +16,7 @@
 #define __SNEKS_ROLLBACK_H__
 
 #include <stdbool.h>
+#include <ccan/typesafe_cb/typesafe_cb.h>
 #include <l4/types.h>
 
 
@@ -38,7 +39,13 @@ typedef void (*rollback_fn_t)(L4_Word_t param, void *priv);
  * typical way is to store copies of the values that'd be rolled back, and if
  * the "expected current value" doesn't match, not roll back at all.
  */
-extern void set_rollback(rollback_fn_t fn, L4_Word_t param, void *priv);
+#define set_rollback(fn, param, priv) \
+	_set_rollback(typesafe_cb_cast3(rollback_fn_t, \
+			void (*)(L4_Word_t, typeof(*(priv)) *), \
+			void (*)(L4_Word_t, const typeof(*(priv)) *), \
+			void (*)(L4_Word_t, const void *), (fn)), \
+		(param), (priv))
+extern void _set_rollback(rollback_fn_t fn, L4_Word_t param, const void *priv);
 
 /* check a _muidl_foo_dispatch() return value and other muidl per-thread data
  * and call a rollback handler if necessary. return true if a rollback was
@@ -60,7 +67,13 @@ extern bool check_rollback(L4_Word_t dispatch_status);
  * set_confirm() itself, and before returning to the dispatcher; but no more
  * than once per invocation.
  */
-extern void set_confirm(rollback_fn_t fn, L4_Word_t param, void *priv);
+#define set_confirm(fn, param, priv) \
+	_set_confirm(typesafe_cb_cast3(rollback_fn_t, \
+			void (*)(L4_Word_t, typeof(*(priv)) *), \
+			void (*)(L4_Word_t, const typeof(*(priv)) *), \
+			void (*)(L4_Word_t, const void *), (fn)), \
+		(param), (priv))
+extern void _set_confirm(rollback_fn_t fn, L4_Word_t param, const void *priv);
 extern void sync_confirm(void);
 
 

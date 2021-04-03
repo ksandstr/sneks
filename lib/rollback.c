@@ -50,20 +50,20 @@ static struct rbctx *get_ctx(void)
 }
 
 
-void set_rollback(rollback_fn_t fn, L4_Word_t param, void *priv)
+void _set_rollback(rollback_fn_t fn, L4_Word_t param, const void *priv)
 {
 	struct rbctx *ctx = get_ctx();
-	ctx->r.fn = fn; ctx->r.param = param; ctx->r.priv = priv;
+	ctx->r.fn = fn; ctx->r.param = param; ctx->r.priv = (void *)priv;
 	ctx->sender = muidl_get_sender();
 	ctx->tag = muidl_get_tag();
 }
 
 
-void set_confirm(rollback_fn_t fn, L4_Word_t param, void *priv)
+void _set_confirm(rollback_fn_t fn, L4_Word_t param, const void *priv)
 {
 	struct rbctx *ctx = get_ctx();
 	assert(ctx->c.fn == NULL);	/* must be empty */
-	ctx->c.fn = fn; ctx->c.param = param; ctx->c.priv = priv;
+	ctx->c.fn = fn; ctx->c.param = param; ctx->c.priv = (void *)priv;
 	ctx->sender = muidl_get_sender();
 	ctx->tag = muidl_get_tag();
 }
@@ -102,7 +102,9 @@ bool check_rollback(L4_Word_t status)
 	{
 		/* pop it, where available */
 		if(ctx->r.fn != NULL) {
-			(*ctx->r.fn)(ctx->r.param, ctx->r.priv);
+			rollback_fn_t fn = ctx->r.fn;
+			ctx->r.fn = NULL;
+			(*fn)(ctx->r.param, ctx->r.priv);
 			yep = true;
 		}
 		/* and clear the confirm handler as well */
