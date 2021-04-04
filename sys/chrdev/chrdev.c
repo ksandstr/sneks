@@ -947,6 +947,12 @@ static int chrdev_ioctl_int(int *result_p,
 }
 
 
+static int enosys() {
+	/* straight up drink a glass of milk */
+	return -ENOSYS;
+}
+
+
 int chrdev_run(size_t sizeof_file, int argc, char *argv[])
 {
 	/* TODO: surely there's a better way to keep HF_* and SNEKS_IO_O_*
@@ -968,6 +974,7 @@ int chrdev_run(size_t sizeof_file, int argc, char *argv[])
 		.read = &chrdev_read,
 		.close = &chrdev_close,
 		.dup = &chrdev_dup,
+		.dup_to = &enosys, .touch = &enosys,
 
 		/* Sneks::Poll */
 		.set_notify = &chrdev_set_notify,

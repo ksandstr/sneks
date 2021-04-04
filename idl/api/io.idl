@@ -61,6 +61,19 @@ interface IO
 	/* dup2(2) analogue */
 	void dup(out handle newfd, in handle oldfd)
 		raises(Posix::Errno);
+
+	/* interface for transferring file descriptors between tasks.
+	 *
+	 * dup_to() behaves like the two-parameter dup() but allows @receiver_pid
+	 * to call touch() on @newfd to complete the ownership transfer. until
+	 * touch() is called @newfd's lifetime follows the dup_to() caller's
+	 * lifecycle. once touch() is called, the dup_to() caller is no longer
+	 * allowed access to @newfd.
+	 */
+	void dup_to(out handle newfd, in handle oldfd, in Posix::id_t receiver_pid)
+		raises(Posix::Errno);
+	void touch(in handle newfd)
+		raises(Posix::Errno);
 };
 
 };
