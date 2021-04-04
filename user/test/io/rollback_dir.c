@@ -113,8 +113,6 @@ START_TEST(rollback_seekdir)
 	L4_Word_t ec = L4_ErrorCode();
 	if(!ok(L4_IpcSucceeded(tag), "seekdir send")) diag("ec=%lu", ec);
 
-	todo_start("breakage expected");
-
 	/* examine entrails. */
 	struct sneks_directory_dentry *dat = get_first_dentry(tal, bits, NULL);
 	skip_start(!ok(dat != NULL, "test dentry"), 1, "no test data") {
@@ -188,8 +186,6 @@ START_LOOP_TEST(rollback_getdents, iter, 0, 1)
 	L4_MsgTag_t tag = L4_Send_Timeout(bits->server, L4_TimePeriod(20 * 1000));
 	L4_Word_t ec = L4_ErrorCode();
 	if(!ok(L4_IpcSucceeded(tag), "getdents send")) diag("ec=%lu", ec);
-
-	todo_start("breakage expected");
 
 	/* examine entrails. */
 	struct sneks_directory_dentry *dat = get_first_dentry(tal, bits, NULL);

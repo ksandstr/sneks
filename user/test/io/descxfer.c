@@ -55,7 +55,7 @@ START_LOOP_TEST(transfer_ownership, iter, 0, 7)
 		fds[1] = -1;
 	}
 
-	todo_start("unimplemented");
+	if(use_pipe) todo_start("unimplemented");
 
 	L4_ThreadId_t parent = L4_MyGlobalId();
 	int sub = fork_subtest_start("second process") {
