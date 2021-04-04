@@ -201,6 +201,10 @@ struct lazy_mmap
 	 *
 	 * when backed by a file, the three reference a filesystem service, an
 	 * inode number, and a page offset within that file.
+	 * (TODO: actually "ino" is a file descriptor until the fs-vm-block IPC
+	 * chain stuff gets written. as such the descriptor isn't properly closed
+	 * when the map is removed, or duplicated when the map is divided such as
+	 * in munmap().)
 	 *
 	 * when anonymous, ->fd_serv is VM's sysid, ->ino is zero for private maps
 	 * and an anonymous mapping ID when the map is shared. offset is nonzero
@@ -1197,7 +1201,7 @@ static int reserve_mmap(
 static int vm_mmap(
 	pid_t target_pid, L4_Word_t *addr_ptr, L4_Word_t length,
 	int prot, int flags,
-	L4_Word_t fd_serv, L4_Word_t fd, off_t offset)
+	L4_Word_t fd_serv, int fd, off_t offset)
 {
 	assert(invariants());
 
@@ -1210,25 +1214,35 @@ static int vm_mmap(
 	if(target_pid == 0) target_pid = sender_pid;
 	if(target_pid > SNEKS_MAX_PID || target_pid == 0) return -EINVAL;
 
+	/* TODO: validate target_pid to be either userspace caller's PID, or that
+	 * the caller is a systask (and actual sender).
+	 */
 	struct vm_space *sp = ra_id2ptr(vm_space_ra, target_pid);
 	if(sp->kip_area.raw == 0) return -EINVAL;
 
 	struct lazy_mmap *mm = malloc(sizeof *mm);
 	if(mm == NULL) return -ENOMEM;
+	int n;
 	if((flags & MAP_ANONYMOUS) && (flags & MAP_SHARED)) {
 		/* (error if fd_serv != nil?) */
 		fd_serv = L4_MyGlobalId().raw;
 		fd = atomic_fetch_add(&next_anon_ino, 1);
 		offset = 0;
 	} else if((~flags & MAP_ANONYMOUS) && fd_serv != L4_nilthread.raw) {
-		/* TODO: validate fd_serv somehow */
+		/* touch-a ma spaghetti */
+		n = __io_touch((L4_ThreadId_t){ .raw = fd_serv }, fd);
+		if(n != 0) {
+			free(mm);
+			if(n > 0) n = -EIO;
+			goto end;
+		}
 	}
 	*mm = (struct lazy_mmap){
 		.flags = prot_to_l4_rights(prot) << 16 | (flags & ~MAP_FIXED),
 		.fd_serv.raw = fd_serv, .ino = fd, .offset = offset >> PAGE_BITS,
 	};
-	int n = reserve_mmap(mm, sp, *addr_ptr,
-		(length + PAGE_SIZE - 1) & ~PAGE_MASK, !!(flags & MAP_FIXED));
+	n = reserve_mmap(mm, sp, *addr_ptr, (length + PAGE_SIZE - 1) & ~PAGE_MASK,
+		!!(flags & MAP_FIXED));
 	if(n < 0) {
 		free(mm);
 		goto end;

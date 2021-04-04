@@ -488,9 +488,7 @@ static struct fd *get_fd_nosync(pid_t pid, int fd)
 {
 	assert(fd > 0);
 	struct fd *f = ra_id2ptr(fd_ra, fd);
-	if(likely(f->owner != NULL && f->owner->pid == pid)
-		|| (f->owner != NULL && pid >= SNEKS_MIN_SYSID && f->owner->pid >= SNEKS_MIN_SYSID))
-	{
+	if(likely(f->owner != NULL && f->owner->pid == pid)) {
 		/* @fd wasn't inherited thru fork. */
 		return unlikely(f->flags & IOD_SHADOW) ? NULL : f;
 	} else {

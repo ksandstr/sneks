@@ -28,6 +28,7 @@
 #include <sneks/msg.h>
 #include <sneks/rollback.h>
 #include <sneks/process.h>
+#include <sneks/api/io-defs.h>
 #include <sneks/api/vm-defs.h>
 #include <sneks/api/proc-defs.h>
 #include <sneks/sys/msg-defs.h>
@@ -612,6 +613,32 @@ static int uapi_get_systask_threads(
 #endif
 
 
+static int mmap_file_to(pid_t target_pid,
+	L4_Word_t *addr_p, L4_Word_t length, int prot, int flags,
+	FILE *file, off_t offset)
+{
+	L4_ThreadId_t fs = fserver_NP(file);
+
+	/* create a duplicated file handle */
+	int handle, n = __io_dup_to(fserver_NP(file),
+		&handle, fhandle_NP(file), pidof_NP(vm_tid));
+	if(n != 0) return n;
+
+	n = __vm_mmap(vm_tid, target_pid, addr_p, length, prot, flags,
+		fs.raw, handle, offset);
+	if(n != 0) {
+		int m = __io_close(fserver_NP(file), handle);
+		if(m != 0) {
+			printf("%s: IO::close of dup_to()'d handle failed, m=%d\n",
+				__func__, m);
+		}
+		return n;
+	}
+
+	return n;
+}
+
+
 static int map_elf_image(
 	int target_pid, const char *filename,
 	L4_Word_t *lo_p, L4_Word_t *hi_p, L4_Word_t *start_addr_p)
@@ -621,9 +648,6 @@ static int map_elf_image(
 
 	FILE *file = fopen(filename, "rb");
 	if(file == NULL) return -errno;
-
-	int handle = fhandle_NP(file);
-	L4_ThreadId_t fs = fserver_NP(file);
 
 	Elf32_Ehdr ehdr;
 	size_t n = fread(&ehdr, sizeof ehdr, 1, file);
@@ -657,12 +681,12 @@ static int map_elf_image(
 				n = -EINVAL;
 				goto end;
 			}
-			n = __vm_mmap(vm_tid, target_pid, &addr, ep.p_filesz,
+			n = mmap_file_to(target_pid, &addr, ep.p_filesz,
 				PROT_READ | PROT_WRITE | PROT_EXEC,
 				MAP_PRIVATE | MAP_FILE | MAP_FIXED,
-				fs.raw, handle, ep.p_offset);
+				file, ep.p_offset);
 			if(n != 0) {
-				printf("vm_mmap (file) failed, n=%d\n", n);
+				printf("%s: mmap_file_to() failed, n=%d\n", __func__, n);
 				goto end;
 			}
 		}
@@ -681,10 +705,7 @@ static int map_elf_image(
 	}
 
 end:
-	/* FIXME: arrange for VM to dup the handle, then fclose() the file
-	 * properly. "do copy that floppy," as it previously said.
-	 */
-	//fclose(file);
+	fclose(file);
 	return -errno;
 }
 

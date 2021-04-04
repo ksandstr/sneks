@@ -9,6 +9,7 @@
 #include <muidl.idl>
 #include <l4x2.idl>
 #include <posixlike.idl>
+#include <api/io.idl>
 
 
 module Sneks {
@@ -27,7 +28,8 @@ interface VM
 	void mmap(
 		in Posix::id_t target_pid,
 		inout word addr, in word length, in long prot, in long flags,
-		in L4X2::ThreadId fd_serv, in word fd, in Posix::off_t offset)
+		in L4X2::ThreadId fd_serv, in Sneks::IO::handle fd,
+		in Posix::off_t offset)
 			raises(Posix::Errno);
 
 	/* implied @target_pid = getpid(). works as POSIX munmap(2). */
