@@ -868,8 +868,10 @@ int epoll_wait(int epfd,
 		if(L4_Label(tag) == 1) L4_StoreMR(1, &err);
 	} while(err == EAGAIN);
 	__forbid_recv_interrupt();
-	if(err != 0) return -(int)err;
-	else {
+	if(err != 0) {
+		errno = err;
+		return -1;
+	} else {
 		L4_Word_t count; L4_StoreMR(1, &count);
 		return count;
 	}
