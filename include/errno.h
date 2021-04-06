@@ -24,6 +24,7 @@
 #define ENFILE	23	/* file table overflow (system) */
 #define EMFILE	24	/* too many open files (process) */
 #define ENOSPC	28	/* no space left on device */
+#define ESPIPE	29	/* 's pipe, socket, or fifo (illegal seek) */
 #define EROFS	30	/* read-only file system */
 #define EPIPE	32	/* broken pipe */
 #define EDEADLK 35	/* resource deadlock would occur */

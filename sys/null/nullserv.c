@@ -29,7 +29,7 @@ static int null_get_status(chrfile_t *h)
 }
 
 
-static int null_read(chrfile_t *h, uint8_t *buf, unsigned count)
+static int null_read(chrfile_t *h, uint8_t *buf, unsigned count, off_t offset)
 {
 	switch(h->dev) {
 		case DEV_NULL: return 0;
@@ -42,7 +42,7 @@ static int null_read(chrfile_t *h, uint8_t *buf, unsigned count)
 }
 
 
-static int null_write(chrfile_t *h, const uint8_t *buf, unsigned buf_len)
+static int null_write(chrfile_t *h, const uint8_t *buf, unsigned buf_len, off_t offset)
 {
 	switch(h->dev) {
 		case DEV_FULL: return -ENOSPC;

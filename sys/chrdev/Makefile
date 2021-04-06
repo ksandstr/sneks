@@ -19,9 +19,9 @@ distclean:
 	@rm -rf .deps
 
 
-libsneks-chrdev.a: $(LIB_OBJS)
+libsneks-chrdev.a: $(LIB_OBJS) $(CFGDIR)/sys/io/libsneks-io.a
 	@echo "  AR $@"
-	@ar cr $@ $^
+	@ar crT $@ $^
 	@echo "  RANLIB $@"
 	@ranlib $@
 

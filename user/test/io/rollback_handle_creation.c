@@ -116,8 +116,6 @@ START_LOOP_TEST(rollback_handle_creation,
 	n = (*handle_ctors[ctor].fn)(&refs, false);
 	if(!ok(n == 0, "ctor (2nd ref)")) diag("n=%d", n);
 
-	if(send_only) todo_start("breakage expected");
-
 	skip_start(!ok1(refs.size > 0), 4, "no reference handles") {
 		/* hunt for handles in a reasonable range around the reference
 		 * handles.
@@ -177,7 +175,6 @@ START_LOOP_TEST(rollback_handle_creation,
 		fail = !ok1(n_unexpected == 0) || fail;
 		if(fail) diag("n_closed=%d, n_unexpected=%d", n_closed, n_unexpected);
 	} skip_end;
-	todo_end();
 
 	/* clean up. */
 	int *it;

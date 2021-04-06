@@ -121,8 +121,9 @@ static int pipe_get_status(chrfile_t *f)
 }
 
 
-static int pipe_write(chrfile_t *f, const uint8_t *buf, unsigned buf_len)
+static int pipe_write(chrfile_t *f, const uint8_t *buf, unsigned buf_len, off_t offset)
 {
+	if(offset >= 0) return -ESPIPE;
 	if(f->head->readf == NULL) return -EPIPE;	/* bork'd */
 	if(buf_len == 0) return 0;
 	membuf_prepare_space(&f->head->buf, buf_len);
@@ -131,14 +132,18 @@ static int pipe_write(chrfile_t *f, const uint8_t *buf, unsigned buf_len)
 
 	size_t written = min(buf_len, membuf_num_space(&f->head->buf));
 	memcpy(membuf_space(&f->head->buf), buf, written);
-	if(was_empty) chrdev_notify(f->head->readf, EPOLLIN);
+	if(was_empty) {
+		/* TODO: see comment in pipe_read(). */
+		chrdev_notify(f->head->readf, EPOLLIN);
+	}
 
 	return written;
 }
 
 
-static int pipe_read(chrfile_t *f, uint8_t *buf, unsigned count)
+static int pipe_read(chrfile_t *f, uint8_t *buf, unsigned count, off_t offset)
 {
+	if(offset >= 0) return -ESPIPE;
 	if(IS_EMPTY(f->head)) {
 		if(f->head->writef != NULL) return -EWOULDBLOCK;
 		else {
@@ -154,6 +159,10 @@ static int pipe_read(chrfile_t *f, uint8_t *buf, unsigned count)
 	size_t got = min_t(size_t, count, membuf_num_elems(&f->head->buf));
 	memcpy(buf, membuf_elems(&f->head->buf), got);
 	if(f->head->writef != NULL && got > 0 && was_full) {
+		/* TODO: this sends spurious notifications when the read-reply fails.
+		 * that should be hit in a test case, and this part moved into
+		 * pipe_confirm() and replaced with a call to io_set_fast_confirm().
+		 */
 		chrdev_notify(f->head->writef, EPOLLOUT);
 	}
 
@@ -161,8 +170,10 @@ static int pipe_read(chrfile_t *f, uint8_t *buf, unsigned count)
 }
 
 
-static void pipe_confirm(chrfile_t *f, unsigned count, bool writing)
+static void pipe_confirm(chrfile_t *f, unsigned count, off_t offset, bool writing)
 {
+	assert(offset < 0);
+
 	/* for pipes we'll use @writing to double-check that things are coming
 	 * down the right way, even as there's no reason to expect they wouldn't.
 	 * bidirectional socket servers and the like should just trust the
@@ -185,7 +196,7 @@ static void pipe_confirm(chrfile_t *f, unsigned count, bool writing)
 }
 
 
-static int pipe_ioctl(chrfile_t *f, unsigned long request, va_list args)
+static int pipe_ioctl(chrfile_t *f, long request, va_list args)
 {
 	/* fuck you, i won't do what you tell me.
 	 *
@@ -198,6 +209,7 @@ static int pipe_ioctl(chrfile_t *f, unsigned long request, va_list args)
 
 int main(int argc, char *argv[])
 {
+	io_fast_confirm_flags(IO_CONFIRM_CLOSE);
 	chrdev_get_status_func(&pipe_get_status);
 	chrdev_read_func(&pipe_read);
 	chrdev_write_func(&pipe_write);

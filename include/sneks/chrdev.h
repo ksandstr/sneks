@@ -2,26 +2,22 @@
 /* interface of libsneks-chrdev.a .
  *
  * the library calls its client's designated callback functions to implement
- * behaviour of character device files, while itself providing common
- * functionality such as file/handle separation, client and lifecycle
- * handling, and poll notifications.
+ * behaviour of character device files while relying on sys/io for basic IO
+ * handle functionality.
  */
 
 #ifndef _SNEKS_CHRDEV_H
 #define _SNEKS_CHRDEV_H
 
 #include <stddef.h>
-#include <stdarg.h>
-#include <stdint.h>
-#include <stdbool.h>
-#include <sys/types.h>
-#include <sys/epoll.h>
+
+#include <sneks/io.h>
 
 
 /* this will be defined by the client, its size specified in chrdev_run(), and
  * used to prevent void pointer fuckage in the callback prototypes.
  */
-struct chrdev_file_impl;
+#define chrdev_file_impl io_file_impl
 typedef struct chrdev_file_impl chrfile_t;
 
 
@@ -29,7 +25,7 @@ typedef struct chrdev_file_impl chrfile_t;
  * wrt which @mask is read by userspace. the library sends wakeups, poll
  * replies, or nothing at all accordingly.
  */
-extern void chrdev_notify(chrfile_t *file, int mask);
+#define chrdev_notify(file, mask) io_notify((file), (mask))
 
 /* callback control. these take effect when the next event occurs after the
  * control function has returned.
@@ -38,25 +34,18 @@ extern void chrdev_notify(chrfile_t *file, int mask);
  * full, respectively. wakeups are performed through chrdev_notify() at buffer
  * state change, and the library handles O_NONBLOCK, polling, and blocking
  * behind the scenes.
- *
- * note on typing: where POSIX read(2) and write(2) take a size_t count and
- * return ssize_t, the underlying microkernel mechanism is limited to
- * significantly shorter block transfers than "half the address space", so the
- * native C types are used here instead. also, POSIX ioctl's @request is an
- * int but GNU/Linux specifies unsigned long; and there doesn't seem to be an
- * use case for adding and subtracting these so we'll go with the latter.
  */
-extern void chrdev_get_status_func(int (*fn)(chrfile_t *file));
-extern void chrdev_dead_client_func(int (*fn)(pid_t pid));
-extern void chrdev_read_func(
-	int (*fn)(chrfile_t *file, uint8_t *buf, unsigned count));
-extern void chrdev_write_func(
-	int (*fn)(chrfile_t *file, const uint8_t *buf, unsigned count));
-extern void chrdev_confirm_func(
-	void (*fn)(chrfile_t *file, unsigned count, bool));
-extern void chrdev_close_func(int (*fn)(chrfile_t *file));
-extern void chrdev_ioctl_func(
-	int (*fn)(chrfile_t *file, unsigned long request, va_list args));
+#define chrdev_get_status_func(fn) io_get_status_func((fn))
+#define chrdev_read_func(fn) io_read_func((fn))
+#define chrdev_write_func(fn) io_write_func((fn))
+#define chrdev_confirm_func(fn) io_confirm_func((fn))
+extern void chrdev_close_func(int (*fn)(chrfile_t *));
+#define chrdev_ioctl_func(fn) io_ioctl_func((fn))
+
+/* TODO: wrap io_fast_confirm_flags(), io_set_fast_confirm(). for the time
+ * being implementors can use those directly.
+ */
+
 
 /* maps to Sneks::Pipe/pipe, for creation of a pipe buffer and its two
  * endpoints associated with the same client process.
