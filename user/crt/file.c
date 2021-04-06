@@ -435,7 +435,7 @@ int fcntl(int fd, int cmd, ...)
 		case F_SETFL: {
 			int val = va_arg(al, int);
 			va_end(al);
-			int foo, n = __io_set_flags(b->server, &foo, b->handle, val, val);
+			int foo, n = __io_set_flags(b->server, &foo, b->handle, val, ~val);
 			return NTOERR(n);
 		}
 	}
