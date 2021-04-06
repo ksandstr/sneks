@@ -126,12 +126,13 @@ START_LOOP_TEST(epoll_from_pipe, iter, 0, 3)
 
 	int child = fork_subtest_start("data sender") {
 		close(fds[0]);
-		plan(1);
+		plan(2);
 		if(act_send) usleep(10 * 1000);
 		n = write(fds[1], &(char){ 'x' }, 1);
 		ok(n == 1, "write");
 		usleep(15 * 1000);
-		close(fds[1]);
+		n = close(fds[1]);
+		ok(n == 0, "close");
 	} fork_subtest_end;
 	close(fds[1]);
 
@@ -150,9 +151,10 @@ START_LOOP_TEST(epoll_from_pipe, iter, 0, 3)
 	do {
 		n = epoll_wait(epfd, evs, ARRAY_SIZE(evs), 50);
 	} while(n < 0 && errno == EINTR);
-	if(!ok(n == 1, "epoll_wait")) diag("n=%d, errno=%d", n, errno);
-	ok1(evs[0].events & EPOLLIN);
-	ok1(evs[0].data.u32 == 666);	/* ave satanas */
+	skip_start(!ok(n == 1, "epoll_wait (in)"), 2, "n=%d, errno=%d", n, errno) {
+		ok1(evs[0].events & EPOLLIN);
+		ok1(evs[0].data.u32 == 666);	/* ave satanas */
+	} skip_end;
 
 	char buf;
 	n = read(fds[0], &buf, 1);
@@ -166,9 +168,10 @@ START_LOOP_TEST(epoll_from_pipe, iter, 0, 3)
 	do {
 		n = epoll_wait(epfd, evs, ARRAY_SIZE(evs), 50);
 	} while(n < 0 && errno == EINTR);
-	if(!ok(n == 1, "epoll_wait")) diag("n=%d, errno=%d", n, errno);
-	ok1(evs[0].events & EPOLLHUP);
-	ok1(evs[0].data.u32 == 666);	/* vicarius filii dei */
+	skip_start(!ok(n == 1, "epoll_wait (hup)"), 2, "n=%d, errno=%d", n, errno) {
+		ok1(evs[0].events & EPOLLHUP);
+		ok1(evs[0].data.u32 == 666);	/* vicarivs filii dei */
+	} skip_end;
 
 	fork_subtest_ok1(child);
 
