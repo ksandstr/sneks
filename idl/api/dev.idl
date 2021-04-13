@@ -13,7 +13,7 @@ module Sneks {
 /* opening of resolved device nodes. ioctl forms common to both character
  * and block devices.
  */
-[StubPrefix(__dev), IfaceLabel(0xe80a)]
+[StubPrefix(__dev), IfaceLabel(0xe80d)]
 interface DeviceNode
 {
 	[Label(0x0002)]	/* TODO: remove once muidl gets proper propagation */
@@ -39,12 +39,15 @@ interface DeviceNode
 };
 
 
-[StubPrefix(__cdev), IfaceLabel(0xe80b)]
+[StubPrefix(__cdev), IfaceLabel(0xe80c)]
 interface CharacterDevice
 {
 	/* chardev-specific ioctl forms are in the 0x2nnn range. */
 	//[Label(0x2000)]
 };
+
+
+/* IfaceLabel(0xe80b) reserved for "b"lock devices */
 
 };
 

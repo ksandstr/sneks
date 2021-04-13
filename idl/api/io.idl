@@ -59,6 +59,7 @@ interface IO
 		raises(Posix::Errno);
 
 	/* dup2(2) analogue */
+	[Label(0x1234)]	/* NOTE: required by tests while muidl provides no defs */
 	void dup(out handle newfd, in handle oldfd)
 		raises(Posix::Errno);
 
@@ -70,6 +71,7 @@ interface IO
 	 * lifecycle. once touch() is called, the dup_to() caller is no longer
 	 * allowed access to @newfd.
 	 */
+	[Label(0x1235)]	/* NOTE: required by tests, muidl doesn't provide */
 	void dup_to(out handle newfd, in handle oldfd, in Posix::id_t receiver_pid)
 		raises(Posix::Errno);
 	void touch(in handle newfd)

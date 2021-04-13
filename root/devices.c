@@ -78,11 +78,11 @@ static int resolve_device(char *sbuf, size_t sbuflen, uint32_t object)
 }
 
 
-static bool propagate_open(
+static bool propagate_devnode_open(
 	bool *live_p, struct dev_entry *cand,
 	uint32_t object, L4_Word_t cookie, int flags)
 {
-	L4_MsgTag_t tag = { .X.label = 0xe80a, .X.u = 4 };
+	L4_MsgTag_t tag = { .X.label = 0xe80d, .X.u = 4 };
 	L4_Set_Propagation(&tag);
 	L4_Set_VirtualSender(muidl_get_sender());
 	L4_LoadMR(0, tag.raw);
@@ -145,7 +145,7 @@ static int devices_open(int *handle_p,
 		if(cand->type == key.type && cand->minor == key.minor
 			&& cand->major == key.major)
 		{
-			if(propagate_open(&live, cand, object, cookie, flags)) {
+			if(propagate_devnode_open(&live, cand, object, cookie, flags)) {
 				muidl_raise_no_reply();
 				return 0;
 			}
@@ -170,7 +170,7 @@ static int devices_open(int *handle_p,
 		cand != NULL; cand = htable_nextval(&devname_ht, &it, name_hash))
 	{
 		if(!streq(cand->name, spawnpath)) continue;
-		if(propagate_open(&live, cand, object, cookie, flags)) {
+		if(propagate_devnode_open(&live, cand, object, cookie, flags)) {
 			muidl_raise_no_reply();
 			return 0;
 		}
@@ -210,7 +210,7 @@ static int devices_open(int *handle_p,
 		free(ent);
 		return -ENOMEM;
 	}
-	if(propagate_open(&live, ent, object, cookie, flags)) {
+	if(propagate_devnode_open(&live, ent, object, cookie, flags)) {
 		muidl_raise_no_reply();
 		return 0;
 	} else {

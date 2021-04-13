@@ -19,6 +19,7 @@ interface File
 	const long SEEK_CUR = 1;
 	const long SEEK_END = 2;
 
+	[Label(0x0001)]	/* NOTE: remove when muidl provides label #defs */
 	void open(out IO::handle fd,
 		in Path::object object, in Path::cookie cookie, in long flags)
 		raises(Posix::Errno, muidl::NoReply);

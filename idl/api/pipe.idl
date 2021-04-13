@@ -13,6 +13,7 @@ module Sneks {
 interface Pipe
 {
 	/* @flags is undefined and must be 0. */
+	[Label(1)]	/* NOTE: required until muidl makes #defs for sublabels */
 	void pipe(out L4X2::word readside, out L4X2::word writeside, in long flags)
 		raises(Posix::Errno);
 };
