@@ -13,7 +13,7 @@ SYS_IDL_DEFS:=$(patsubst %.idl,$(CFGDIR)/include/sneks/sys/%-defs.h,$(SYS_IDL))
 LIB_SRC:=$(wildcard *.c)
 LIB_OBJS:=crt0.o $(foreach o,$(LIBSNEKS_OBJS),$(CFGDIR)/lib/$(o)) \
 	$(IDL_OBJS) $(LIB_SRC:.c=.o) \
-	mung-rangealloc.o mung-slab.o mung-memdesc.o \
+	mung-rangealloc.o mung-slab.o mung-memdesc.o mung-hook.o \
 	lfht-percpu.o lfht-epoch.o lfht-nbsl.o
 
 CFLAGS:=$(subst -D__KERNEL__,,$(CFLAGS)) -mstackrealign
