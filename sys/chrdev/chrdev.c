@@ -2,7 +2,6 @@
 #define CHRDEVIMPL_IMPL_SOURCE
 #undef BUILD_SELFTEST
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <assert.h>
@@ -16,6 +15,7 @@
 
 #include <sneks/process.h>
 #include <sneks/rollback.h>
+#include <sneks/systask.h>
 #include <sneks/chrdev.h>
 
 #include "muidl.h"
@@ -36,10 +36,7 @@ static void chrdev_rollback(L4_Word_t x, struct open_rollback *ctx)
 	for(int i=0; i < ARRAY_SIZE(ctx->files); i++) {
 		if(ctx->files[i] != NULL) {
 			int n = (*chrdev_callbacks.close)(ctx->files[i]);
-			if(n != 0) {
-				fprintf(stderr, "%s: close callback returned n=%d\n",
-					__func__, n);
-			}
+			if(n != 0) log_err("close callback returned n=%d", n);
 			iof_undo_new(ctx->files[i]);
 		}
 	}
@@ -52,7 +49,7 @@ static void add_rollback(chrfile_t *a, chrfile_t *b)
 	if(ctx == NULL) {
 		ctx = malloc(sizeof *ctx);
 		if(ctx == NULL) {
-			fprintf(stderr, "chrdev: can't allocate <struct open_rollback>\n");
+			log_crit("can't allocate <struct open_rollback>");
 			abort();
 		}
 		tss_set(open_rollback_key, ctx);
@@ -153,7 +150,7 @@ int chrdev_run(size_t iof_size, int argc, char *argv[])
 {
 	int st = tss_create(&open_rollback_key, &free);
 	if(st != thrd_success) {
-		fprintf(stderr, "%s: tss_create failed, st=%d\n", __func__, st);
+		log_crit("tss_create failed, st=%d", st);
 		return EXIT_FAILURE;
 	}
 

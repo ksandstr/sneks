@@ -36,7 +36,7 @@ int add_blocker(struct fd *f, L4_ThreadId_t tid, bool writing)
 	}
 
 	/* TODO */
-	fprintf(stderr, "%s: blocker_hash not implemented\n", my_name);
+	log_crit("blocker_hash not implemented");
 	abort();
 	return 0;
 }
@@ -87,7 +87,7 @@ void io_impl_get_status(
 	sync_confirm();
 
 	if(get_status_callback == NULL) {
-		fprintf(stderr, "%s: get_status callback isn't set?\n", my_name);
+		log_crit("get_status callback isn't set");
 		abort();
 	}
 
@@ -129,14 +129,14 @@ static void send_poll_event(struct fd *f, int events)
 	if(L4_IpcFailed(tag)) {
 		L4_Word_t ec = L4_ErrorCode();
 		if(ec != 2) {
-			printf("%s: weird ec=%lu\n", my_name, ec);
+			log_err("unexpected ec=%lu", ec);
 			return;
 		}
 		/* receiver not ready; force sync thru SIGIO. */
 		int n = __proc_kill(__uapi_tid, f->owner->pid, SIGIO);
 		if(n != 0) {
-			printf("%s: Sneks::Proc/kill [SIGIO] to pid=%d failed, n=%d\n",
-				my_name, f->owner->pid, n);
+			log_err("Sneks::Proc/kill [SIGIO] to pid=%d failed, n=%d",
+				f->owner->pid, n);
 			/* ... and do nothing.
 			 * TODO: do something?
 			 */

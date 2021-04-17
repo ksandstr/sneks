@@ -2,7 +2,6 @@
 #define SNEKS_IO_IMPL_SOURCE	/* for muidl_raise_no_reply() */
 #undef BUILD_SELFTEST
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -118,7 +117,6 @@ static struct lc_event lce_queue[NUM_LC_EVENTS];
 /* its control word. 0..9 = read pos, 10..19 = write pos, 20 = overflow */
 static _Atomic uint32_t lce_ctrl;
 
-char *my_name;
 pid_t my_pid;
 struct rangealloc *fd_ra;
 
@@ -316,8 +314,7 @@ static struct client *get_client(pid_t pid, bool create)
 				lifecycle_msg = sysmsg_listen(MSGB_PROCESS_LIFECYCLE,
 					&lifecycle_handler_fn, NULL);
 				if(lifecycle_msg < 0) {
-					fprintf(stderr, "%s: can't listen to process lifecycle, n=%d\n",
-						my_name, lifecycle_msg);
+					log_err("can't listen to process lifecycle, n=%d", lifecycle_msg);
 					abort();
 				}
 			}
@@ -402,8 +399,7 @@ static int fork_client(struct client *parent, pid_t child_pid)
 	assert(invariants());
 	size_t hash = int_hash(child_pid);
 	if(htable_get(&client_hash, hash, &cmp_client_to_pid, &child_pid) != NULL) {
-		fprintf(stderr, "%s: can't fork p=%d because c=%d exists!\n",
-			my_name, parent->pid, child_pid);
+		log_err("can't fork p=%d because c=%d exists!", parent->pid, child_pid);
 		return -EEXIST;
 	}
 
@@ -438,7 +434,7 @@ static int fork_client(struct client *parent, pid_t child_pid)
 		assert(ra_ptr2id(fd_ra, *fd_it) <= max_fd);
 		int newfd = fork_handle(*fd_it, child);
 		if(newfd < 0) {
-			fprintf(stderr, "non-shadowed fork failure\n");
+			log_crit("non-shadowed fork failure");
 			/* TODO: don't shit your pants! */
 			abort();
 		}
@@ -468,7 +464,7 @@ static int fork_client(struct client *parent, pid_t child_pid)
 
 		int newfd = fork_handle(f, child);
 		if(newfd < 0) {
-			fprintf(stderr, "shadowed fork failure\n");
+			log_crit("shadowed fork failure");
 			/* TODO: fail to soil thyself, barbarian */
 			abort();
 		}
@@ -655,8 +651,7 @@ static void io_confirm(L4_Word_t param, struct confirm_data *dat)
 {
 	/* this should never happen. if it does regardless, scream and fail. */
 	if(callbacks.confirm == NULL) {
-		fprintf(stderr, "%s: io_confirm_func() reset while in flight??\n"
-			"this is serious; program aborting.\n", my_name);
+		log_crit("callbacks.confirm reset between wr_confirm and callback");
 		abort();
 	}
 
@@ -682,7 +677,7 @@ static void wr_confirm(pid_t pid, bool writing,
 	if(unlikely(dat == NULL)) {
 		dat = malloc(sizeof *dat);
 		if(dat == NULL) {
-			fprintf(stderr, "%s: can't allocate confirm_data??\n", my_name);
+			log_crit("can't allocate confirm_data");
 			abort();
 		}
 		tss_set(confirm_tss, dat);
@@ -705,7 +700,7 @@ int _nopoll_add_blocker(struct fd *f, L4_ThreadId_t tid, bool writing)
 		 * several threads sleeping on a single character device file, i.e.
 		 * move blocker_hash from pollimpl.c back to io.c .
 		 */
-		fprintf(stderr, "%s: overwriting existing blocker!\n", my_name);
+		log_err("overwriting existing blocker!");
 	}
 	f->owner->blocker = tid;
 	if(writing) f->owner->flags |= CF_WRITE_BLOCKED;
@@ -793,8 +788,8 @@ static void late_close_fd(L4_Word_t param, struct fd *f)
 
 	int n = fd_dtor(f, true);
 	if(n != 0) {
-		fprintf(stderr, "%s: late close of fd=%p returned n=%d\n",
-			my_name, f, n);
+		log_err("late close of fd=%p returned n=%d\n", f, n);
+		/* not a lot we can do here besides */
 	}
 
 	assert(invariants());
@@ -942,8 +937,7 @@ static noreturn int poke_fn(void *param_ptr)
 		L4_MsgTag_t tag = L4_WaitLocal_Timeout(L4_Never, &sender);
 		for(;;) {
 			if(L4_IpcFailed(tag)) {
-				fprintf(stderr, "%s:%s: ipc failed, ec=%lu\n",
-					my_name, __func__, L4_ErrorCode());
+				log_err("ipc failed, ec=%lu", L4_ErrorCode());
 				break;
 			}
 			L4_ThreadId_t dest; L4_StoreMR(1, &dest.raw);
@@ -963,7 +957,7 @@ static void spawn_poke_thrd(void)
 {
 	int n = thrd_create(&poke_thrd, &poke_fn, NULL);
 	if(n != thrd_success) {
-		printf("%s: can't create poke thread, n=%d\n", my_name, n);
+		log_crit("can't create poke thread, n=%d", n);
 		abort();
 	}
 
@@ -977,8 +971,7 @@ static void spawn_poke_thrd(void)
 	L4_LoadMR(2, 0xbe7a);
 	L4_MsgTag_t tag = L4_Lcall(thrd_to_tid(poke_thrd));
 	if(L4_IpcFailed(tag)) {
-		printf("%s: can't sync with poke thread, ec=%lu\n",
-			my_name, L4_ErrorCode());
+		log_crit("can't sync with poke thread, ec=%lu", L4_ErrorCode());
 		abort();
 	}
 }
@@ -993,7 +986,7 @@ static void lifecycle_sync(void)
 		 * so forth for manual synchronization when lifecycle events were
 		 * lost.
 		 */
-		fprintf(stderr, "%s: lost lifecycle events!\n", my_name);
+		log_err("lost lifecycle events!");
 		abort();
 	}
 	if(likely(ctrl >> 10 == (ctrl & 0x3ff))) {
@@ -1028,7 +1021,7 @@ static void lifecycle_sync(void)
 				sysmsg_rm_filter(lifecycle_msg, &(L4_Word_t){ p }, 1);
 				break;
 			default:
-				printf("%s: weird lifecycle tag=%d\n", my_name, cur->tag);
+				log_info("weird lifecycle tag=%d", cur->tag);
 		}
 	}
 
@@ -1076,7 +1069,7 @@ static bool lifecycle_handler_fn(
 			poke = true;
 			break;
 		default:
-			printf("%s: unexpected lifecycle tag=%#x\n", my_name, ev->tag);
+			log_info("unexpected lifecycle tag=%#x", ev->tag);
 	}
 
 	uint32_t newctrl;
@@ -1092,8 +1085,7 @@ static bool lifecycle_handler_fn(
 		L4_LoadMR(2, 0xbaab);
 		L4_MsgTag_t tag = L4_Reply(thrd_to_tid(poke_thrd));
 		if(L4_IpcFailed(tag) && L4_ErrorCode() != 2) {
-			fprintf(stderr, "%s: failed lifecycle poke, ec=%lu\n",
-				my_name, L4_ErrorCode());
+			log_err("failed lifecycle poke, ec=%lu", L4_ErrorCode());
 			/* causes delayed exit processing, i.e. SIGPIPE etc. are only
 			 * raised in response to something else forcing the event queue.
 			 *
@@ -1129,6 +1121,18 @@ COLD void io_fast_confirm_flags(int flags) {
 }
 
 
+static void prepend_log_string(struct hook *h,
+	void *strptr_ptr, uintptr_t level, const char *my_name)
+{
+	char **spp = strptr_ptr, *new;
+	int len = asprintf(&new, "%s:%s", my_name, *spp);
+	if(len > 0) {
+		free(*spp);
+		*spp = new;
+	}
+}
+
+
 int io_run(size_t iof_size, int argc, char *argv[])
 {
 	impl_size = iof_size;
@@ -1144,11 +1148,14 @@ int io_run(size_t iof_size, int argc, char *argv[])
 	spawn_poke_thrd();
 	htable_init(&client_hash, &rehash_client_by_pid, NULL);
 	htable_init(&transfer_hash, &rehash_transfer, NULL);
+
+	char *my_name;
 	asprintf(&my_name, "sys/io[%s:%d]", argc > 0 ? argv[0] : "", my_pid);
+	hook_push_back(&log_hook, &prepend_log_string, my_name);
 
 	int n = tss_create(&confirm_tss, &free);
 	if(n != thrd_success) {
-		fprintf(stderr, "%s: tss_create() failed\n", my_name);
+		log_crit("tss_create() failed");
 		return EXIT_FAILURE;
 	}
 
@@ -1171,8 +1178,7 @@ int io_run(size_t iof_size, int argc, char *argv[])
 			sync_confirm();		/* a previous reply succeeded. */
 			lifecycle_sync();
 		} else {
-			printf("%s: dispatch status %#lx (last tag %#lx)\n",
-				my_name, status, tag.raw);
+			log_info("dispatch status %#lx (last tag %#lx)", status, tag.raw);
 			L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1, .X.label = 1 }.raw);
 			L4_LoadMR(1, ENOSYS);
 			L4_Reply(sender);

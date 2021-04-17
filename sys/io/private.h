@@ -74,7 +74,6 @@ struct fd {
 };
 
 
-extern char *my_name;
 extern pid_t my_pid;
 extern struct rangealloc *fd_ra;
 

@@ -6,7 +6,6 @@
  *   - O_ASYNC (in sys/chrdev)
  */
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -20,6 +19,7 @@
 #include <ccan/minmax/minmax.h>
 #include <ccan/membuf/membuf.h>
 
+#include <sneks/systask.h>
 #include <sneks/chrdev.h>
 
 
@@ -185,7 +185,8 @@ static void pipe_confirm(chrfile_t *f, unsigned count, off_t offset, bool writin
 		 * pops errors, seeing as we've come to an indeterminate state. but
 		 * screw that, the framework's idea is always correct enough.
 		 */
-		fprintf(stderr, "%s: @writing doesn't match PHF_WRITER‽\n", __func__);
+		log_crit("@writing doesn't match PHF_WRITER");
+		abort();
 	}
 
 	if(f->flags & PHF_WRITER) {

@@ -1,7 +1,6 @@
 
 #define SQUASHFSIMPL_IMPL_SOURCE
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
@@ -32,6 +31,7 @@
 #include <sneks/lz4.h>
 #include <sneks/bitops.h>
 #include <sneks/process.h>
+#include <sneks/systask.h>
 #include <sneks/devcookie.h>
 #include <sneks/rollback.h>
 #include <sneks/io.h>
@@ -256,7 +256,8 @@ static int read_block(
 		n = LZ4_decompress_safe_partial(fs_image + pos, output,
 			sz, bufmax, bufmax);
 		if(n < 0) {
-			printf("LZ4 decompression failed, n=%d\n", n);
+			/* FIXME: return an error code and fail the caller */
+			log_crit("LZ4 decompression failed, n=%d", n);
 			abort();
 		}
 	} else {
@@ -363,7 +364,7 @@ static struct inode *read_inode(unsigned long ino)
 		squashfs_i(nod)->rest_start = block;
 		squashfs_i(nod)->offset = offset;
 	} else {
-		printf("fs.squashfs: unknown inode type %d\n", (int)base->inode_type);
+		log_err("unknown inode type %d", (int)base->inode_type);
 		free(nod);
 		return NULL;	/* TODO: -EINVAL */
 	}
@@ -638,7 +639,7 @@ static int squashfs_resolve(
 				return -ENOENT;
 			}
 #if 0
-			printf("%s: found device node `%s': %c-%u-%u\n", __func__,
+			log_info("found device node `%s': %c-%u-%u",
 				dev->name, dev->is_chr ? 'c' : 'b', dev->major, dev->minor);
 #endif
 			server = dev_tid;
@@ -798,7 +799,7 @@ static int64_t seek_block_list(uint64_t *block, int *offset, int target)
 		int blocks = min_t(int, target, PAGE_SIZE / 4);
 		int n = read_metadata(lens, &metablk, block, offset, blocks * 4);
 		if(n != blocks * 4) {
-			printf("%s: can't read metadata, n=%d\n", __func__, n);
+			log_err("can't read metadata, n=%d", n);
 			if(n > 0) n = -EIO;
 			res = n;
 			goto end;
@@ -831,7 +832,7 @@ static ssize_t read_from_inode(
 	struct squashfs_reg_inode *reg = &squashfs_i(nod)->X.reg;
 	if(unlikely(reg->fragment != SQUASHFS_INVALID_FRAG)) {
 		/* TODO: handle fragments, one day */
-		printf("fs.squashfs: no fragment support\n");
+		log_err("no fragment support");
 		return -EIO;
 	}
 
@@ -1066,11 +1067,11 @@ static unsigned mount_squashfs_image(void *start, size_t sz)
 	fs_super = start + SQUASHFS_START;
 	fs_block_size_log2 = size_to_shift(fs_super->block_size);
 	if(1 << fs_block_size_log2 != fs_super->block_size) {
-		printf("fs.squashfs: block size is not power of two?\n");
+		log_err("block size is not power of two?");
 		return EINVAL;
 	}
 	if(memcmp(&fs_super->s_magic, "hsqs", 4) != 0) {
-		printf("invalid squashfs superblock magic number %#08x (BE)\n",
+		log_err("invalid squashfs superblock magic number %#08x (BE)",
 			(unsigned)BE32_TO_CPU(fs_super->s_magic));
 		return EINVAL;
 	}
@@ -1101,7 +1102,7 @@ static unsigned mount_squashfs_image(void *start, size_t sz)
 		case LZ4_COMPRESSION:
 			break;
 		default:
-			printf("can't handle compression mode %d (%s)\n",
+			log_err("can't handle compression mode %d (%s)",
 				fs_super->compression, c_mode);
 			return EINVAL;
 	}
@@ -1154,7 +1155,7 @@ static void parse_device_node(char *line, int length)
 	return;
 
 malformed:
-	printf("fs.squashfs: malformed device-nodes entry `%s'\n", line);
+	log_crit("malformed device-nodes entry `%s'", line);
 	abort();
 }
 
@@ -1168,7 +1169,7 @@ static void read_device_nodes(unsigned long ino)
 	do {
 		n = read_from_inode(nod, buf + pos, sizeof buf - pos - 1, done);
 		if(n < 0) {
-			printf("fs.squashfs: %s: read error n=%d\n", __func__, n);
+			log_crit("read error n=%d", n);
 			abort();
 		}
 		done += n;
@@ -1189,7 +1190,7 @@ static void read_device_nodes(unsigned long ino)
 			pos -= len + 1;
 		}
 	} while(n > 0 || pos > 0);
-	printf("%s: have %d device nodes\n", __func__, (int)htable_count(&device_nodes));
+	log_info("have %d device nodes", (int)htable_count(&device_nodes));
 }
 
 
@@ -1264,12 +1265,12 @@ int main(int argc, char *argv[])
 {
 	opt_register_table(opts, NULL);
 	if(!opt_parse(&argc, argv, &ignore_opt_error)) {
-		printf("fs.squashfs: option parsing failed!\n");
+		log_crit("option parsing failed");
 		return EXIT_FAILURE;
 	}
 
 	if(L4_IsNilThread(boot_tid)) {
-		printf("fs.squashfs: no boot_tid?\n");
+		log_crit("no boot_tid");
 		/* TODO: support mounting an image from a filesystem, or a block
 		 * device
 		 */
@@ -1306,7 +1307,6 @@ int main(int argc, char *argv[])
 	return status;
 
 ipcfail:
-	printf("fs.squashfs: initrd protocol fail, tag=%#lx, ec=%lu\n",
-		tag.raw, L4_ErrorCode());
+	log_crit("initrd protocol fail, tag=%#lx ec=%lu", tag.raw, L4_ErrorCode());
 	return EXIT_FAILURE;
 }

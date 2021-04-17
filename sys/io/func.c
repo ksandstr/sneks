@@ -12,7 +12,9 @@
 
 #include <l4/types.h>
 
+#include <sneks/systask.h>
 #include <sneks/io.h>
+
 #include "private.h"
 
 
@@ -35,10 +37,8 @@ static void no_lifecycle(pid_t a, enum lifecycle_tag b, ...) {
 }
 
 static COLD L4_Word_t dispatch_missing(void *priv UNUSED) {
-	extern noreturn void panic(const char *msg);
-	char str[123];
-	snprintf(str, sizeof str, "%s: dispatcher missing!", my_name);
-	panic(str);
+	log_crit("dispatcher missing (hard fail)");
+	abort();
 }
 
 
