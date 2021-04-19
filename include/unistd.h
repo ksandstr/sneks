@@ -80,6 +80,11 @@ extern int setreuid(uid_t real_uid, uid_t eff_uid);
 extern int setresuid(uid_t real_uid, uid_t eff_uid, uid_t saved_uid);
 
 
+extern char *getcwd(char *buf, size_t size);
+#ifdef _GNU_SOURCE
+extern char *get_current_dir_name(void);
+#endif
+
 extern int chdir(const char *path);
 extern int fchdir(int dirfd);
 

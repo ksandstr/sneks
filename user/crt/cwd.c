@@ -54,3 +54,14 @@ int fchdir(int dirfd)
 		return 0;
 	}
 }
+
+
+char *getcwd(char *buf, size_t size) {
+	strncpy(buf, ".", size);
+	return buf;
+}
+
+
+char *get_current_dir_name(void) {
+	return strdup(".");
+}
