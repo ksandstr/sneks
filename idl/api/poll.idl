@@ -5,6 +5,7 @@
 #include <muidl.idl>
 #include <l4x2.idl>
 #include <posixlike.idl>
+
 #include <api/io.idl>
 
 
@@ -31,8 +32,8 @@ interface Poll
 	 * filesystem server.
 	 */
 	void set_notify(out long exmask,
-		in long fd, in long events, in L4X2::ThreadId tid)
-		raises(Posix::Errno);
+		in IO::handle fd, in long events, in L4X2::ThreadId tid)
+			raises(Posix::Errno);
 
 	/* retrieve level-triggered I/O status (set of EPOLL{IN,OUT,ERR,*})
 	 * for each element in @handles. on error sets status to ~0ul.
@@ -44,7 +45,7 @@ interface Poll
 	 * receiver thread ID.
 	 */
 	const long STBUF_SIZE = 32;
-	typedef sequence<L4X2::word, STBUF_SIZE> stbuf;
+	typedef sequence<IO::handle, STBUF_SIZE> stbuf;
 	typedef sequence<unsigned short, STBUF_SIZE> maskbuf;
 	void get_status(in stbuf handles, in maskbuf notif, out stbuf statuses);
 };

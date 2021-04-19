@@ -17,8 +17,7 @@ int pipe(int pipefd[2]) {
 int pipe2(int pipefd[2], int flags)
 {
 	const L4_ThreadId_t server = __the_sysinfo->posix.pipe;
-	L4_Word_t rdwr[2];
-	int n = __pipe_pipe(server, &rdwr[0], &rdwr[1], flags);
+	int rdwr[2], n = __pipe_pipe(server, &rdwr[0], &rdwr[1], flags);
 	if(n != 0) return NTOERR(n);
 
 	for(int i=0; i < 2; i++) {

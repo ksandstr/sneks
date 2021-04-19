@@ -243,9 +243,9 @@ extern int io_impl_touch(int);
 
 extern int io_impl_set_notify(int *, int, int, L4_Word_t);
 extern void io_impl_get_status(
-	const L4_Word_t *, unsigned,
+	const int *, unsigned,
 	const uint16_t *, unsigned,
-	L4_Word_t *, unsigned *);
+	int *, unsigned *);
 
 #endif
 

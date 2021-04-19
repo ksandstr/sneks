@@ -1263,7 +1263,7 @@ static int uapi_setresugid(
 static int uapi_resolve(
 	unsigned *object_p, L4_Word_t *server_raw_p,
 	int *ifmt_p, L4_Word_t *cookie_p,
-	L4_Word_t dirfd, const char *path, int flags)
+	int dirfd, const char *path, int flags)
 {
 	if(dirfd != 0) return -EBADF;
 	if(path[0] != '/') return -ENOENT;

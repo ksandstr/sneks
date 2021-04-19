@@ -80,9 +80,9 @@ int io_impl_set_notify(int *exmask_p,
 
 
 void io_impl_get_status(
-	const L4_Word_t *handles, unsigned n_handles,
+	const int *handles, unsigned n_handles,
 	const uint16_t *notif, unsigned n_notif,
-	L4_Word_t *statuses, unsigned *n_statuses_p)
+	int *statuses, unsigned *n_statuses_p)
 {
 	sync_confirm();
 

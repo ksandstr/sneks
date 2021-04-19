@@ -122,8 +122,7 @@ static int poll_levels(
 {
 	/* probe each span in turn. */
 	uint16_t notif[SNEKS_POLL_STBUF_SIZE];
-	L4_Word_t hbuf[SNEKS_POLL_STBUF_SIZE];
-	int got = 0, start = 0;
+	int hbuf[SNEKS_POLL_STBUF_SIZE], got = 0, start = 0;
 	while(got < maxevents && start < n_ls) {
 		int len = 0, spid = ls[start]->spid;
 		while(start + len < n_ls && spid == ls[start + len]->spid
@@ -134,8 +133,7 @@ static int poll_levels(
 			len++;
 		}
 		struct fd_bits *bits = __fdbits(ls[start]->fd);
-		int n = __io_get_status(bits->server,
-			hbuf, len, notif, len,
+		int n = __io_get_status(bits->server, hbuf, len, notif, len,
 			hbuf, &(unsigned){ SNEKS_POLL_STBUF_SIZE });
 		if(n != 0) {
 			/* FIXME: do something else? */
@@ -303,7 +301,7 @@ static int epoll_consume(
 static void poll_handles(
 	struct evq *q,
 	L4_ThreadId_t serv, int spid,
-	const L4_Word_t *handles, int n_handles)
+	const int *handles, int n_handles)
 {
 	if(q->n_heads == ARRAY_SIZE(q->heads) || q->n_evs == EVBUFSZ) {
 		/* no room; resync. */
@@ -313,7 +311,7 @@ resync:
 	}
 
 	assert(n_handles > 0 && n_handles <= SNEKS_POLL_STBUF_SIZE);
-	L4_Word_t st[SNEKS_POLL_STBUF_SIZE];
+	int st[SNEKS_POLL_STBUF_SIZE];
 	unsigned n_st = ARRAY_SIZE(st);
 	int n = __io_get_status(serv, handles, n_handles, NULL, 0, st, &n_st);
 	if(n != 0) {
@@ -396,9 +394,8 @@ static int epoll_resync_consume(
 		if(hit == ex->ev.events) ex->fd = 0xffff;
 	}
 
-	int bufpid = -1, buflen = 0;
+	int bufpid = -1, buflen = 0, hbuf[SNEKS_POLL_STBUF_SIZE];
 	L4_ThreadId_t bufserv = L4_nilthread;
-	L4_Word_t hbuf[SNEKS_POLL_STBUF_SIZE];
 	for(int i=0; i < n_fds; i++) {
 		if(fds[i].fd == 0xffff) continue;
 		struct fd_bits *bits = __fdbits(fds[i].fd);

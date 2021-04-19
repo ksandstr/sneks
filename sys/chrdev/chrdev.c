@@ -61,7 +61,7 @@ static void add_rollback(chrfile_t *a, chrfile_t *b)
 
 /* Sneks::Pipe calls */
 
-static int chrdev_pipe(L4_Word_t *rd_p, L4_Word_t *wr_p, int flags)
+static int chrdev_pipe(int *rd_p, int *wr_p, int flags)
 {
 	int n;
 	sync_confirm();

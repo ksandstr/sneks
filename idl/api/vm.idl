@@ -9,6 +9,7 @@
 #include <muidl.idl>
 #include <l4x2.idl>
 #include <posixlike.idl>
+
 #include <api/io.idl>
 
 
@@ -28,7 +29,7 @@ interface VM
 	void mmap(
 		in Posix::id_t target_pid,
 		inout word addr, in word length, in long prot, in long flags,
-		in L4X2::ThreadId fd_serv, in Sneks::IO::handle fd,
+		in L4X2::ThreadId fd_serv, in IO::handle fd,
 		in Posix::off_t offset)
 			raises(Posix::Errno);
 
@@ -42,7 +43,7 @@ interface VM
 	 * areas inherited.
 	 */
 	void fork(in Posix::id_t srcpid, in Posix::id_t destpid)
-			raises(Posix::Errno);
+		raises(Posix::Errno);
 
 	/* configuration of freshly-created address spaces. systask only. @utcb
 	 * must be located before @kip, which must start where @utcb ends; vm will
@@ -67,15 +68,13 @@ interface VM
 		in Posix::id_t target_pid,
 		in word addr, in page data,
 		in long prot, in long flags)
-		raises(Posix::Errno);
+			raises(Posix::Errno);
 
 	/* systask only. send breath-of-life to a newborn thread. rc is 0 or L4
 	 * ErrorCode of breath-of-life transaction under a 0 send timeout.
 	 */
-	void breath_of_life(
-		out word rc,
-		in L4X2::ThreadId target,
-		in word sp, in word ip);
+	void breath_of_life(out word rc,
+		in L4X2::ThreadId target, in word sp, in word ip);
 
 	/* as brk(2). */
 	void brk(in word addr)

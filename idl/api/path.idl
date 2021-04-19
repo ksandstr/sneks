@@ -6,6 +6,8 @@
 #include <l4x2.idl>
 #include <posixlike.idl>
 
+#include <api/io.idl>
+
 
 module Sneks {
 
@@ -42,7 +44,7 @@ interface Path
 	void resolve(
 		out object inode, out L4X2::ThreadId server,
 		out long ifmt, out cookie cookie,
-		[MR(2)] in L4X2::word dirfd, in path path, [MR(3)] in long flags)
+		[MR(2)] in IO::handle dirfd, in path path, [MR(3)] in long flags)
 			raises(Posix::Errno, muidl::NoReply);
 };
 

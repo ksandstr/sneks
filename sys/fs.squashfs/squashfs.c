@@ -579,7 +579,7 @@ static ino_t lookup(int *type, ino_t dir_ino, const char *name)
 static int squashfs_resolve(
 	unsigned *object_ptr, L4_Word_t *server_ptr,
 	int *ifmt_ptr, L4_Word_t *cookie_ptr,
-	L4_Word_t dirfd, const char *path, int flags)
+	int dirfd, const char *path, int flags)
 {
 	sync_confirm();
 
