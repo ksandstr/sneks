@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <ccan/minmax/minmax.h>
+#include <ccan/str/str.h>
 
 #include <sneks/sys/info-defs.h>
 #include <sneks/api/path-defs.h>
@@ -115,13 +116,21 @@ FILE *fopen(const char *path, const char *modestr)
 	L4_ThreadId_t fs = __get_rootfs();
 	if(L4_IsNilThread(fs)) return NULL;
 
-	/* FIXME: translate @mode to Sneks::{Path,File} mode & flags */
+	/* TODO: translate @mode to Sneks::{Path,File} mode & flags */
 	mode_t mode = 0;
 	int flags = O_RDONLY;
 	if((flags & O_ACCMODE) != O_RDONLY || path == NULL || path[0] != '/') {
 		errno = -EINVAL;
 		return NULL;
 	}
+
+	/* TODO: this should only apply before actual rootfs has been mounted.
+	 * it maps absolute paths on /initrd/ to the initrd filesystem which
+	 * should appear as both /initrd and as /.
+	 */
+	if(strstarts(path, "/initrd/")) path += 8;
+	while(path[0] == '/') path++;
+
 	unsigned object;
 	L4_ThreadId_t server;
 	L4_Word_t cookie;

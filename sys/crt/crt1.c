@@ -19,14 +19,13 @@
 #include <sneks/mm.h>
 #include <sneks/process.h>
 #include <sneks/console.h>
+#include <sneks/systask.h>
 #include <sneks/sys/sysmem-defs.h>
 #include <sneks/sys/info-defs.h>
 #include <sneks/sys/kmsg-defs.h>
 
 #include "private.h"
 
-
-L4_ThreadId_t __rootfs_tid = { .raw = 0 };
 
 static tss_t errno_key;
 static uintptr_t current_brk = 0, heap_bottom = 0;
@@ -226,6 +225,19 @@ long sysconf(int name)
 }
 
 
+L4_ThreadId_t __get_rootfs(bool *root_mounted_p)
+{
+	struct sneks_rootfs_info blk;
+	int n = __info_rootfs_block(L4_Pager(), &blk);
+	if(unlikely(n != 0)) {
+		log_crit("can't get rootfs block, n=%d", n);
+		abort();
+	}
+	if(root_mounted_p != NULL) *root_mounted_p = false;	/* TODO */
+	return (L4_ThreadId_t){ .raw = blk.service };
+}
+
+
 int __crt1_entry(void)
 {
 	void *kip = L4_GetKernelInterface();
@@ -258,14 +270,6 @@ int __crt1_entry(void)
 	}
 
 	__thrd_init();
-
-	struct sneks_rootfs_info blk;
-	n = __info_rootfs_block(L4_Pager(), &blk);
-	if(unlikely(n != 0)) {
-		printf("crt1: can't get rootfs block, n=%d!\n", n);
-		return 1;
-	}
-	__rootfs_tid.raw = blk.service;
 
 	extern int main(int argc, char *const argv[], char *const envp[]);
 	return main(argc, argv, NULL);

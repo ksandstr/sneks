@@ -541,7 +541,7 @@ static struct dentry *find_dentry(ino_t dir_ino, const char *name)
 }
 
 
-static ino_t lookup(int *type, ino_t dir_ino, const char *name)
+static int lookup(int *type, ino_t dir_ino, const char *name)
 {
 	assert(type != NULL);
 	assert(name[0] != '\0');
@@ -573,9 +573,7 @@ static ino_t lookup(int *type, ino_t dir_ino, const char *name)
 }
 
 
-/* TODO: this doesn't handle trailing slashes very well. what should happen
- * in those cases? test them first.
- */
+/* FIXME: this doesn't handle trailing slashes well at all. */
 static int squashfs_resolve(
 	unsigned *object_ptr, L4_Word_t *server_ptr,
 	int *ifmt_ptr, L4_Word_t *cookie_ptr,
@@ -583,18 +581,16 @@ static int squashfs_resolve(
 {
 	sync_confirm();
 
-	if(dirfd != 0) return -ENOSYS;	/* TODO */
-
-	uint64_t dir_ino = 0;
-	int64_t final_ino = -ENOENT;
-	int type = -1;
-	L4_ThreadId_t server = L4_MyGlobalId();
-	*cookie_ptr = 0;
+	if(dirfd > 0) return -EBADF;
+	ino_t dir_ino = fs_super->root_inode;
 
 	/* resolve @path one component at a time. */
-	char comp[SQUASHFS_NAME_LEN + 1];
-	while(*path != '\0') {
-		char *slash = strchr(path, '/');
+	if(path[0] == '/') return -EINVAL;
+	int type;
+	L4_ThreadId_t server;
+	for(;;) {
+		assert(*path != '\0');
+		char *slash = strchr(path, '/'), comp[SQUASHFS_NAME_LEN + 1];
 		const bool is_last = (slash == NULL);
 		const char *part;
 		if(is_last) {
@@ -619,14 +615,7 @@ static int squashfs_resolve(
 			part = comp;
 		}
 
-		if(dir_ino == 0) {
-			if(!streq(part, "initrd")) {
-				/* first component must be initrd. */
-				break;
-			}
-			dir_ino = fs_super->root_inode;
-			assert(dir_ino != 0);
-		} else if(device_nodes_enabled && !L4_IsNilThread(dev_tid)
+		if(is_last && device_nodes_enabled && !L4_IsNilThread(dev_tid)
 			&& dir_ino == dev_ino && !streq(part, ".device-nodes"))
 		{
 			size_t hash = hash(part, strlen(part), 0);
@@ -643,14 +632,14 @@ static int squashfs_resolve(
 				dev->name, dev->is_chr ? 'c' : 'b', dev->major, dev->minor);
 #endif
 			server = dev_tid;
-			final_ino = (dev->is_chr ? 0x80000000 : 0)
+			*object_ptr = (dev->is_chr ? 0x80000000 : 0)
 				| (dev->major & 0x7fff) << 15 | (dev->minor & 0x7fff);
 			type = dev->is_chr ? DT_CHR : DT_BLK;
 			*cookie_ptr = gen_cookie(&device_cookie_key, L4_SystemClock(),
-				final_ino, CALLER_PID);
+				*object_ptr, CALLER_PID);
 			break;
 		} else {
-			ino_t ino = lookup(&type, dir_ino, part);
+			int ino = lookup(&type, dir_ino, part);
 			if(ino < 0) return ino;
 			if(!is_last) {
 				if(type == DT_DIR) dir_ino = ino;
@@ -671,15 +660,13 @@ static int squashfs_resolve(
 				 */
 				*cookie_ptr = gen_cookie(&device_cookie_key, L4_SystemClock(),
 					ino, CALLER_PID);
-				final_ino = ino;
+				*object_ptr = ino;
+				server = L4_Myself();
 				break;
 			}
 		}
 	}
 
-	if(final_ino < 0) return final_ino;
-
-	*object_ptr = final_ino;
 	*server_ptr = server.raw;
 	*ifmt_ptr = type << 12;	/* deliberate correspondence to S_IFMT */
 

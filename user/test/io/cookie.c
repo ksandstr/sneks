@@ -41,7 +41,7 @@ static int try_cookie(unsigned object, L4_ThreadId_t server, L4_Word_t cookie)
  */
 START_LOOP_TEST(valid_dev_cookie, iter, 0, 3)
 {
-	const char *test_path = "/dev/null";
+	const char *test_path = "dev/null";
 	const bool allow_expire = !!(iter & 1), diff_object = !!(iter & 2);
 	diag("test_path=`%s', allow_expire=%s, diff_object=%s", test_path,
 		btos(allow_expire), btos(diff_object));
@@ -57,7 +57,7 @@ START_LOOP_TEST(valid_dev_cookie, iter, 0, 3)
 	}
 
 	skip_start(!diff_object, 2, "using same object") {
-		const char *diff_path = "/dev/zero";
+		const char *diff_path = "dev/zero";
 		assert(!streq(diff_path, test_path));
 		unsigned old_obj = object;
 		n = __path_resolve(__the_sysinfo->api.rootfs, &object,
@@ -88,7 +88,7 @@ DECLARE_TEST("io:cookie", valid_dev_cookie);
  */
 START_TEST(invalid_dev_cookie)
 {
-	const char *test_path = "/dev/null";
+	const char *test_path = "dev/null";
 	diag("test_path=`%s'", test_path);
 	plan(3);
 
@@ -123,7 +123,7 @@ DECLARE_TEST("io:cookie", invalid_dev_cookie);
 #if 0
 START_TEST(valid_cookie_twice)
 {
-	const char *test_path = "/dev/null";
+	const char *test_path = "dev/null";
 	diag("test_path=`%s'", test_path);
 	plan(4);
 

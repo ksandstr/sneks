@@ -37,6 +37,9 @@ interface Path
 	 * distinct from the filesystem's mount point, which is a directory on the
 	 * parent filesystem; the exception being when the parent does not exist.
 	 *
+	 * @path is always relative to @dirfd, so it should never have a leading
+	 * slash.
+	 *
 	 * TODO: remove the explicit register specs and funny label once muidl
 	 * gets a nicer generated propagation feature.
 	 */

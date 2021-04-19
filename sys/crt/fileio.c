@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <ccan/likely/likely.h>
 #include <ccan/minmax/minmax.h>
+#include <ccan/str/str.h>
 
 #include <l4/types.h>
 #include <l4/thread.h>
@@ -23,7 +24,7 @@
 #include <sneks/api/path-defs.h>
 #include <sneks/api/io-defs.h>
 
-#include "crt-private.h"
+#include "private.h"
 
 
 #define IOERR(n) unlikely(set_io_error((n)))
@@ -45,8 +46,8 @@ static bool set_io_error(int n)
 }
 
 
-/* all paths to open(2) must be absolute, it will only open regular files, and
- * accmode must be O_RDONLY.
+/* all paths to sys/crt open(2) must be absolute, it will only open regular
+ * files, and accmode must be O_RDONLY.
  */
 int open(const char *path, int flags, ...)
 {
@@ -61,10 +62,15 @@ int open(const char *path, int flags, ...)
 		errno = -EINVAL;
 		return -1;
 	}
+
+	bool booted;
+	L4_ThreadId_t rootfs_tid = __get_rootfs(&booted);
+	if(!booted && strstarts(path, "/initrd/")) path += 8;
+
 	unsigned object;
 	L4_ThreadId_t server;
 	L4_Word_t cookie;
-	int ifmt, n = __path_resolve(__rootfs_tid, &object, &server.raw,
+	int ifmt, n = __path_resolve(rootfs_tid, &object, &server.raw,
 		&ifmt, &cookie, 0, path, flags | mode);
 	if(IOERR(n)) return -1;
 	if((ifmt & SNEKS_PATH_S_IFMT) != SNEKS_PATH_S_IFREG) {
@@ -81,10 +87,11 @@ int open(const char *path, int flags, ...)
 	actual = L4_ActualSender();
 
 	/* TODO: install file descriptor somewhere, since we'll certainly want to
-	 * access files outside the root filesystem also.
+	 * access files outside the root filesystem also; and the root filesystem
+	 * will change during boot and perhaps also later.
 	 */
 	assert(L4_IsNilThread(actual) || L4_SameThreads(actual, server));
-	assert(L4_SameThreads(server, __rootfs_tid));
+	assert(L4_SameThreads(server, rootfs_tid));
 
 	return fd;
 }
@@ -92,7 +99,7 @@ int open(const char *path, int flags, ...)
 
 int close(int fd)
 {
-	int n = __io_close(__rootfs_tid, fd);
+	int n = __io_close(__get_rootfs(NULL), fd);
 	return IOERR(n) ? -1 : 0;
 }
 
@@ -100,6 +107,6 @@ int close(int fd)
 long read(int fd, void *buf, size_t count)
 {
 	unsigned buf_len = min_t(size_t, count, INT_MAX);
-	int n = __io_read(__rootfs_tid, fd, buf_len, -1, buf, &buf_len);
+	int n = __io_read(__get_rootfs(NULL), fd, buf_len, -1, buf, &buf_len);
 	return IOERR(n) ? -1 : buf_len;
 }

@@ -29,6 +29,7 @@ int openat(int dirfd, const char *pathname, int flags, ...)
 		errno = ENOSYS;
 		return -1;
 	}
+	while(pathname[0] == '/') pathname++;
 
 	unsigned object;
 	L4_ThreadId_t server;

@@ -18,6 +18,7 @@
 #include <ccan/minmax/minmax.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/list/list.h>
+#include <ccan/str/str.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -1265,25 +1266,34 @@ static int uapi_resolve(
 	int *ifmt_p, L4_Word_t *cookie_p,
 	int dirfd, const char *path, int flags)
 {
-	if(dirfd != 0) return -EBADF;
-	if(path[0] != '/') return -ENOENT;
+	if(path[0] == '/') {
+		fprintf(stderr, "%s: absolute path=`%s' from %lu:%lu\n", __func__, path,
+			L4_ThreadNo(muidl_get_sender()), L4_Version(muidl_get_sender()));
+		return -EINVAL;
+	}
 
-	/* TODO: drop this once fs.squashfs no longer forces /initrd up front,
-	 * before end of wip/dev-nodes.
+	/* before the actual root filesystem is mounted, initrd should appear as
+	 * both the root filesystem and under /initrd. this is easily accomplished
+	 * by removing that prefix.
+	 *
+	 * TODO: but stop doing this once an actual rootfs is mounted.
 	 */
-	char realpath[strlen(path) + 8];
-	memcpy(realpath, "/initrd", 7);
-	memcpy(realpath + 7, path, strlen(path) + 1);
+	if(strstarts(path, "initrd/")) {
+		path += 7;
+		if(path[0] == '\0') path = ".";
+	} else if(path[0] == '\0' || streq(path, "initrd")) {
+		/* resolve these as the rootfs' root directory. */
+		path = ".";
+	}
 
-	/* TODO: replace with muidl propagation */
 	L4_MsgTag_t tag = { .X.label = 0xe808, .X.u = 3, .X.t = 2 };
 	L4_Set_Propagation(&tag);
 	L4_Set_VirtualSender(muidl_get_sender());
 	L4_LoadMR(0, tag.raw);
 	L4_LoadMR(1, 0xb00b);
-	L4_LoadMR(2, dirfd);
+	L4_LoadMR(2, 0);
 	L4_LoadMR(3, flags);
-	L4_StringItem_t rp = L4_StringItem(sizeof realpath, realpath);
+	L4_StringItem_t rp = L4_StringItem(strlen(path) + 1, (void *)path);
 	L4_LoadMRs(4, 2, rp.raw);
 	tag = L4_Send(initrd_tid);
 	if(L4_IpcFailed(tag)) {

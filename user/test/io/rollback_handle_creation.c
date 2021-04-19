@@ -49,8 +49,8 @@ typedef darray(int) handles;
 typedef int (*handle_ctor_fn)(handles *dst, bool send_only);
 
 
-static char testfile_path[] = TESTDIR "user/test/io/reg/testfile";
-static char testdir_path[] = TESTDIR "user/test";
+static char *testfile_path = TESTDIR "user/test/io/reg/testfile";
+static char *testdir_path = TESTDIR "user/test";
 
 
 static int cmp_int(const void *, const void *);
@@ -395,7 +395,7 @@ static int devnull_ctor(handles *result, bool send_only)
 	L4_ThreadId_t server;
 	L4_Word_t cookie;
 	int ifmt, n = __path_resolve(__the_sysinfo->api.rootfs, &object,
-		&server.raw, &ifmt, &cookie, 0, "/dev/null", 0);
+		&server.raw, &ifmt, &cookie, 0, "dev/null", 0);
 	if(n != 0) {
 		diag("%s: Sneks::Path/resolve failed, n=%d", __func__, n);
 		return n;
@@ -457,6 +457,7 @@ static int reg_ctor(handles *result, bool send_only)
 	unsigned object;
 	L4_ThreadId_t server;
 	L4_Word_t cookie;
+	while(testfile_path[0] == '/') testfile_path++;
 	int ifmt, n = __path_resolve(__the_sysinfo->api.rootfs, &object,
 		&server.raw, &ifmt, &cookie, 0, testfile_path, 0);
 	if(n != 0) {
@@ -520,6 +521,7 @@ static int dir_ctor(handles *result, bool send_only)
 	unsigned object;
 	L4_ThreadId_t server;
 	L4_Word_t cookie;
+	while(testdir_path[0] == '/') testdir_path++;
 	int ifmt, n = __path_resolve(__the_sysinfo->api.rootfs, &object,
 		&server.raw, &ifmt, &cookie, 0, testdir_path, 0);
 	if(n != 0) {
