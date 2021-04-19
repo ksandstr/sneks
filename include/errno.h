@@ -28,6 +28,7 @@
 #define EROFS	30	/* read-only file system */
 #define EPIPE	32	/* broken pipe */
 #define EDEADLK 35	/* resource deadlock would occur */
+#define ENAMETOOLONG 36 /* would exceed PATH_MAX */
 #define ENOSYS	38	/* function not implemented */
 #define ELOOP	40	/* too many symbolic links encountered */
 #define EWOULDBLOCK 41	/* NOTE: distinct from EAGAIN! */

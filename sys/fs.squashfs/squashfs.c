@@ -1060,6 +1060,9 @@ static int squashfs_getdents(int dirfd, int *offset_ptr, int *endpos_ptr,
 }
 
 
+static int enosys() { return -ENOSYS; }
+
+
 static int squashfs_ipc_loop(
 	void *initrd_start, size_t initrd_size,
 	int argc, char *argv[])
@@ -1067,6 +1070,8 @@ static int squashfs_ipc_loop(
 	struct squashfs_impl_vtable vtab = {
 		/* Sneks::Path */
 		.resolve = &squashfs_resolve,
+		.get_path = &enosys,
+		.get_path_fragment = &enosys,
 
 		/* Sneks::File */
 		.open = &squashfs_open,

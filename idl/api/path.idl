@@ -23,8 +23,10 @@ interface Path
 	typedef unsigned long object;
 	typedef L4X2::word cookie;
 
-	/* form of @ifmt */
-	const long S_IFMT = 0xf000;	/* the mask (required) */
+	/* values of resolve/@ifmt. deliberately assigned as the corresponding
+	 * DT_* for Sneks::Directory shifted left by 12.
+	 */
+	const long S_IFMT = 0xf000;	/* format mask */
 	const long S_IFDIR = 0x4000;
 	const long S_IFCHR = 0x2000;
 	const long S_IFBLK = 0x6000;
@@ -48,6 +50,33 @@ interface Path
 		out object inode, out L4X2::ThreadId server,
 		out long ifmt, out cookie cookie,
 		[MR(2)] in IO::handle dirfd, in path path, [MR(3)] in long flags)
+			raises(Posix::Errno, muidl::NoReply);
+
+	/* reverse resolution of the path that would resolve() to the object
+	 * described by @desc. @suffix is appended to the result with a separating
+	 * slash if the result is not empty, and returned verbatim otherwise.
+	 *
+	 * resulting @path is either the full path down from the root directory
+	 * without the leading slash, or -ENAMETOOLONG if the result would exceed
+	 * PATH_MAX. in the latter case, or to tell filesystem boundaries, the
+	 * client should call get_path_fragment() instead.
+	 */
+	[Label(0xb00c)]	/* TODO: for propagation, remove when muidl etc. */
+	void get_path(out path path, in IO::handle desc, in path suffix)
+		raises(Posix::Errno, muidl::NoReply);
+
+	/* reverse resolution of some part of the path that would resolve() to the
+	 * object described by @desc, or if @desc is 0, the incoming values of
+	 * the @obj/@cookie pair.
+	 *
+	 * returns a fragment excluding the leading slash in @path. if the
+	 * fragment doesn't start at the root directory, the @obj/@server/@cookie
+	 * triple is the resolve() result (w/ @ifmt=S_IFDIR implied) of where the
+	 * fragment starts.
+	 */
+	void get_path_fragment(out path path,
+		inout object obj, out L4X2::ThreadId server, inout cookie cookie,
+		in IO::handle desc)
 			raises(Posix::Errno, muidl::NoReply);
 };
 

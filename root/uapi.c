@@ -1307,6 +1307,9 @@ static int uapi_resolve(
 }
 
 
+static int enosys() { return -ENOSYS; }
+
+
 /* clear UTCB bit in root for this thread, because it won't have been covered
  * in add_systask()
  */
@@ -1344,6 +1347,8 @@ int uapi_loop(void *param_ptr)
 
 		/* Sneks::Path */
 		.resolve = &uapi_resolve,
+		.get_path = &enosys,
+		.get_path_fragment = &enosys,
 	};
 	for(;;) {
 		L4_Word_t st = _muidl_root_uapi_dispatch(&vtab);

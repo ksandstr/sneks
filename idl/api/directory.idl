@@ -26,7 +26,7 @@ interface Directory
 		 */
 	};
 
-	/* values of dentry.type. these match S_IFMT values from Sneks::Path. */
+	/* values of dentry.type. these match S_IFMT values, >> 12, from Sneks::Path. */
 	const long DT_UNKNOWN = 0;
 	const long DT_FIFO = 1;
 	const long DT_CHR = 2;
