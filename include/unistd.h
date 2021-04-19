@@ -80,6 +80,10 @@ extern int setreuid(uid_t real_uid, uid_t eff_uid);
 extern int setresuid(uid_t real_uid, uid_t eff_uid, uid_t saved_uid);
 
 
+extern int chdir(const char *path);
+extern int fchdir(int dirfd);
+
+
 extern int select(
 	int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
 	struct timeval *timeout);
