@@ -1,5 +1,7 @@
 
-/* POSIX interfaces that handle path names. */
+/* POSIX interfaces that handle path names such as openat(), where an open()
+ * exists that defaults to the current directory.
+ */
 
 #include <stdarg.h>
 #include <errno.h>
@@ -24,18 +26,34 @@
 
 int openat(int dirfd, const char *pathname, int flags, ...)
 {
-	/* TODO: support these */
-	if(dirfd != AT_FDCWD || (flags & O_CREAT)) {
+	if(pathname == NULL) {
+		errno = EINVAL;
+		return -1;
+	}
+	if(flags & O_CREAT) {
+		/* TODO */
 		errno = ENOSYS;
 		return -1;
 	}
-	while(pathname[0] == '/') pathname++;
+
+	struct fd_bits *cwd,
+		rootfs = { .server = __the_sysinfo->api.rootfs, .handle = 0 };
+	if(pathname[0] == '/') {
+		while(pathname[0] == '/') pathname++;
+		cwd = &rootfs;
+	} else {
+		cwd = __fdbits(dirfd == AT_FDCWD ? __cwd_fd : dirfd);
+		if(cwd == NULL) {
+			errno = EBADF;
+			return -1;
+		}
+	}
 
 	unsigned object;
 	L4_ThreadId_t server;
 	L4_Word_t cookie;
-	int ifmt, n = __path_resolve(__the_sysinfo->api.rootfs, &object,
-		&server.raw, &ifmt, &cookie, 0, pathname, flags);
+	int ifmt, n = __path_resolve(cwd->server, &object, &server.raw, &ifmt, &cookie,
+		cwd->handle, pathname, flags);
 	if(n != 0) return NTOERR(n);
 
 	/* set VS/AS to recover actual server tid, for when Path::resolve hands

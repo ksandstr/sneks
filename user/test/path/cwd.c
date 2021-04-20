@@ -52,10 +52,6 @@ START_LOOP_TEST(chdir_basic, iter, 0, 1)
 
 	int (*chfn)(const char *) = use_fchdir ? &chdir_via_open : &chdir;
 
-#ifdef __sneks__
-	todo_start("impls missing");
-#endif
-
 	if(!ok((*chfn)(test_directory) == 0, "ch to testdir")) {
 		diag("errno=%d", errno);
 	}
@@ -83,10 +79,6 @@ START_LOOP_TEST(chdir_effect, iter, 0, 3)
 	plan_tests(4);
 
 	int (*chfn)(const char *) = use_fchdir ? &chdir_via_open : &chdir;
-
-#ifdef __sneks__
-	todo_start("impls missing");
-#endif
 
 	ok(chdir(test_directory) == 0, "setup");
 
@@ -122,10 +114,6 @@ START_LOOP_TEST(chdir_fails, iter, 0, 3)
 	plan_tests(2);
 
 	int (*chfn)(const char *) = use_fchdir ? &chdir_via_open : &chdir;
-
-#ifdef __sneks__
-	todo_start("impls missing");
-#endif
 
 	ok(chdir(test_directory) == 0, "setup");
 	run_subtest(forking, try_chdir_reg, chfn, "chdir into regular file");

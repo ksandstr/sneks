@@ -40,6 +40,8 @@ struct fd_bits;
 typedef SINTMAP(struct fd_bits *) fd_map_t;
 extern fd_map_t fd_map;
 
+extern int __cwd_fd;
+
 
 struct sneks_fdlist;
 extern void __file_init(struct sneks_fdlist *fdlist);

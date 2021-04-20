@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <sched.h>
 #include <ccan/array_size/array_size.h>
+#include <ccan/likely/likely.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -118,6 +119,77 @@ static char **unpack_argpage(
 }
 
 
+static char *consume_env(char **envp, const char *key)
+{
+	int key_len = strlen(key), found = -1;
+	char *eq = NULL;
+	for(int i=0; envp[i] != NULL; i++) {
+		eq = strchr(envp[i], '=');
+		if(eq == NULL) continue;
+		if(eq - envp[i] == key_len && memcmp(key, envp[i], key_len) == 0) {
+			found = i;
+			break;
+		}
+	}
+	if(found < 0) return NULL;
+
+	for(int i = found; envp[i] != NULL; i++) envp[i] = envp[i + 1];
+
+	*eq = '\0';
+	return &eq[1];
+}
+
+
+static bool use_cwd_handle(char **envp)
+{
+	char *var = consume_env(envp, "__CWD_HANDLE");
+	if(var == NULL) return false;
+
+	/* TODO: replace with sscanf() */
+	char *colon = strchr(var, ':'),
+		*comma = strchr(colon != NULL ? colon + 1 : var, ',');
+	if(colon != NULL) *colon = '\0';
+	if(comma != NULL) *comma = '\0';
+	unsigned long tno = strtoul(var, NULL, 0),
+		version = colon != NULL ? strtoul(colon + 1, NULL, 0) : 0,
+		handle = comma != NULL ? strtoul(comma + 1, NULL, 0) : 0;
+	L4_ThreadId_t server = L4_GlobalId(tno, version);
+	if(L4_IsLocalId(server)) fprintf(stderr, "crt1: UwU what's this?\n");
+	int fd = __create_fd(-1, server, handle, 0);
+	if(unlikely(fd < 0)) {
+		fprintf(stderr, "crt1: __create_fd() failed, errno=%d\n", errno);
+		return false;
+	}
+	if(unlikely(fchdir(fd) < 0)) {
+		fprintf(stderr, "crt1: fchdir() failed, errno=%d\n", errno);
+		return false;
+	}
+	close(fd);
+
+	return true;
+}
+
+
+static void init_cwd(char **envp)
+{
+	char *curdir = consume_env(envp, "__CWD_PATH");
+	if(curdir != NULL) {
+		int n = chdir(curdir);
+		if(n < 0) {
+			fprintf(stderr, "crt1: chdir to `%s' failed, errno=%d\n", curdir, errno);
+			curdir = NULL;
+		}
+	}
+	if(curdir == NULL && !use_cwd_handle(envp)) {
+		fprintf(stderr, "crt1: defaulting cwd to `/'\n");
+		if(chdir("/") < 0) {
+			fprintf(stderr, "crt1: chdir to '/' failed, errno=%d\n", errno);
+			abort();	/* screw you guys, i'm going home */
+		}
+	}
+}
+
+
 int __crt1_entry(uintptr_t fdlistptr)
 {
 	__the_kip = L4_GetKernelInterface();
@@ -146,7 +218,6 @@ int __crt1_entry(uintptr_t fdlistptr)
 	int n_args, argbuflen = nstrlen(&n_args, (char *)args_base);
 	L4_Word_t envs_base = (argpos + argbuflen + PAGE_SIZE - 1) & ~PAGE_MASK;
 	int n_envs, envbuflen = nstrlen(&n_envs, (char *)envs_base);
-	// argpos = (argpos + envbuflen + PAGE_SIZE - 1) & ~PAGE_MASK;
 	L4_Word_t fdlist_end = fdlist_last(fdlistptr);
 	brk((void *)max((envs_base + PAGE_SIZE - 1) & ~PAGE_MASK,
 		(fdlist_end + PAGE_SIZE - 1) & ~PAGE_MASK));
@@ -158,12 +229,13 @@ int __crt1_entry(uintptr_t fdlistptr)
 	 */
 	__init_crt_cached_creds();
 
+	char **envp = unpack_argpage(envs_base, envbuflen, n_envs, true);
+	init_cwd(envp);
+
 	extern int main(int argc, char *argv[], char *envp[]);
 	/* FIXME: stick the unpacked argpage into putenv() one at a time, once
 	 * either lib/env.c drops the htable requirement or lib/ starts including
 	 * htable. for now, spawn environment doesn't show up in getenv().
 	 */
-	return main(n_args,
-		unpack_argpage(args_base, argbuflen, n_args, false),
-		unpack_argpage(envs_base, envbuflen, n_envs, true));
+	return main(n_args, unpack_argpage(args_base, argbuflen, n_args, false), envp);
 }

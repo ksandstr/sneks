@@ -136,7 +136,14 @@ START_LOOP_TEST(rollback_handle_creation,
 		diag("distance=%d, range=[%d..%d]", range, low, high);
 		int n_closed = 0, n_unexpected = 0;
 		bool no_error = true;
+		struct fd_bits *cwd_bits = __fdbits(__cwd_fd);
 		for(int i = low; i <= high; i++) {
+			if(cwd_bits != NULL && cwd_bits->handle == i
+				&& cwd_bits->server.raw == server.raw)
+			{
+				diag("avoided __cwd_fd's handle=%d", cwd_bits->handle);
+				continue;
+			}
 			n = __io_close(server, i);
 			if(n != 0) {
 				if(n == -EBADF) continue;
