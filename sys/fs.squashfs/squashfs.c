@@ -64,7 +64,7 @@ struct blk {
 
 /* contained within a per-fs inode info structure. */
 struct inode {
-	unsigned long ino;	/* int64_hash() */
+	ino_t ino;	/* int_hash() */
 	/* TODO: add basic stat(2) output's fields here */
 	union {
 		struct {
@@ -169,6 +169,10 @@ static struct htable blk_cache = HTABLE_INITIALIZER(
 	dentry_name_hash = HTABLE_INITIALIZER(dentry_name_hash,
 		&rehash_dentry_by_name, NULL);
 
+/* ~0u for "not yet seen" */
+static unsigned *ino_to_blkoffset = NULL;	/* [fs_super->inodes + 1] */
+static ino_t root_ino;
+
 static const struct cookie_key device_cookie_key;
 
 
@@ -185,12 +189,12 @@ static bool cmp_blk_addr(const void *cand, void *key) {
 
 static size_t rehash_inode(const void *key, void *priv) {
 	const struct inode *i = key;
-	return int64_hash(i->ino);
+	return int_hash(i->ino);
 }
 
 static bool cmp_inode_ino(const void *cand, void *key) {
 	const struct inode *i = cand;
-	return i->ino == *(const unsigned long *)key;
+	return i->ino == *(const ino_t *)key;
 }
 
 
@@ -337,21 +341,20 @@ static int inode_size(int type)
 }
 
 
-static struct inode *read_inode(unsigned long ino)
+static struct inode *read_inode(unsigned blkoffs)
 {
 	assert(!SQUASHFS_UNCOMPRESSED_INODES(fs_super->flags));
 
 	struct inode_ext *nod_ext = malloc(sizeof *nod_ext);
 	if(nod_ext == NULL) return NULL;	/* TODO: pop ENOMEM */
 	struct inode *nod = &nod_ext->fs_inode;
-	nod->ino = ino;
 	/* TODO: switch according to inode type once there's more than one thing
 	 * in the union.
 	 */
 	nod->dir.max_index = INT_MAX;
 
-	uint64_t block = fs_super->inode_table_start + SQUASHFS_INODE_BLK(ino);
-	int offset = SQUASHFS_INODE_OFFSET(ino);
+	uint64_t block = fs_super->inode_table_start + SQUASHFS_INODE_BLK(blkoffs);
+	int offset = SQUASHFS_INODE_OFFSET(blkoffs);
 	struct squashfs_base_inode *base = &squashfs_i(nod)->X.base;
 	struct blk *blk = NULL;
 	int n = read_metadata(base, &blk, &block, &offset, sizeof *base);
@@ -378,13 +381,21 @@ Eio:
 
 
 /* fetch @ino from cache, or read it from the filesystem, or fail. */
-static struct inode *get_inode(unsigned long ino)
+static struct inode *get_inode(ino_t ino)
 {
-	size_t hash = int64_hash(ino);
+	size_t hash = int_hash(ino);
 	struct inode *nod = htable_get(&inode_cache, hash, &cmp_inode_ino, &ino);
 	if(nod == NULL) {
-		nod = read_inode(ino);
+		if(ino > fs_super->inodes) {
+			log_err("ino=%u out of range (max=%u)", ino, fs_super->inodes);
+			return NULL;
+		} else if(ino_to_blkoffset[ino] == ~0u) {
+			log_crit("location of ino=%u not known", ino);
+			return NULL;
+		}
+		nod = read_inode(ino_to_blkoffset[ino]);
 		if(nod == NULL) return NULL;	/* TODO: propagate w/ IS_ERR() */
+		nod->ino = ino;
 		bool ok = htable_add(&inode_cache, hash, nod);
 		if(!ok) {
 			free(nod);
@@ -415,6 +426,38 @@ static void rewind_directory(iof_t *file,
 static struct dentry *read_dentry(iof_t *file,
 	struct blk **blk_p, int index, int *err_p)
 {
+	assert(index >= 0);
+
+	/* synthesize "." and ".." */
+	if(index < 2) {
+		struct dentry *out = malloc(sizeof *out + index + 2);
+		if(out == NULL) {
+			*err_p = -ENOMEM;
+			return NULL;
+		}
+		*out = (struct dentry){
+			.dir_ino = file->i->ino, .type = SNEKS_DIRECTORY_DT_DIR,
+			.ino = index == 0 ? file->i->ino
+				: squashfs_i(file->i)->X.dir.parent_inode,
+			.name_len = index + 1,
+			.index = index,
+		};
+		if(out->dir_ino == root_ino && out->ino == fs_super->inodes + 1) {
+			/* special bodge for ".." on the root directory, which works silly
+			 * like this
+			 */
+			out->ino = root_ino;
+		}
+		out->name[0] = '.';
+		out->name[index] = '.';
+		out->name[index + 1] = '\0';
+		assert(strlen(out->name) == out->name_len);
+		return out;
+	} else {
+		/* read actual directory contents */
+		index -= 2;
+	}
+
 	if(index > file->i->dir.max_index) {
 		return NULL; /* previously found EOD */
 	}
@@ -450,7 +493,22 @@ static struct dentry *read_dentry(iof_t *file,
 			&file->dir.offset, sizeof *dent);
 		if(n < sizeof *dent) goto Eio;
 		file->dir.bytes_read += n;
+
+		/* stash the blkoffset now that we've seen it. */
+		ino_t ino = file->dir.hdr.inode_number + dent->inode_number;
+		if(ino > fs_super->inodes) {
+			log_crit("invalid ino=%u (max=%u)", ino, fs_super->inodes);
+			abort();
+		} else if(ino_to_blkoffset[ino] == ~0u) {
+			ino_to_blkoffset[ino] = SQUASHFS_MKINODE(
+				file->dir.hdr.start_block, dent->offset);
+		}
+		assert(ino_to_blkoffset[ino] != ~0u);
+		assert(ino_to_blkoffset[ino] == SQUASHFS_MKINODE(
+			file->dir.hdr.start_block, dent->offset));
+
 		name_len = dent->size + 1;
+		if(name_len > SQUASHFS_NAME_LEN) goto Eio;
 		n = read_metadata(dent->name, blk_p, &file->dir.block,
 			&file->dir.offset, name_len);
 		if(n < name_len) goto Eio;
@@ -479,14 +537,15 @@ static struct dentry *read_dentry(iof_t *file,
 	}
 	*out = (struct dentry){
 		.dir_ino = file->i->ino,
-		.ino = SQUASHFS_MKINODE(file->dir.hdr.start_block, dent->offset),
+		.ino = file->dir.hdr.inode_number + dent->inode_number,
 		.type = dent->type >= ARRAY_SIZE(sfs_type_table) ? SNEKS_DIRECTORY_DT_UNKNOWN
 			: sfs_type_table[dent->type],
 		.name_len = name_len,
-		.index = index,
+		.index = index + 2,
 	};
 	memcpy(out->name, dent->name, name_len);
 	out->name[name_len] = '\0';
+	assert(strlen(out->name) == out->name_len);
 	return out;
 
 Eio: *err_p = -EIO;
@@ -562,7 +621,13 @@ static int lookup(int *type, ino_t dir_ino, const char *name)
 	int dix = 0, n = 0;
 	while(dent = get_dentry(&fake, &blk, dix++, &n), dent != NULL) {
 		int cmp = strcmp(name, dent->name);
-		if(cmp < 0) break;	/* b/c alphabetical sorting */
+		if(cmp < 0 && dent->index >= 2) {
+			/* names after dix={0,1} are in strcmp() order allowing early
+			 * return. but we must account for the first two entries are "."
+			 * and ".." which might not be.
+			 */
+			break;
+		}
 		if(cmp == 0) {
 			*type = dent->type;
 			return dent->ino;
@@ -581,12 +646,20 @@ static int squashfs_resolve(
 {
 	sync_confirm();
 
-	if(dirfd > 0) return -EBADF;
-	ino_t dir_ino = fs_super->root_inode;
+	pid_t caller_pid = CALLER_PID;
+	ino_t dir_ino;
+	if(dirfd < 0) return -EBADF;
+	else if(dirfd == 0) dir_ino = root_ino;
+	else {
+		iof_t *df = io_get_file(caller_pid, dirfd);
+		if(df == NULL) return -EBADF;
+		dir_ino = df->i->ino;
+	}
 
 	/* resolve @path one component at a time. */
 	if(path[0] == '/') return -EINVAL;
 	int type;
+	ino_t final_ino;
 	L4_ThreadId_t server;
 	for(;;) {
 		assert(*path != '\0');
@@ -627,46 +700,44 @@ static int squashfs_resolve(
 				 */
 				return -ENOENT;
 			}
-#if 0
-			log_info("found device node `%s': %c-%u-%u",
-				dev->name, dev->is_chr ? 'c' : 'b', dev->major, dev->minor);
-#endif
 			server = dev_tid;
-			*object_ptr = (dev->is_chr ? 0x80000000 : 0)
+			final_ino = (dev->is_chr ? 0x80000000 : 0)
 				| (dev->major & 0x7fff) << 15 | (dev->minor & 0x7fff);
 			type = dev->is_chr ? DT_CHR : DT_BLK;
-			*cookie_ptr = gen_cookie(&device_cookie_key, L4_SystemClock(),
-				*object_ptr, CALLER_PID);
 			break;
 		} else {
 			int ino = lookup(&type, dir_ino, part);
 			if(ino < 0) return ino;
 			if(!is_last) {
-				if(type == DT_DIR) dir_ino = ino;
-				else return -ENOTDIR;
+				if(type != DT_DIR) return -ENOTDIR;
+				dir_ino = ino;
 			} else {
 				if((flags & O_DIRECTORY) && type != DT_DIR) {
 					/* only directories, please. */
 					return -ENOTDIR;
 				}
-				/* success!
-				 *
-				 * TODO: use a different algorithm and a different cookie key
-				 * here once actual access control comes about. filesystem
-				 * cookies should have properties that cross-systask device
-				 * cookies don't, such as a limited number of uses (per
-				 * process), anti-bruteforcing measures (forced epoch steps on
-				 * failure), and so forth.
-				 */
-				*cookie_ptr = gen_cookie(&device_cookie_key, L4_SystemClock(),
-					ino, CALLER_PID);
-				*object_ptr = ino;
+				/* success! */
+				final_ino = ino;
 				server = L4_Myself();
 				break;
 			}
 		}
 	}
 
+	if(true || type == DT_CHR || type == DT_BLK) {
+		*cookie_ptr = gen_cookie(&device_cookie_key, L4_SystemClock(),
+			final_ino, caller_pid);
+	} else {
+		/* TODO: use a different algorithm and a different cookie key for
+		 * non-devices here once actual access control comes about. filesystem
+		 * cookies should have properties that cross-systask device cookies
+		 * don't, such as a limited number of uses per process,
+		 * anti-bruteforcing, etc.
+		 */
+		*cookie_ptr = 0xdeadbeef;	/* plainly improper */
+	}
+
+	*object_ptr = final_ino;
 	*server_ptr = server.raw;
 	*ifmt_ptr = type << 12;	/* deliberate correspondence to S_IFMT */
 
@@ -691,14 +762,7 @@ static int squashfs_open(int *handle_p,
 
 	struct inode *nod = get_inode(object);
 	if(nod == NULL) return -EINVAL;
-
-	/* exclude objects that aren't regular inodes. as for sockets and fifos,
-	 * who can say.
-	 */
-	switch(squashfs_i(nod)->X.base.inode_type) {
-		case SQUASHFS_REG_TYPE: break;
-		default: return -EINVAL;
-	}
+	if(squashfs_i(nod)->X.base.inode_type != SQUASHFS_REG_TYPE) return -EINVAL;
 
 	/* TODO: translate O_CLOEXEC to IOD_CLOEXEC for io_add_fd() */
 	iof_t *f = iof_new(0);
@@ -1025,28 +1089,6 @@ static int squashfs_ipc_loop(
 }
 
 
-#if 0
-static void dump_root_inode(void)
-{
-	struct inode *nod = get_inode(fs_super->root_inode);
-	union squashfs_inode r = squashfs_i(nod)->X;
-	if(r.base.inode_type != SQUASHFS_DIR_TYPE) {
-		printf("root inode isn't a directory?\n");
-		abort();
-	}
-
-	printf("root inode=%u:\n"
-		"   type=%u, mode=%#x, uid=%u, guid=%u, mtime=%#x, inode_number=%u\n"
-		"   start_block=%u, nlink=%u, file_size=%u, offset=%u, parent=%u\n",
-		(unsigned)fs_super->root_inode, r.dir.inode_type, r.dir.mode,
-		r.dir.uid, r.dir.guid, r.dir.mtime,
-		r.dir.inode_number, r.dir.start_block,
-		r.dir.nlink, r.dir.file_size,
-		r.dir.offset, r.dir.parent_inode);
-}
-#endif
-
-
 static unsigned mount_squashfs_image(void *start, size_t sz)
 {
 	fs_image = start;
@@ -1075,14 +1117,17 @@ static unsigned mount_squashfs_image(void *start, size_t sz)
 		? c_modes[fs_super->compression] : NULL;
 	if(c_mode == NULL) c_mode = "[unknown]";
 #if 0
-	printf("squashfs superblock:\n"
+	log_info("squashfs superblock:\n"
 		"   inodes=%u, block_size=%u, fragments=%u, compression=%s\n"
 		"   block_log=%u, flags=%#x, no_ids=%u, s_major=%u, s_minor=%u\n"
-		"   root_inode=%u, bytes_used=%u\n",
+		"   root_inode=%u, bytes_used=%u\n"
+		"   inode_table_start=%lu, lookup_table_start=%lu",
 		fs_super->inodes, fs_super->block_size, fs_super->fragments, c_mode,
 		fs_super->block_log, fs_super->flags, fs_super->no_ids,
 		fs_super->s_major, fs_super->s_minor, (unsigned)fs_super->root_inode,
-		(unsigned)fs_super->bytes_used);
+		(unsigned)fs_super->bytes_used,
+		(unsigned long)fs_super->inode_table_start,
+		(unsigned long)fs_super->lookup_table_start);
 #endif
 
 	switch(fs_super->compression) {
@@ -1094,7 +1139,13 @@ static unsigned mount_squashfs_image(void *start, size_t sz)
 			return EINVAL;
 	}
 
-	//dump_root_inode();
+	ino_to_blkoffset = malloc((fs_super->inodes + 1) * sizeof *ino_to_blkoffset);
+	if(ino_to_blkoffset == NULL) return ENOMEM;
+	for(int i=0; i <= fs_super->inodes; i++) ino_to_blkoffset[i] = ~0u;
+	struct inode *nod = read_inode(fs_super->root_inode);
+	if(nod == NULL) return EIO;
+	root_ino = squashfs_i(nod)->X.base.inode_number;
+	ino_to_blkoffset[root_ino] = fs_super->root_inode;
 
 	return 0;
 }
@@ -1185,7 +1236,7 @@ static void fs_initialize(void)
 {
 	if(device_nodes_enabled) {
 		int typ = 0;
-		ino_t ino = lookup(&typ, fs_super->root_inode, "dev");
+		ino_t ino = lookup(&typ, root_ino, "dev");
 		if(ino >= 0 && typ == DT_DIR) {
 			dev_ino = ino;
 			ino = lookup(&typ, dev_ino, ".device-nodes");
