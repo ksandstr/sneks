@@ -94,7 +94,8 @@ int main(int argc, char *argv[], char *envp[])
 			darray_push(other_argv, envargs);
 			envargs = sep;
 		}
-		int other_argc = other_argv.size;
+		darray_push(other_argv, NULL);	/* for CCAN opt */
+		int other_argc = other_argv.size - 1;
 		if(!opt_parse(&other_argc, other_argv.item, &ignore_opt_error)) {
 			printf("*** UTEST_OPTS parsing failed!\n");
 			return 1;

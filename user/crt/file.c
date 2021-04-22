@@ -161,19 +161,20 @@ COLD void __file_init(struct sneks_fdlist *fdlist)
 	sintmap_init(&fd_map);
 	assert(invariants());
 
-	if(fdlist == NULL || fdlist->next == 0) return;
-
-	int prev = fdlist->fd, n;
-	do {
-		if(fdlist->fd > prev) abort();	/* invalid fdlist */
-		prev = fdlist->fd;
-		/* NOTE: flags is always 0 because FD_CLOEXEC (O_CLOEXEC) doesn't
-		 * carry through spawn or exec.
-		 */
-		n = __create_fd(fdlist->fd, fdlist->serv, fdlist->cookie, 0);
-		fdlist = sneks_fdlist_next(fdlist);
-	} while(n >= 0 && fdlist->next != 0);
-	int err = errno;
+	int err = 0, n = 0;
+	if(fdlist != NULL && fdlist->next != 0) {
+		int prev = fdlist->fd;
+		do {
+			if(fdlist->fd > prev) abort();	/* invalid fdlist */
+			prev = fdlist->fd;
+			/* NOTE: flags is always 0 because FD_CLOEXEC (O_CLOEXEC) doesn't
+			 * carry through spawn or exec.
+			 */
+			n = __create_fd(fdlist->fd, fdlist->serv, fdlist->cookie, 0);
+			fdlist = sneks_fdlist_next(fdlist);
+		} while(n >= 0 && fdlist->next != 0);
+		err = errno;
+	}
 
 	stdin = fdopen(0, "r");
 	stdout = fdopen(1, "w");
