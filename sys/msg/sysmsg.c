@@ -1,7 +1,6 @@
 
 #define SYSMSG_IMPL_SOURCE 1
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
@@ -92,9 +91,8 @@ static void msgclient_dtor(struct msgclient *c)
  * it'd have an error return path instead, though it's not known what systasks
  * would do if Sysmsg::setmask fails.
  */
-static int impl_setmask(int32_t or, int32_t and)
+static int setmask(L4_ThreadId_t recv_tid, int or, int and)
 {
-	L4_ThreadId_t recv_tid = muidl_get_sender();
 	struct msgclient *c = get_client(recv_tid);
 	if(c == NULL && and == 0 && or == 0) return 0;
 	if(c == NULL) {
@@ -108,7 +106,7 @@ static int impl_setmask(int32_t or, int32_t and)
 	int old_mask = c->subs_mask;
 	c->subs_mask = (c->subs_mask & and) | or;
 	int removed = old_mask & ~c->subs_mask, added = ~old_mask & c->subs_mask;
-	//printf("%s: removed=%#x, added=%#x\n", __func__, removed, added);
+	//log_info("removed=%#x, added=%#x", removed, added);
 	while(removed != 0) {
 		int bit = ffsl(removed) - 1;
 		assert(bit >= 0);
@@ -133,6 +131,11 @@ static int impl_setmask(int32_t or, int32_t and)
 	}
 
 	return old_mask;
+}
+
+
+static int impl_setmask(int or, int and) {
+	return setmask(muidl_get_sender(), or, and);
 }
 
 
@@ -218,8 +221,7 @@ static bool impl_broadcast(
 		int n = send_to_client(receivers[i], maskp, body, body_len);
 		if(n == 1) immediate = false;
 		else if(n < 0) {
-			printf("sysmsg: couldn't send to pid=%d, n=%d\n",
-				pidof_NP(receivers[i]->recv_tid), n);
+			log_err("couldn't send to pid=%d, n=%d", pidof_NP(receivers[i]->recv_tid), n);
 		}
 	}
 
@@ -374,16 +376,21 @@ SYSTASK_SELFTEST("sysmsg:bloom", filter_dec);
 #endif
 
 
-static void impl_add_filter(
+static void add_filter(L4_ThreadId_t sender,
 	int mask, const L4_Word_t *labels, unsigned n_labels)
 {
-	struct msgclient *c = get_client(muidl_get_sender());
-	if(c == NULL) return;	/* do setmask first plz */
+	struct msgclient *c = get_client(sender);
+	if(c == NULL) {
+		/* clients must start with a call to setmask, or not be recognized. */
+		log_err("no client for pid=%d (%lu:%lu)?", pidof_NP(sender),
+			L4_ThreadNo(sender), L4_Version(sender));
+		return;
+	}
 	if(c->filter == NULL) {
 		assert(c->n_filters == 0);
 		c->filter = calloc(FILTER_SIZE, sizeof *c->filter);
 		if(c->filter == NULL) {
-			fprintf(stderr, "can't allocate client filter!\n");
+			log_err("can't allocate client filter!");
 			/* FIXME: set some kind of an all-saturated filter, and don't free
 			 * it in msgclient_dtor()?
 			 */
@@ -406,10 +413,15 @@ static void impl_add_filter(
 }
 
 
-static void impl_rm_filter(
+static void impl_add_filter(int mask, const L4_Word_t *labels, unsigned n_labels) {
+	return add_filter(muidl_get_sender(), mask, labels, n_labels);
+}
+
+
+static void rm_filter(L4_ThreadId_t sender,
 	int mask, const L4_Word_t *labels, unsigned n_labels)
 {
-	struct msgclient *c = get_client(muidl_get_sender());
+	struct msgclient *c = get_client(sender);
 	if(c == NULL || c->filter == NULL) return;
 
 	int removed = 0;
@@ -435,6 +447,11 @@ static void impl_rm_filter(
 }
 
 
+static void impl_rm_filter(int mask, const L4_Word_t *labels, unsigned n_labels) {
+	return rm_filter(muidl_get_sender(), mask, labels, n_labels);
+}
+
+
 static L4_MsgTag_t recursive_sysmsg_call(
 	L4_MsgTag_t tag, L4_ThreadId_t sender)
 {
@@ -448,7 +465,7 @@ static L4_MsgTag_t recursive_sysmsg_call(
 			L4_Word_t or, and;
 			L4_StoreMR(1, &or);
 			L4_StoreMR(2, &and);
-			int oldmask = impl_setmask(or, and);
+			int oldmask = setmask(sender, or, and);
 			L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
 			L4_LoadMR(1, oldmask);
 			break;
@@ -471,13 +488,13 @@ static L4_MsgTag_t recursive_sysmsg_call(
 			L4_Word_t mask, labels[60];
 			L4_StoreMR(2, &mask);
 			L4_StoreMRs(3, n_labels, labels);
-			if(oplabel == 3) impl_add_filter(mask, labels, n_labels);
-			else impl_rm_filter(mask, labels, n_labels);
+			if(oplabel == 3) add_filter(sender, mask, labels, n_labels);
+			else rm_filter(sender, mask, labels, n_labels);
 			L4_LoadMR(0, 0);
 			break;
 		}
 		default:
-			printf("sysmsg: weird recursive tag=%#lx\n", tag.raw);
+			log_info("unexpected recursive tag=%#lx", tag.raw);
 			err = ENOSYS;
 			goto error;
 	}
@@ -524,7 +541,7 @@ int main(void)
 		{
 			/* oof */
 		} else {
-			fprintf(stderr, "sysmsg: dispatch status %#lx (last tag %#lx)\n",
+			log_info("dispatch status %#lx (last tag %#lx)",
 				status, muidl_get_tag().raw);
 		}
 	}
