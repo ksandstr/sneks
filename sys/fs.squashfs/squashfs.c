@@ -19,9 +19,9 @@
 #include <ccan/str/str.h>
 #include <ccan/htable/htable.h>
 #include <ccan/container_of/container_of.h>
-#include <ccan/siphash/siphash.h>
 #include <ccan/minmax/minmax.h>
 #include <ccan/hash/hash.h>
+#include <ccan/darray/darray.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -136,6 +136,7 @@ static size_t rehash_inode(const void *key, void *priv);
 static size_t rehash_dev(const void *key, void *priv);
 static size_t rehash_dentry_by_index(const void *key, void *priv);
 static size_t rehash_dentry_by_name(const void *key, void *priv);
+static size_t rehash_dentry_by_ino(const void *key, void *priv);
 static void rollback_open(L4_Word_t x, iof_t *f);
 
 
@@ -167,7 +168,9 @@ static struct htable blk_cache = HTABLE_INITIALIZER(
 	dentry_index_hash = HTABLE_INITIALIZER(dentry_index_hash,
 		&rehash_dentry_by_index, NULL),
 	dentry_name_hash = HTABLE_INITIALIZER(dentry_name_hash,
-		&rehash_dentry_by_name, NULL);
+		&rehash_dentry_by_name, NULL),
+	dentry_ino_hash = HTABLE_INITIALIZER(dentry_ino_hash,
+		&rehash_dentry_by_ino, NULL);
 
 /* ~0u for "not yet seen" */
 static unsigned *ino_to_blkoffset = NULL;	/* [fs_super->inodes + 1] */
@@ -217,6 +220,17 @@ static size_t rehash_dentry_by_index(const void *key, void *priv) {
 static size_t rehash_dentry_by_name(const void *key, void *priv) {
 	const struct dentry *d = key;
 	return int_hash(d->dir_ino) ^ hash_string(d->name);
+}
+
+static size_t rehash_dentry_by_ino(const void *key, void *priv) {
+	const struct dentry *d = key;
+	return int_hash(d->ino);
+}
+
+
+static bool cmp_dentry_by_ino(const void *cand, void *key) {
+	const struct dentry *dent = cand;
+	return dent->ino == *(ino_t *)key;
 }
 
 
@@ -573,9 +587,11 @@ static struct dentry *get_dentry(iof_t *file,
 		assert(hash == rehash_dentry_by_index(dent, NULL));
 		bool ok = htable_add(&dentry_index_hash, hash, dent);
 		ok = ok && htable_add(&dentry_name_hash, rehash_dentry_by_name(dent, NULL), dent);
+		ok = ok && htable_add(&dentry_ino_hash, rehash_dentry_by_ino(dent, NULL), dent);
 		if(!ok) {
 			*err_p = -ENOMEM;
 			htable_del(&dentry_index_hash, hash, dent);
+			htable_del(&dentry_name_hash, rehash_dentry_by_name(dent, NULL), dent);
 			free(dent);
 			dent = NULL;
 		}
@@ -740,6 +756,109 @@ static int squashfs_resolve(
 	*object_ptr = final_ino;
 	*server_ptr = server.raw;
 	*ifmt_ptr = type << 12;	/* deliberate correspondence to S_IFMT */
+
+	return 0;
+}
+
+
+/* TODO: catch ENOMEM from darray_push() */
+static int squashfs_get_path_fragment(
+	char *path, unsigned *obj_p, L4_Word_t *server_p, L4_Word_t *cookie_p,
+	int fd)
+{
+	sync_confirm();
+
+	pid_t caller = CALLER_PID;
+	ino_t ino;
+	if(fd > 0) {
+		iof_t *file = io_get_file(caller, fd);
+		if(file == NULL) return -EBADF;
+		ino = file->i->ino;
+	} else {
+		/* TODO: use the fancier cookie validation algorithm, and not this one
+		 * for device cookies, as detailed in squashfs_resolve().
+		 */
+		if(!validate_cookie(*cookie_p, &device_cookie_key,
+			L4_SystemClock(), *obj_p, caller))
+		{
+			return -EINVAL;
+		}
+		ino = *obj_p;
+	}
+
+	*server_p = L4_nilthread.raw;	/* TODO: fall out to parent */
+	darray(struct dentry *) parts = darray_new();
+	int n, total_length = 0;
+	while(ino != root_ino) {
+		struct dentry *dent = htable_get(&dentry_ino_hash, int_hash(ino),
+			&cmp_dentry_by_ino, &ino);
+		if(dent == NULL) {
+			log_err("dentry for ino=%u not found", ino);
+			n = -ENOENT;
+			goto end;
+		}
+		/* TODO: perform access checks on dent->dir_ino */
+		int part_len = dent->name_len + (parts.size > 0 ? 1 : 0);
+		if(total_length + part_len + 1 >= SNEKS_PATH_PATH_MAX) {
+			*server_p = L4_Myself().raw;
+			*obj_p = ino;
+			/* TODO: use a fancier cookie algorithm, per above */
+			*cookie_p = gen_cookie(&device_cookie_key, L4_SystemClock(),
+				*obj_p, caller);
+			break;
+		}
+		darray_push(parts, dent);
+		total_length += part_len;
+		ino = dent->dir_ino;
+	}
+
+	int pos = 0;
+	struct dentry **i;
+	darray_foreach_reverse(i, parts) {
+		if(pos > 0) path[pos++] = '/';
+		int len = strlen((*i)->name);
+		assert(pos + len + 1 < SNEKS_PATH_PATH_MAX);
+		memcpy(path + pos, (*i)->name, len);
+		pos += len;
+	}
+	assert(pos < SNEKS_PATH_PATH_MAX);
+	path[pos++] = '\0';
+	n = 0;
+
+end:
+	darray_free(parts);
+	return n;
+}
+
+
+static int squashfs_get_path(char *path, int fd, const char *suffix)
+{
+	sync_confirm();
+
+	L4_Word_t server = 0xdeadbeef;
+	int n = squashfs_get_path_fragment(path, &(unsigned){ 0 }, &server,
+		&(L4_Word_t){ 0 }, fd);
+	if(n != 0) return n;
+	if(server == L4_MyGlobalId().raw) {
+		/* our part was too long to fit in one segment. */
+		return -ENAMETOOLONG;
+	}
+
+	size_t suffixlen = strlen(suffix);
+	if(suffixlen > 0) {
+		assert(suffix[0] != '/');
+		size_t pathlen = strlen(path);
+		if(pathlen + suffixlen + 1 >= SNEKS_PATH_PATH_MAX) return -ENAMETOOLONG;
+		else {
+			path[pathlen++] = '/';
+			memcpy(path + pathlen, suffix, suffixlen);
+			path[pathlen + suffixlen] = '\0';
+		}
+	}
+
+	if(server != L4_nilthread.raw) {
+		/* TODO: propagate @path as suffix to parent filesystem */
+	}
 
 	return 0;
 }
@@ -1060,9 +1179,6 @@ static int squashfs_getdents(int dirfd, int *offset_ptr, int *endpos_ptr,
 }
 
 
-static int enosys() { return -ENOSYS; }
-
-
 static int squashfs_ipc_loop(
 	void *initrd_start, size_t initrd_size,
 	int argc, char *argv[])
@@ -1070,8 +1186,8 @@ static int squashfs_ipc_loop(
 	struct squashfs_impl_vtable vtab = {
 		/* Sneks::Path */
 		.resolve = &squashfs_resolve,
-		.get_path = &enosys,
-		.get_path_fragment = &enosys,
+		.get_path = &squashfs_get_path,
+		.get_path_fragment = &squashfs_get_path_fragment,
 
 		/* Sneks::File */
 		.open = &squashfs_open,
