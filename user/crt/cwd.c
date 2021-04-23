@@ -2,15 +2,93 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
+#include <alloca.h>
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/types.h>
+#include <ccan/darray/darray.h>
+
+#include <sneks/api/path-defs.h>
 
 #include "private.h"
 
-
 int __cwd_fd = -1;
+
+
+char *getcwd(char *buf, size_t buf_size)
+{
+	if(buf_size == 0) {
+		/* Linux manpages say this should happen iff also buf != NULL, but the
+		 * POSIX ones never mention that. we'll go with POSIX.
+		 */
+		errno = EINVAL;
+		return NULL;
+	}
+	char *curdir = get_current_dir_name();
+	if(curdir == NULL) return NULL;
+	size_t len = strlen(curdir) + 1;
+	if(len > buf_size) {
+		errno = ERANGE;
+		return NULL;
+	}
+	memcpy(buf, curdir, len);
+	free(curdir);
+	return buf;
+}
+
+
+/* TODO: remove darray, catch ENOMEM everywhere */
+char *get_current_dir_name(void)
+{
+	if(__cwd_fd < 0) {
+		errno = ENOENT;
+		return NULL;
+	}
+	struct fd_bits *bits = __fdbits(__cwd_fd);
+	if(bits == NULL || bits->handle == 0) {
+		errno = ENOENT;
+		return NULL;
+	}
+
+	/* fast mode. */
+	char *ret;
+	darray(char) buf = darray_new();
+	darray_realloc(buf, SNEKS_PATH_PATH_MAX + 1);
+	buf.item[0] = '/';
+	int n = __path_get_path(bits->server, buf.item + 1, bits->handle, "");
+	if(n != 0 && n != -ENAMETOOLONG) goto fail;
+	else if(n == 0) {
+		buf.size = strlen(buf.item);
+		goto end;
+	}
+
+	/* the long way around. */
+	unsigned object = 0;
+	L4_Word_t cookie = 0;
+	L4_ThreadId_t server = L4_nilthread;
+	char *frag = alloca(SNEKS_PATH_PATH_MAX + 1);	/* thicc stacc */
+	frag[0] = '/';
+	n = __path_get_path_fragment(bits->server, &frag[1],
+		&object, &server.raw, &cookie, bits->handle);
+	for(;;) {
+		if(n != 0) goto fail;
+		darray_prepend_string(buf, frag);
+		if(L4_IsNilThread(server)) break;
+		n = __path_get_path_fragment(server, &frag[1],
+			&object, &server.raw, &cookie, 0);
+	}
+
+end:
+	ret = realloc(buf.item, buf.size + 1);
+	ret[buf.size] = '\0';
+	return ret;
+
+fail:
+	darray_free(buf);
+	NTOERR(n);
+	return NULL;
+}
 
 
 int chdir(const char *path)
@@ -53,15 +131,4 @@ int fchdir(int dirfd)
 		__cwd_fd = copy;
 		return 0;
 	}
-}
-
-
-char *getcwd(char *buf, size_t size) {
-	strncpy(buf, ".", size);
-	return buf;
-}
-
-
-char *get_current_dir_name(void) {
-	return strdup(".");
 }

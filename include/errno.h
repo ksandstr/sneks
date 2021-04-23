@@ -27,6 +27,7 @@
 #define ESPIPE	29	/* 's pipe, socket, or fifo (illegal seek) */
 #define EROFS	30	/* read-only file system */
 #define EPIPE	32	/* broken pipe */
+#define ERANGE	34	/* out of range */
 #define EDEADLK 35	/* resource deadlock would occur */
 #define ENAMETOOLONG 36 /* would exceed PATH_MAX */
 #define ENOSYS	38	/* function not implemented */
