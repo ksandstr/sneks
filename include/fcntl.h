@@ -12,12 +12,12 @@
 /* TODO: get all of these from io-defs.h, file-defs.h, etc. and group
  * according to what goes in open/openat flags and what in F_SETFL.
  */
-#define O_TRUNC 01000
-#define O_APPEND 02000
-#define O_NONBLOCK 04000
-#define O_CREAT 00000100
-#define O_DIRECTORY 00200000
-#define O_TMPFILE 020000000
+#define O_CREAT		0100
+#define O_TRUNC		01000
+#define O_APPEND	02000
+#define O_NONBLOCK	04000
+#define O_DIRECTORY	0200000
+#define O_TMPFILE	020000000
 
 /* fcntl commands. */
 #define F_DUPFD 0

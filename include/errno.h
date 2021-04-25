@@ -10,10 +10,12 @@
 #define EINTR	4	/* interrupted system call */
 #define EIO		5	/* i/o error */
 #define E2BIG	7	/* argument list too long */
+#define ENOEXEC	8	/* executable format error */
 #define EBADF	9	/* bad file number */
 #define ECHILD	10	/* no child processes */
 #define EAGAIN	11	/* try again */
 #define ENOMEM	12	/* out of memory */
+#define EACCES	13	/* access check failed */
 #define EFAULT	14	/* bad address */
 #define EBUSY	16	/* device or resource busy */
 #define EEXIST	17	/* file exists */

@@ -22,6 +22,10 @@
 #define SEEK_END 2
 #endif
 
+#define STDIN_FILENO 0
+#define STDOUT_FILENO 1
+#define STDERR_FILENO 2
+
 
 typedef unsigned int useconds_t;
 
@@ -56,6 +60,31 @@ extern int pipe2(int pipefd[2], int flags);
 #endif
 
 extern pid_t fork(void);
+
+
+/* exec family. */
+
+extern int execve(const char *pathname, char *const argv[], char *const envp[]);
+
+extern int execl(const char *pathname, const char *arg, ... /* (char *)NULL */);
+extern int execlp(const char *file, const char *arg, ... /* (char *)NULL */);
+extern int execle(const char *pathname, const char *arg,
+	... /* (char *)NULL, char *const envp[] */);
+extern int execv(const char *pathname, char *const argv[]);
+extern int execvp(const char *file, char *const argv[]);
+#ifdef _GNU_SOURCE
+extern int execvpe(const char *file, char *const argv[], char *const envp[]);
+#endif
+
+extern int fexecve(int fd, char *const argv[], char *const envp[]);
+
+/* linux-specific but we'll allow it. */
+extern int execveat(int dirfd, const char *pathname,
+	char *const argv[], char *const envp[], int flags);
+
+/* TODO: move these elsewhere to join w/ AT_SYMLINK_NOFOLLOW's proper def */
+#define AT_EMPTY_PATH (1 << 30)
+#define AT_SYMLINK_NOFOLLOW (1 << 29)
 
 
 /* sysconf() names as far as sneks knows of 'em. */
