@@ -354,7 +354,7 @@ static struct fd *alloc_fd(struct client *client)
 		if(ret == NULL) break;
 		desc = ra_ptr2id(fd_ra, ret);
 		if(desc < client->fd_table_len && client->fd_table[desc] > 0) {
-			log_info("skipping desc=%d for client->pid=%d", desc, client->pid);
+			//log_info("skipping desc=%d for client->pid=%d", desc, client->pid);
 			darray_push(skips, ret);
 		}
 	} while(desc < client->fd_table_len && client->fd_table[desc] > 0);
@@ -828,7 +828,7 @@ static int internal_dup(int *newfd_p, int oldfd, pid_t receiver_pid)
 	/* TODO: use a lower-level operation here since fd->owner need not be
 	 * htable_got again.
 	 */
-	int n = io_add_fd(sender_pid, IOF_T(fd->file), fd->flags);
+	int n = io_add_fd(sender_pid, IOF_T(fd->file), fd->flags & ~IOD_PRIVATE_MASK);
 	if(n < 0) {
 		free(t);
 		return n;

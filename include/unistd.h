@@ -56,7 +56,6 @@ extern int pipe2(int pipefd[2], int flags);
 #endif
 
 extern pid_t fork(void);
-extern pid_t wait(int *status_p);
 
 
 /* sysconf() names as far as sneks knows of 'em. */

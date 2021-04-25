@@ -42,7 +42,8 @@ void __assert_failure(
 	const char *cond,
 	const char *file, unsigned int line, const char *fn)
 {
-	printf("!!! assert(%s) failed in `%s' [%s:%u]\n", cond, fn, file, line);
+	fprintf(stderr, "!!! assert(%s) failed in `%s' [%s:%u]\n",
+		cond, fn, file, line);
 	abort();
 }
 
@@ -181,7 +182,7 @@ static void init_cwd(char **envp)
 		}
 	}
 	if(curdir == NULL && !use_cwd_handle(envp)) {
-		fprintf(stderr, "crt1: defaulting cwd to `/'\n");
+		/* if all else fails, silently default to "/". */
 		if(chdir("/") < 0) {
 			fprintf(stderr, "crt1: chdir to '/' failed, errno=%d\n", errno);
 			abort();	/* screw you guys, i'm going home */
