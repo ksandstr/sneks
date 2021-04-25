@@ -135,7 +135,7 @@ static size_t rehash_blk(const void *key, void *priv);
 static size_t rehash_inode(const void *key, void *priv);
 static size_t rehash_dev(const void *key, void *priv);
 static size_t rehash_dentry_by_index(const void *key, void *priv);
-static size_t rehash_dentry_by_name(const void *key, void *priv);
+static size_t rehash_dentry_by_dir_ino_and_name(const void *key, void *priv);
 static size_t rehash_dentry_by_ino(const void *key, void *priv);
 static void rollback_open(L4_Word_t x, iof_t *f);
 
@@ -168,7 +168,7 @@ static struct htable blk_cache = HTABLE_INITIALIZER(
 	dentry_index_hash = HTABLE_INITIALIZER(dentry_index_hash,
 		&rehash_dentry_by_index, NULL),
 	dentry_name_hash = HTABLE_INITIALIZER(dentry_name_hash,
-		&rehash_dentry_by_name, NULL),
+		&rehash_dentry_by_dir_ino_and_name, NULL),
 	dentry_ino_hash = HTABLE_INITIALIZER(dentry_ino_hash,
 		&rehash_dentry_by_ino, NULL);
 
@@ -203,7 +203,7 @@ static bool cmp_inode_ino(const void *cand, void *key) {
 
 static size_t rehash_dev(const void *key, void *priv) {
 	const struct dev *dev = key;
-	return hash(dev->name, strlen(dev->name), 0);
+	return hash_string(dev->name);
 }
 
 static bool cmp_dev_name(const void *cand, void *key) {
@@ -217,7 +217,7 @@ static size_t rehash_dentry_by_index(const void *key, void *priv) {
 	return int_hash(d->dir_ino) ^ int_hash(d->index);
 }
 
-static size_t rehash_dentry_by_name(const void *key, void *priv) {
+static size_t rehash_dentry_by_dir_ino_and_name(const void *key, void *priv) {
 	const struct dentry *d = key;
 	return int_hash(d->dir_ino) ^ hash_string(d->name);
 }
@@ -586,12 +586,12 @@ static struct dentry *get_dentry(iof_t *file,
 	if(dent != NULL) {
 		assert(hash == rehash_dentry_by_index(dent, NULL));
 		bool ok = htable_add(&dentry_index_hash, hash, dent);
-		ok = ok && htable_add(&dentry_name_hash, rehash_dentry_by_name(dent, NULL), dent);
+		ok = ok && htable_add(&dentry_name_hash, rehash_dentry_by_dir_ino_and_name(dent, NULL), dent);
 		ok = ok && htable_add(&dentry_ino_hash, rehash_dentry_by_ino(dent, NULL), dent);
 		if(!ok) {
 			*err_p = -ENOMEM;
 			htable_del(&dentry_index_hash, hash, dent);
-			htable_del(&dentry_name_hash, rehash_dentry_by_name(dent, NULL), dent);
+			htable_del(&dentry_name_hash, rehash_dentry_by_dir_ino_and_name(dent, NULL), dent);
 			free(dent);
 			dent = NULL;
 		}
@@ -707,8 +707,7 @@ static int squashfs_resolve(
 		if(is_last && device_nodes_enabled && !L4_IsNilThread(dev_tid)
 			&& dir_ino == dev_ino && !streq(part, ".device-nodes"))
 		{
-			size_t hash = hash(part, strlen(part), 0);
-			struct dev *dev = htable_get(&device_nodes, hash,
+			struct dev *dev = htable_get(&device_nodes, hash_string(part),
 				&cmp_dev_name, part);
 			if(dev == NULL) {
 				/* NOTE: should we support subdirectories of /dev? currently
@@ -976,11 +975,6 @@ static int64_t seek_block_list(uint64_t *block, int *offset, int target)
 		}
 		for(int i=0; i < blocks; i++) {
 			uint32_t word = LE32_TO_CPU(lens[i]);
-#if 0
-			printf("blockptr[%d]=%#x (%u, %u)\n", i, word,
-				SQUASHFS_COMPRESSED_BLOCK(word),
-				SQUASHFS_COMPRESSED_SIZE_BLOCK(word));
-#endif
 			res += SQUASHFS_COMPRESSED_SIZE_BLOCK(word);
 		}
 		target -= blocks;
@@ -1237,19 +1231,6 @@ static unsigned mount_squashfs_image(void *start, size_t sz)
 	const char *c_mode = fs_super->compression < ARRAY_SIZE(c_modes)
 		? c_modes[fs_super->compression] : NULL;
 	if(c_mode == NULL) c_mode = "[unknown]";
-#if 0
-	log_info("squashfs superblock:\n"
-		"   inodes=%u, block_size=%u, fragments=%u, compression=%s\n"
-		"   block_log=%u, flags=%#x, no_ids=%u, s_major=%u, s_minor=%u\n"
-		"   root_inode=%u, bytes_used=%u\n"
-		"   inode_table_start=%lu, lookup_table_start=%lu",
-		fs_super->inodes, fs_super->block_size, fs_super->fragments, c_mode,
-		fs_super->block_log, fs_super->flags, fs_super->no_ids,
-		fs_super->s_major, fs_super->s_minor, (unsigned)fs_super->root_inode,
-		(unsigned)fs_super->bytes_used,
-		(unsigned long)fs_super->inode_table_start,
-		(unsigned long)fs_super->lookup_table_start);
-#endif
 
 	switch(fs_super->compression) {
 		case LZ4_COMPRESSION:
@@ -1291,8 +1272,7 @@ static void parse_device_node(char *line, int length)
 	while(*trail != '\0' && !isspace(*trail)) trail++;
 	*trail = '\0';
 
-	struct dev *dev = malloc(sizeof *dev);
-	memset(dev->name, 0, sizeof dev->name);
+	struct dev *dev = calloc(1, sizeof *dev);
 	memcpy(dev->name, name, min(strlen(name), sizeof dev->name - 1));
 	switch(type[0]) {
 		case 'c': dev->is_chr = true; break;
@@ -1301,14 +1281,6 @@ static void parse_device_node(char *line, int length)
 	}
 	dev->major = strtol(major, NULL, 10);
 	dev->minor = strtol(minor, NULL, 10);
-
-#if 0
-	printf("%s: name=`%s', type=`%s', major=`%s', minor=`%s'\n",
-		__func__, name, type, major, minor);
-	printf("%s\tparsed to name=`%s', is_chr=%s, major=%u, minor=%u\n",
-		__func__, dev->name, dev->is_chr ? "true" : "false",
-		dev->major, dev->minor);
-#endif
 
 	htable_add(&device_nodes, rehash_dev(dev, NULL), dev);
 	return;
