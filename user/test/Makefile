@@ -10,10 +10,8 @@ LDFLAGS:=$(LDFLAGS) -e_start -nostdlib -L $(MUNG_DIR)/user/lib/l4 \
 CFLAGS:=$(CFLAGS) -D__KERNEL__ -D__sneks__=1 -D__l4x2__=1 -mstackrealign \
 	-DTESTDIR="\"/\""	# leaning toothpicks in a grassy meadow
 
-OUTPUTS=testsuite hostsuite
-
 # here, we actually want the two-part path shown.
-TEST_SOURCE:=$(wildcard */*.c)
+TEST_SOURCE:=$(filter-out tools/%.c,$(wildcard */*.c))
 TEST_OBJS:=$(TEST_SOURCE:%.c=%.o)
 
 TESTSUITE_OBJS:=main.o harness.o optcompat.o $(TEST_OBJS) \
@@ -25,6 +23,11 @@ HOSTSUITE_CFLAGS=-O2 -Wall -march=native -std=gnu11 -m32 -D_GNU_SOURCE \
 	-I $(CFGDIR)/user/test/hostinclude -I $(CCAN_DIR) -I $(LFHT_DIR) \
 	-Wno-frame-address -DTESTDIR="\"$(HOSTSUITE_TESTDIR)\""
 	#-DDEBUG_ME_HARDER #-DCCAN_LIST_DEBUG
+
+TOOLS:=$(patsubst tools/%.c,tools/%,$(wildcard tools/*.c))
+HOSTSUITE_TOOLS:=$(patsubst tools/%,tools/%.host,$(TOOLS))
+
+OUTPUTS=testsuite $(TOOLS) hostsuite $(HOSTSUITE_TOOLS)
 
 vpath %.idl $(CFGDIR)/idl/api
 
@@ -47,10 +50,18 @@ testsuite: $(LDSCRIPT) $(TESTSUITE_OBJS) $(CFGDIR)/lib/tap.o ccan-opt.a
 		-lsneks-user-crt -lsneks -ll4 -lm \
 		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
+tools/%: $(LDSCRIPT) tools/%.o
+	@echo "  LD $@"
+	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T $(LDSCRIPT) \
+		$(filter %.o,$^) $(filter %.a,$^) \
+		-lsneks-user-crt -lsneks -ll4 -lm \
+		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
-initrd-install: testsuite
+initrd-install: testsuite $(TOOLS)
 	@mkdir -p $(INITRD)/user
 	@install $< $(INITRD)/user/
+	@mkdir -p $(INITRD)/user/test/tools
+	@install -t $(INITRD)/user/test/tools $(TOOLS)
 	+@make test-files-install
 
 test-files-install:
@@ -73,11 +84,19 @@ test-files-install:
 # hostsuite stuff. perhaps dirtier than necessary.
 
 hostsuite: $(HOSTSUITE_OBJS) $(CFGDIR)/lib/tap.c $(CFGDIR)/lib/strscpy.c \
-		ccan-htable.host.o ccan-autodata.host.o ccan-opt.host.a
+		ccan-htable.host.o ccan-autodata.host.o ccan-opt.host.a \
+		$(HOSTSUITE_TOOLS)
 	@echo "  INSTALL $(HOSTSUITE_TESTDIR)"
 	@mkdir -p $(HOSTSUITE_TESTDIR)
 	@rm -rf $(HOSTSUITE_TESTDIR)/user/test
+	@mkdir -p $(HOSTSUITE_TESTDIR)/user/test/tools
+	@install -t $(HOSTSUITE_TESTDIR)/user/test/tools $(HOSTSUITE_TOOLS)
+	@rename 's/\.host//' $(HOSTSUITE_TESTDIR)/user/test/tools/*.host
 	+@make INITRD=$(HOSTSUITE_TESTDIR) test-files-install
+	@echo "  LD $@ <impure!>"
+	@$(CC) -o $@ $(filter-out tools/%,$^) $(HOSTSUITE_CFLAGS)
+
+tools/%.host: tools/%.host.o
 	@echo "  LD $@ <impure!>"
 	@$(CC) -o $@ $^ $(HOSTSUITE_CFLAGS)
 
@@ -85,7 +104,6 @@ hostsuite: $(HOSTSUITE_OBJS) $(CFGDIR)/lib/tap.c $(CFGDIR)/lib/strscpy.c \
 ccan-%.host.o ::
 	@echo "  CC $@ <ccan>"
 	@$(CC) -c -o $@ $(CCAN_DIR)/ccan/$*/$*.c $(HOSTSUITE_CFLAGS)
-
 
 # also complex CCAN modules. build-ccan-module.pl emits CC lines as
 # appropriate.

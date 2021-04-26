@@ -1,0 +1,5 @@
+# outputs
+*.host
+exit_with_0
+exit_with_1
+exit_with_getpid
