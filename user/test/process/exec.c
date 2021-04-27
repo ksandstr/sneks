@@ -57,4 +57,44 @@ END_TEST
 DECLARE_TEST("process:exec", exit_status);
 
 
+/* kinds of executable, positive: regular programs, scripts run by a regular
+ * program, and scripts run by another script.
+ */
+START_LOOP_TEST(kinds_positive, iter, 0, 2)
+{
+	const char *prgname;
+	switch(iter) {
+		case 0: prgname = "tools/exit_with_0"; break;
+		case 1: prgname = "scripts/first_order_script"; break;
+		case 2: prgname = "scripts/second_order_script"; break;
+		default: assert(false);
+	}
+	diag("prgname=`%s'", prgname);
+	plan_tests(4);
 
+	ok(chdir(TESTDIR) == 0, "chdir(TESTDIR)");
+
+#ifdef __sneks__
+	todo_start("no implementation");
+#endif
+
+	int child = fork();
+	if(child == 0) {
+		char *fullpath = talloc_asprintf(NULL, "user/test/%s", prgname);
+		execl(fullpath, prgname, (char *)NULL);
+		talloc_free(fullpath);
+		int err = errno;
+		diag("execl failed, errno=%d", err);
+		exit(err | 0x80);
+	}
+	diag("child=%d", child);
+
+	int st, n = waitpid(child, &st, 0);
+	skip_start(!ok(n == child, "waitpid"), 2, "errno=%d", errno) {
+		ok1(WIFEXITED(st));
+		ok1(WEXITSTATUS(st) == 0);
+	} skip_end;
+}
+END_TEST
+
+DECLARE_TEST("process:exec", kinds_positive);

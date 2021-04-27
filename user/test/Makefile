@@ -25,6 +25,7 @@ HOSTSUITE_CFLAGS=-O2 -Wall -march=native -std=gnu11 -m32 -D_GNU_SOURCE \
 	#-DDEBUG_ME_HARDER #-DCCAN_LIST_DEBUG
 
 TOOLS:=$(patsubst tools/%.c,tools/%,$(wildcard tools/*.c))
+SCRIPTS:=$(wildcard scripts/*)
 HOSTSUITE_TOOLS:=$(patsubst tools/%,tools/%.host,$(TOOLS))
 
 OUTPUTS=testsuite $(TOOLS) hostsuite $(HOSTSUITE_TOOLS)
@@ -62,6 +63,8 @@ initrd-install: testsuite $(TOOLS)
 	@install $< $(INITRD)/user/
 	@mkdir -p $(INITRD)/user/test/tools
 	@install -t $(INITRD)/user/test/tools $(TOOLS)
+	@mkdir -p $(INITRD)/user/test/scripts
+	@install -t $(INITRD)/user/test/scripts $(SCRIPTS)
 	+@make test-files-install
 
 test-files-install:
@@ -91,6 +94,8 @@ hostsuite: $(HOSTSUITE_OBJS) $(CFGDIR)/lib/tap.c $(CFGDIR)/lib/strscpy.c \
 	@rm -rf $(HOSTSUITE_TESTDIR)/user/test
 	@mkdir -p $(HOSTSUITE_TESTDIR)/user/test/tools
 	@install -t $(HOSTSUITE_TESTDIR)/user/test/tools $(HOSTSUITE_TOOLS)
+	@mkdir -p $(HOSTSUITE_TESTDIR)/user/test/scripts
+	@install -t $(HOSTSUITE_TESTDIR)/user/test/scripts $(SCRIPTS)
 	@rename 's/\.host//' $(HOSTSUITE_TESTDIR)/user/test/tools/*.host
 	+@make INITRD=$(HOSTSUITE_TESTDIR) test-files-install
 	@echo "  LD $@ <impure!>"
