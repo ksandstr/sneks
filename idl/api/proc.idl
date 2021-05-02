@@ -5,6 +5,7 @@
 #include <muidl.idl>
 #include <l4x2.idl>
 #include <posixlike.idl>
+#include <api/io.idl>
 
 
 #define uid_t Posix::id_t
@@ -24,6 +25,18 @@ interface Proc
 	typedef string<512> pathbuf;
 	typedef string<4096> argbuf; /* substrings separated by 0x1e (RS). */
 
+	/* since muidl is broken wrt sequences of structs, we pass spawn and
+	 * exec's fdlist components as three arrays like BASIC in 1983. the length
+	 * of the resulting fdlist is the length of the shortest component
+	 * sequence. this kludge will go away once muidl gets unfucked.
+	 *
+	 * TODO: rename fd_cookies to fd_handles, pass a sequence of IO::handle
+	 * instead.
+	 */
+	typedef sequence<L4X2::ThreadId, 1024> fd_servs;
+	typedef sequence<L4X2::word, 1024> fd_cookies;
+	typedef sequence<long, 1024> fd_fds;
+
 	[Label(0x1234)]		/* (provisional) */
 	void create_thread([MR(1)] out L4X2::ThreadId tid)
 		raises(Posix::Errno);
@@ -42,19 +55,26 @@ interface Proc
 	 * spawn. this interface is different from, and more low-level than, the
 	 * standard posix_spawn(3); the two should not be confused.
 	 *
-	 * since muidl is broken wrt sequences of structs, we pass the fdlist
-	 * structure's components in parallel. the length of the resulting fdlist
-	 * is the length of the shortest component sequence. this kludge will go
-	 * away once muidl gets unfucked.
-	 *
 	 * return value is the new process ID.
+	 *
+	 * TODO: rename parameters to conform with revised nomenclature.
 	 */
-	typedef sequence<L4X2::ThreadId, 1024> fd_servs;
-	typedef sequence<L4X2::word, 1024> fd_cookies;
-	typedef sequence<long, 1024> fd_fds;
 	unsigned short spawn(
 		in pathbuf filename, in argbuf args, in argbuf envs,
 		in fd_servs servs, in fd_cookies cookies, in fd_fds fds)
+			raises(Posix::Errno);
+
+	/* replaces the caller's process image with a process started from a
+	 * Sneks::File @serv:@handle according to how POSIX exec(2) family does
+	 * it. same parameter formats as spawn(), up there.
+	 *
+	 * returns an error or doesn't.
+	 *
+	 * TODO: see above; these are really awful now.
+	 */
+	void exec(in L4X2::ThreadId serv, in IO::handle handle,
+		in argbuf args, in argbuf envs,
+		in fd_servs servs, in fd_cookies handles, in fd_fds fds)
 			raises(Posix::Errno);
 
 	/* like POSIX kill(2) */

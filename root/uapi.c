@@ -828,7 +828,7 @@ static int uapi_spawn(
 	const char *argbuf, const char *envbuf,
 	const L4_Word_t *fd_servs, unsigned fd_servs_len,
 	const L4_Word_t *fd_cookies, unsigned fd_cookies_len,
-	const int32_t *fd_fds, unsigned fd_fds_len)
+	const int *fd_fds, unsigned fd_fds_len)
 {
 	assert(!L4_IsNilThread(vm_tid));
 
@@ -993,6 +993,17 @@ static int uapi_spawn(
 
 fail:
 	return n <= 0 ? n : -EIO;
+}
+
+
+static int uapi_exec(
+	L4_Word_t server_tid_raw, int ffd,
+	const char *argbuf, const char *envbuf,
+	const L4_Word_t *fd_servs, unsigned fd_servs_len,
+	const L4_Word_t *fd_cookies, unsigned fd_cookies_len,
+	const int *fd_fds, unsigned fd_fds_len)
+{
+	return -ENOSYS;
 }
 
 
@@ -1351,6 +1362,7 @@ int uapi_loop(void *param_ptr)
 		.create_thread = &uapi_create_thread,
 		.remove_thread = &uapi_remove_thread,
 		.spawn = &uapi_spawn,
+		.exec = &uapi_exec,
 		.kill = &root_uapi_kill,
 		.exit = &uapi_exit,
 		.wait = &uapi_wait,
