@@ -28,6 +28,9 @@ struct __sysinfo *__the_sysinfo = NULL;
 L4_ThreadId_t __main_tid;
 
 
+extern char **environ;
+
+
 void __assert_failure(
 	const char *cond,
 	const char *file, unsigned int line, const char *fn)
@@ -89,51 +92,47 @@ static uintptr_t fdlist_last(uintptr_t fdlistptr)
 }
 
 
-static char **unpack_argpage(
-	L4_Word_t base, int buflen, int n_strs, bool terminate)
+static char **unpack_argpage(L4_Word_t base, int buflen, int n_strs)
 {
-	char **strv;
-	int n_alloc = terminate ? n_strs + 1 : n_strs;
-	if(PAGE_SIZE - (buflen & PAGE_MASK) > n_alloc * sizeof(char *) + 8) {
-		strv = (char **)((base + buflen + 7) & ~7);
-	} else {
-		strv = malloc(n_alloc * sizeof *strv);
-		if(strv == NULL) abort();
-	}
+	char **strv = calloc(n_strs + 1, sizeof *strv);
+	if(strv == NULL) abort();
 	char *str = (char *)base;
 	for(int i=0; *str != '\0'; str += strlen(str) + 1, i++) {
 		assert(i <= n_strs);
-		strv[i] = str;
+		strv[i] = strdup(str);
+		if(strv[i] == NULL) abort();
 	}
-	if(terminate) strv[n_strs] = NULL;
+	strv[n_strs] = NULL;
 	return strv;
 }
 
 
-static char *consume_env(char **envp, const char *key)
+static char *consume_env(const char *key)
 {
 	int key_len = strlen(key), found = -1;
 	char *eq = NULL;
-	for(int i=0; envp[i] != NULL; i++) {
-		eq = strchr(envp[i], '=');
+	for(int i=0; environ != NULL && environ[i] != NULL; i++) {
+		eq = strchr(environ[i], '=');
 		if(eq == NULL) continue;
-		if(eq - envp[i] == key_len && memcmp(key, envp[i], key_len) == 0) {
+		if(eq - environ[i] == key_len && memcmp(key, environ[i], key_len) == 0) {
 			found = i;
 			break;
 		}
 	}
 	if(found < 0) return NULL;
 
-	for(int i = found; envp[i] != NULL; i++) envp[i] = envp[i + 1];
+	for(int i = found; environ != NULL && environ[i] != NULL; i++) {
+		environ[i] = environ[i + 1];
+	}
 
 	*eq = '\0';
 	return &eq[1];
 }
 
 
-static bool use_cwd_handle(char **envp)
+static bool use_cwd_handle(void)
 {
-	char *var = consume_env(envp, "__CWD_HANDLE");
+	char *var = consume_env("__CWD_HANDLE");
 	if(var == NULL) return false;
 
 	/* TODO: replace with sscanf() */
@@ -161,9 +160,9 @@ static bool use_cwd_handle(char **envp)
 }
 
 
-static void init_cwd(char **envp)
+static void init_cwd(void)
 {
-	char *curdir = consume_env(envp, "__CWD_PATH");
+	char *curdir = consume_env("__CWD_PATH");
 	if(curdir != NULL) {
 		int n = chdir(curdir);
 		if(n < 0) {
@@ -171,7 +170,7 @@ static void init_cwd(char **envp)
 			curdir = NULL;
 		}
 	}
-	if(curdir == NULL && !use_cwd_handle(envp)) {
+	if(curdir == NULL && !use_cwd_handle()) {
 		/* if all else fails, silently default to "/". */
 		if(chdir("/") < 0) {
 			fprintf(stderr, "crt1: chdir to '/' failed, errno=%d\n", errno);
@@ -181,37 +180,33 @@ static void init_cwd(char **envp)
 }
 
 
-int __crt1_entry(uintptr_t fdlistptr)
+int __crt1_entry(uintptr_t argpos)
 {
 	__the_kip = L4_GetKernelInterface();
 	__the_sysinfo = __get_sysinfo(__the_kip);
 	__main_tid = L4_MyLocalId();
 
-	extern char _end;
-	L4_Word_t argpos = ((L4_Word_t)&_end + PAGE_SIZE - 1) & ~PAGE_MASK;
-
 	/* the way that argument passing works at the moment is silly: UAPI puts a
-	 * flattened array of argv[] on the page after &_end, and then the same
-	 * for envp[] on the page after that array ends. fdlists go after that.
+	 * flattened array of argv[] at @argpos, followed by for envp[] starting
+	 * from the page after that array ends. fdlists go after that.
 	 *
 	 * to parse this, all userspace programs must start by parsing through all
 	 * three buffers and then choosing the page after the last of these ends
 	 * for the very first program break. this is fucktarded, and UAPI should
 	 * be changed to pass a pointer to a <struct sneks_arghdr> or some such
-	 * where fdlistptr goes right now; uapi_spawn() crawls over its parameters
-	 * to produce the silly version already, so it's also a performance insult.
+	 * where argpos goes right now; uapi_spawn() crawls over its parameters to
+	 * produce the silly version already, so this way is also a performance
+	 * insult.
 	 *
-	 * TODO: replace all of this with something reasonable, i.e. doing all of
-	 * this work in UAPI already.
+	 * TODO: unfuck it.
 	 */
 
-	L4_Word_t args_base = argpos;
-	int n_args, argbuflen = nstrlen(&n_args, (char *)args_base);
-	L4_Word_t envs_base = (argpos + argbuflen + PAGE_SIZE - 1) & ~PAGE_MASK;
+	int n_args, argbuflen = nstrlen(&n_args, (char *)argpos);
+	uintptr_t envs_base = (argpos + argbuflen + PAGE_SIZE - 1) & ~PAGE_MASK;
 	int n_envs, envbuflen = nstrlen(&n_envs, (char *)envs_base);
-	L4_Word_t fdlist_end = fdlist_last(fdlistptr);
-	brk((void *)max((envs_base + PAGE_SIZE - 1) & ~PAGE_MASK,
-		(fdlist_end + PAGE_SIZE - 1) & ~PAGE_MASK));
+	uintptr_t fdlistptr = (envs_base + envbuflen + PAGE_SIZE - 1) & ~PAGE_MASK,
+		fdlist_end = fdlist_last(fdlistptr);
+	brk((void *)((fdlist_end + PAGE_SIZE - 1) & ~PAGE_MASK));
 	/* right. malloc is now good. */
 
 	__file_init((void *)fdlistptr);
@@ -220,13 +215,11 @@ int __crt1_entry(uintptr_t fdlistptr)
 	 */
 	__init_crt_cached_creds();
 
-	char **envp = unpack_argpage(envs_base, envbuflen, n_envs, true);
-	init_cwd(envp);
+	char **argv = unpack_argpage(argpos, argbuflen, n_args);
+	environ = unpack_argpage(envs_base, envbuflen, n_envs);
+	/* TODO: release pages of argpos, envs_base, and fdlistptr to vm */
+	init_cwd();
 
 	extern int main(int argc, char *argv[], char *envp[]);
-	/* FIXME: stick the unpacked argpage into putenv() one at a time, once
-	 * either lib/env.c drops the htable requirement or lib/ starts including
-	 * htable. for now, spawn environment doesn't show up in getenv().
-	 */
-	return main(n_args, unpack_argpage(args_base, argbuflen, n_args, false), envp);
+	return main(n_args, argv, environ);
 }

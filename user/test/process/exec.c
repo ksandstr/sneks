@@ -33,10 +33,6 @@ START_LOOP_TEST(exit_status, iter, 0, 2)
 
 	ok(chdir(TESTDIR) == 0, "chdir(TESTDIR)");
 
-#ifdef __sneks__
-	todo_start("no implementation");
-#endif
-
 	int child = fork();
 	if(child == 0) {
 		char *fullpath = talloc_asprintf(NULL, "user/test/tools/%s", prgname);
@@ -80,10 +76,6 @@ START_LOOP_TEST(kinds_positive, iter, 0, 2)
 
 	ok(chdir(TESTDIR) == 0, "chdir(TESTDIR)");
 
-#ifdef __sneks__
-	todo_start("no implementation");
-#endif
-
 	int child = fork();
 	if(child == 0) {
 		char *fullpath = talloc_asprintf(NULL, "user/test/%s", prgname);
@@ -116,10 +108,6 @@ START_LOOP_TEST(fd_arg_env_passing, iter, 0, 1)
 	plan_tests(13);
 
 	ok(chdir(TESTDIR) == 0, "chdir(TESTDIR)");
-
-#ifdef __sneks__
-	todo_start("no implementation");
-#endif
 
 	TALLOC_CTX *tal = talloc_new(NULL);
 	int pipe_out[2], n = pipe(pipe_out), err = errno;
@@ -270,10 +258,6 @@ START_LOOP_TEST(cwd, iter, 0, ARRAY_SIZE(cwd_dirs) - 1)
 	TALLOC_CTX *tal = talloc_new(NULL);
 	char *actual = talloc_asprintf(tal, "%s/%s", TESTDIR, target);
 	ok1(chdir(actual) == 0);
-
-#ifdef __sneks__
-	todo_start("unimplemented");
-#endif
 
 	int pfd[2], n = pipe(pfd);
 	assert(n == 0);

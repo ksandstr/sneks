@@ -37,18 +37,19 @@ interface VM
 	void munmap(in word addr, in word length)
 		raises(Posix::Errno);
 
-	/* virtual memory part of fork(2). systask only. if @srcpid == 0, creates
-	 * an empty space which must be initialized with configure(). otherwise, a
-	 * copy-on-write duplicate of @srcpid is created and the utcb and kip
-	 * areas inherited.
+	/* systask only. creates a new address space @destpid. if @srcpid == 0,
+	 * creates an empty space which must be initialized with VM::configure.
+	 * otherwise a copy-on-write duplicate of @srcpid is created and the UTCB
+	 * and KIP areas inherited.
 	 */
 	void fork(in Posix::id_t srcpid, in Posix::id_t destpid)
 		raises(Posix::Errno);
 
-	/* configuration of freshly-created address spaces. systask only. @utcb
+	/* systask only. configuration of freshly-created address spaces. @utcb
 	 * must be located before @kip, which must start where @utcb ends; vm will
 	 * additionally map the constant system information page after @kip.
-	 * return value is the last reserved address.
+	 * @last_resv's value is the last address reserved for these system
+	 * structures.
 	 */
 	void configure(
 		out word last_resv,
@@ -81,10 +82,11 @@ interface VM
 		raises(Posix::Errno);
 
 	/* systask only. wipes the address space associated with @pid completely,
-	 * releasing its associated memory and returning it to a state where
-	 * neither VM::configure nor VM::fork has filled its details in yet.
+	 * releasing its associated memory and forbidding any further operation on
+	 * it until a call to VM::configure is run.
+	 *
 	 * returns EPERM when called from userspace and EINVAL if @pid isn't
-	 * associated with a configured address space.
+	 * associated with an existing address space.
 	 */
 	void erase(in Posix::id_t pid)
 		raises(Posix::Errno);

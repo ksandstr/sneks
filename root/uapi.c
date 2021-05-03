@@ -6,13 +6,17 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdatomic.h>
 #include <stdnoreturn.h>
 #include <string.h>
+#include <ctype.h>
+#include <alloca.h>
 #include <errno.h>
 #include <assert.h>
 #include <signal.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <ccan/htable/htable.h>
 #include <ccan/darray/darray.h>
 #include <ccan/bitmap/bitmap.h>
@@ -31,6 +35,7 @@
 #include <sneks/rollback.h>
 #include <sneks/process.h>
 #include <sneks/api/io-defs.h>
+#include <sneks/api/path-defs.h>
 #include <sneks/api/vm-defs.h>
 #include <sneks/api/proc-defs.h>
 #include <sneks/api/path-defs.h>
@@ -49,6 +54,8 @@
 
 #define TNOS_PER_BITMAP (1 << 16)
 
+#define RECSEP 0x1e	/* ASCII, baby! fuck! */
+
 
 /* system tasks. allocated in ra_systask. note that ra_systask's id=0 is
  * available and maps to SNEKS_MIN_SYSID + 0.
@@ -57,6 +64,26 @@ struct systask
 {
 	struct task_common task;
 	/* (systask scheduling things would go here eventually) */
+};
+
+
+/* virt_addr, memsz, and fileoff are multiples of PAGE_SIZE. memsz does not
+ * extend farther than one page from filesz, so long tails and BSS segments
+ * have filesz=0.
+ */
+struct loadseg
+{
+	uintptr_t virt_addr;
+	off_t fileoff;
+	size_t filesz, memsz;
+	int prot, flags;	/* parameters of VM::mmap */
+};
+
+struct program_image
+{
+	uintptr_t hi, lo, start;	/* ->hi is exclusive; last page don't matter. */
+	int n_segs;
+	struct loadseg segs[];
 };
 
 
@@ -88,7 +115,6 @@ static struct htable pid_to_child_hash = HTABLE_INITIALIZER(
  */
 static struct htable waitany_hash = HTABLE_INITIALIZER(
 	waitany_hash, &hash_waitany_tid, NULL);
-
 
 
 static size_t hash_waitany_tid(const void *ptr, void *priv) {
@@ -375,9 +401,8 @@ static void free_thread(
 }
 
 
-/* destroy a zombie process. task_common_dtor(&@p->task) should already have
- * been called from zombify(); this one removes references and invalidates the
- * structure.
+/* destroy a zombie process. process_dtor(@p) should already have been called
+ * from zombify(); this one removes references and invalidates the structure.
  */
 static void destroy_process(struct process *p)
 {
@@ -391,20 +416,24 @@ static void destroy_process(struct process *p)
 }
 
 
+static void process_dtor(struct process *p)
+{
+	task_common_dtor(&p->task);
+	int n = __vm_erase(vm_tid, ra_ptr2id(ra_process, p));
+	if(n != 0) {
+		printf("root: VM::erase failed, n=%d\n", n);
+		/* not a lot we can do besides that */
+	}
+}
+
+
 /* TODO: make the code, signo, status triple parameters to this function,
  * since all callsites set those anyway.
  */
 void zombify(struct process *p)
 {
 	if(!L4_IsNilThread(p->sighelper_tid)) sig_remove_helper(p);
-	task_common_dtor(&p->task);
-
-	/* deconfigure virtual memory as well */
-	int n = __vm_erase(vm_tid, ra_ptr2id(ra_process, p));
-	if(n != 0) {
-		printf("root: VM::erase failed, n=%d\n", n);
-		/* not a lot we can do besides that */
-	}
+	process_dtor(p);
 
 	struct process *parent = get_process(p->ppid);
 	if(parent == NULL) {
@@ -467,8 +496,7 @@ void zombify(struct process *p)
 		ra_ptr2id(ra_process, p),
 		MPL_EXIT | p->signo << 8, p->status, p->code,
 	};
-	bool dummy;
-	n = __sysmsg_broadcast(sysmsg_tid, &dummy,
+	int n = __sysmsg_broadcast(sysmsg_tid, &(bool){ false },
 		1 << MSGB_PROCESS_LIFECYCLE, 0, msg, ARRAY_SIZE(msg));
 	if(n != 0) {
 		printf("%s: Sysmsg::broadcast failed, n=%d\n", __func__, n);
@@ -629,100 +657,375 @@ static int uapi_get_systask_threads(
 #endif
 
 
-static int mmap_file_to(pid_t target_pid,
-	L4_Word_t *addr_p, L4_Word_t length, int prot, int flags,
-	FILE *file, off_t offset)
+static int read_elf(struct program_image **ret_p, FILE *file)
 {
-	L4_ThreadId_t fs = fserver_NP(file);
+	struct program_image *img = NULL;
+	rewind(file);
 
-	/* create a duplicated file handle */
-	int handle, n = __io_dup_to(fserver_NP(file),
-		&handle, fhandle_NP(file), pidof_NP(vm_tid));
-	if(n != 0) return n;
-
-	n = __vm_mmap(vm_tid, target_pid, addr_p, length, prot, flags,
-		fs.raw, handle, offset);
-	if(n != 0) {
-		int m = __io_close(fserver_NP(file), handle);
-		if(m != 0) {
-			printf("%s: IO::close of dup_to()'d handle failed, m=%d\n",
-				__func__, m);
-		}
-		return n;
+	Elf32_Ehdr ehdr;
+	errno = 0;
+	size_t n = fread(&ehdr, sizeof ehdr, 1, file);
+	if(n != 1) {
+		printf("uapi:%s: fread() failed: errno=%d\n", __func__, errno);
+		goto readfail;
+	} else if(memcmp(&ehdr.e_ident, ELFMAG, SELFMAG) != 0) {
+		printf("uapi:%s: incorrect ELF magic!\n", __func__);
+		return -ENOEXEC;	/* go smoke a rock, knife ears */
 	}
 
-	return n;
+	img = malloc(sizeof *img + sizeof img->segs[0] * ehdr.e_phnum * 2);
+	if(img == NULL) return -ENOMEM;
+	*img = (struct program_image) {
+		.start = ehdr.e_entry, .lo = ~0ul, .hi = 0, .n_segs = 0,
+	};
+
+	/* try to read the whole program header block in one swell foop. */
+	int epbuf_size;
+	Elf32_Phdr *epbuf;
+	if(ehdr.e_phentsize == sizeof *epbuf) {
+		epbuf_size = min_t(int, ehdr.e_phnum, 512 / sizeof *epbuf);
+		epbuf = alloca(epbuf_size * sizeof *epbuf);
+	} else {
+		/* but if the headers on offer are from a later version, fall back to
+		 * one at a time.
+		 */
+		epbuf_size = 1;
+		epbuf = alloca(sizeof *epbuf);
+	}
+
+	for(int n_eps, h = 0; h < ehdr.e_phnum; h += n_eps) {
+		errno = 0;
+		n_eps = fread(epbuf, sizeof *epbuf, min(ehdr.e_phnum - h, epbuf_size), file);
+		if(n_eps == 0) goto readfail;
+
+		for(int i=0; i < n_eps; i++) {
+			const Elf32_Phdr *ep = &epbuf[i];
+			if(ep->p_vaddr & PAGE_MASK) goto Enoexec;
+			int tailsz = (ep->p_memsz + PAGE_MASK) & ~PAGE_MASK;
+			if(ep->p_filesz > 0) {
+				if(ep->p_offset & PAGE_MASK) goto Enoexec;
+				struct loadseg *seg = &img->segs[img->n_segs++];
+				*seg = (struct loadseg){
+					.virt_addr = ep->p_vaddr,
+					.fileoff = ep->p_offset, .filesz = ep->p_filesz,
+					.memsz = (ep->p_filesz + PAGE_MASK) & ~PAGE_MASK,
+					.prot = PROT_READ | PROT_WRITE | PROT_EXEC,
+					.flags = MAP_FILE | MAP_PRIVATE | MAP_FIXED,
+				};
+				tailsz -= seg->memsz;
+				assert(tailsz >= 0);
+			}
+			if(tailsz > 0) {
+				struct loadseg *seg = &img->segs[img->n_segs++];
+				*seg = (struct loadseg){
+					.virt_addr = (ep->p_vaddr + ep->p_filesz + PAGE_MASK) & ~PAGE_MASK,
+					.fileoff = 0, .filesz = 0, .memsz = tailsz,
+					.prot = PROT_READ | PROT_WRITE,
+					.flags = MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED,
+				};
+			}
+			img->lo = min_t(uintptr_t, img->lo, ep->p_vaddr);
+			img->hi = max_t(uintptr_t, img->hi,
+				(ep->p_vaddr + ep->p_memsz + PAGE_MASK) & ~PAGE_MASK);
+		}
+	}
+
+	*ret_p = realloc(img, sizeof *img + sizeof img->segs[0] * img->n_segs);
+	if(*ret_p == NULL) *ret_p = img;
+	return 0;
+
+Enoexec: free(img); return -ENOEXEC;
+readfail:
+	free(img);
+	return errno == 0 ? -ENOEXEC : -errno;
 }
 
 
-static int map_elf_image(
-	int target_pid, const char *filename,
-	L4_Word_t *lo_p, L4_Word_t *hi_p, L4_Word_t *start_addr_p)
+static int binfmt_switch(
+	char **args_p, struct program_image **img_p, FILE **file_p)
 {
-	if(filename[0] != '/') return -ENOENT;
-	while(filename[1] == '/') filename++;
+	rewind(*file_p);
+	char hashbang[2];
+	if(fread(hashbang, 2, 1, *file_p) != 1) {
+		printf("uapi:%s: short read\n", __func__);
+		return -ENOEXEC;
+	} else if(hashbang[0] == '#' && hashbang[1] == '!') {
+		char line[200];	/* or fuck you */
+		errno = 0;
+		if(fgets(line, sizeof line, *file_p) == NULL) {
+			printf("uapi:%s: hashbang but then errno=%d?\n", __func__, errno);
+			return -ENOEXEC;
+		}
 
-	FILE *file = fopen(filename, "rb");
-	if(file == NULL) return -errno;
+		/* add up to five dynamic items to the front of *args_p before the
+		 * fully-qualified path of the script itself.
+		 */
+		char *parts[5];
+		int n_parts = 0;
 
-	Elf32_Ehdr ehdr;
-	size_t n = fread(&ehdr, sizeof ehdr, 1, file);
-	if(n != 1) {
-		printf("%s: fread() failed\n", __func__);
-		goto end;
-	} else if(memcmp(&ehdr.e_ident, ELFMAG, SELFMAG) != 0) {
-		printf("%s: incorrect ELF magic!\n", __func__);
-		errno = EINVAL;
-		goto end;	/* go sip from thy leaden goblet, knife ears */
+		char *i_name = line;
+		while(isspace(*i_name)) i_name++;
+		if(i_name[0] != '/') {
+			/* eww */
+			parts[n_parts++] = "/bin/sh";
+			parts[n_parts++] = "-c";
+			parts[n_parts++] = i_name;
+			char *cmdname = strrchr(i_name, '/');
+			parts[n_parts++] = cmdname == NULL ? i_name : cmdname + 1;
+		}
+		int namelen = strcspn(i_name, " \t\r\n");
+		if(i_name[namelen] != '\0') {
+			i_name[namelen] = '\0';
+			char *rest = i_name + namelen + 1;
+			while(isspace(*rest)) rest++;
+			if(rest[0] != '\0') parts[n_parts++] = rest;
+		}
+		assert(n_parts <= ARRAY_SIZE(parts));
+
+		/* build the altered arguments */
+		int parts_len[ARRAY_SIZE(parts)], parts_total = 0, argslen = strlen(*args_p);
+		for(int i=0; i < n_parts; i++) {
+			parts_len[i] = strlen(parts[i]);
+			parts_total += parts_len[i];
+		}
+		char *altargs = malloc(SNEKS_PATH_PATH_MAX + argslen + parts_total + n_parts + 4);
+		if(altargs == NULL) return -ENOMEM;
+		char *next = altargs;
+		for(int i=0; i < n_parts; i++) {
+			int len = parts_len[i];
+			printf("uapi:exec: part for i=%d is `%s'\n", i, parts[i]);
+			memcpy(next, parts[i], len);
+			next[len] = RECSEP;
+			next += len + 1;
+		}
+		*(next++) = '/';
+		int n = __path_get_path(fserver_NP(*file_p), next, fhandle_NP(*file_p), "");
+		if(n != 0) {
+			printf("uapi:%s: Path/get_path n=%d\n", __func__, n);
+			free(altargs);
+			return n < 0 ? n : -EIO;
+		}
+		next += strlen(next);
+		*(next++) = RECSEP;
+		memcpy(next, *args_p, argslen + 1);
+		assert(next[argslen] == '\0');
+		*args_p = altargs;
+
+		/* point read_elf() elsewhere */
+		FILE *interp = fopen(i_name[0] == '/' ? i_name : "/bin/sh", "rb");
+		if(interp == NULL) return -ENOENT;
+		fclose(*file_p);
+		*file_p = interp;
+	} else {
+		/* other formats with other magic numbers? */
 	}
-	*start_addr_p = ehdr.e_entry;
 
-	unsigned phoff = ehdr.e_phoff;
-	for(int i=0; i < ehdr.e_phnum; i++, phoff += ehdr.e_phentsize) {
-		Elf32_Phdr ep;
-		n = fread(&ep, sizeof ep, 1, file);
-		if(n != 1) {
-			printf("%s: fread() failed or short\n", __func__);
-			goto end;
+	return read_elf(img_p, *file_p);
+}
+
+
+static int load_program(struct process *p, struct program_image *img, FILE *file)
+{
+	L4_ThreadId_t fserv = fserver_NP(file);
+	int ffd = fhandle_NP(file);
+	pid_t vm_pid = pidof_NP(vm_tid), destpid = ra_ptr2id(ra_process, p);
+
+	int n;
+	for(int i=0; i < img->n_segs; i++) {
+		struct loadseg *seg = &img->segs[i];
+		int vmh = 0;
+		assert(MAP_ANONYMOUS != 0);
+		if(~seg->flags & MAP_ANONYMOUS) {
+			assert(MAP_FILE == 0 || (seg->flags & MAP_FILE));
+			n = __io_dup_to(fserv, &vmh, ffd, vm_pid);
+			if(n != 0) goto fail;
+			assert(vmh > 0);
 		}
-		if(ep.p_type != PT_LOAD) continue;	/* skip GNU stack item */
-		L4_Word_t addr = ep.p_vaddr;
-		*lo_p = min(*lo_p, addr);
-		*hi_p = max(*hi_p,
-			(addr + ep.p_memsz + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1));
-		if(ep.p_filesz > 0) {
-			if(ep.p_offset & PAGE_MASK) {
-				printf("%s: PT_LOAD offset %#x not aligned to page\n",
-					__func__, ep.p_offset);
-				n = -EINVAL;
-				goto end;
-			}
-			n = mmap_file_to(target_pid, &addr, ep.p_filesz,
-				PROT_READ | PROT_WRITE | PROT_EXEC,
-				MAP_PRIVATE | MAP_FILE | MAP_FIXED,
-				file, ep.p_offset);
-			if(n != 0) {
-				printf("%s: mmap_file_to() failed, n=%d\n", __func__, n);
-				goto end;
-			}
-		}
-		size_t mapped = (ep.p_filesz + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-		if(ep.p_memsz > mapped) {
-			addr = ep.p_vaddr + mapped;
-			size_t sz = (ep.p_memsz - mapped + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-			n = __vm_mmap(vm_tid, target_pid, &addr, sz, PROT_READ | PROT_WRITE,
-				MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED,
-				L4_nilthread.raw, ~0ul, 0);
-			if(n != 0) {
-				printf("vm_mmap (tail) failed, n=%d\n", n);
-				goto end;
-			}
+		n = __vm_mmap(vm_tid, destpid,
+			&(L4_Word_t) { seg->virt_addr }, seg->memsz, seg->prot, seg->flags,
+			vmh > 0 ? fserv.raw : L4_nilthread.raw, vmh, seg->fileoff);
+		if(n != 0) {
+			if(vmh > 0) __io_close(fserv, vmh);
+			goto fail;
 		}
 	}
 
-end:
-	fclose(file);
-	return -errno;
+	return 0;
+
+fail:
+	printf("uapi:%s: IO::dup_to or VM::mmap failed, n=%d\n", __func__, n);
+	return n < 0 ? n : -EIO;
+}
+
+
+/* adjusts @img->hi according to return from VM::configure. */
+static int configure(struct process *p, struct program_image *img)
+{
+	int n_threads = 1024, utcb_size = 512;	/* FIXME: get from KIP etc */
+	L4_Word_t ua_size = 1ul << size_to_shift(utcb_size * n_threads),
+		resv_size = ua_size + L4_KipAreaSize(the_kip) + PAGE_SIZE,
+		resv_start;
+	if(resv_size + 0x10000 >= img->lo) {		/* preserve low 64k */
+		/* can't fit in low space; set them up after img->hi instead.
+		 * userspace crt should initialize its sbrk after the sysinfo page.
+		 */
+		resv_start = (img->hi + ua_size - 1) & ~(ua_size - 1);
+		assert(resv_start > img->hi);
+	} else {
+		/* low space. nice! */
+		resv_start = ((img->lo - resv_size) & ~(ua_size - 1));
+		assert(resv_start >= 0x10000);
+		assert(resv_start + resv_size < img->lo);
+	}
+	p->task.utcb_area = L4_Fpage(resv_start, ua_size);
+	p->task.kip_area = L4_FpageLog2(resv_start + ua_size, L4_KipAreaSizeLog2(the_kip));
+	darray_init(p->task.threads);
+	p->task.utcb_free = alloc_utcb_bitmap(p->task.utcb_area);
+	if(p->task.utcb_free == NULL) return -ENOMEM;
+
+	L4_Word_t resvhi = ~0ul;
+	int n = __vm_configure(vm_tid, &resvhi, ra_ptr2id(ra_process, p),
+		p->task.utcb_area, p->task.kip_area);
+	if(n != 0) return n < 0 ? n : -EIO;
+	assert(resvhi <= (1u << 31) - 1);
+
+	assert((img->hi & PAGE_MASK) == 0);
+	img->hi = max_t(uintptr_t, resvhi + 1, img->hi);
+	return 0;
+}
+
+
+/* remove separators from Proc::spawn argbuf format, and add a terminating
+ * zero.
+ */
+static int desep(char *dst, const char *src)
+{
+	int i = 0;
+	while(src[i] != '\0') {
+		dst[i] = src[i] == RECSEP ? '\0' : src[i];
+		i++;
+	}
+	dst[i] = '\0';
+	dst[i + 1] = '\0';
+	assert(strlen(src) == i);
+	return i + 1;
+}
+
+
+static int upload_argbuf(struct process *p, struct program_image *img, const char *buf)
+{
+	assert((img->hi & PAGE_MASK) == 0);
+	void *argtmp = malloc(strlen(buf) + 8);
+	int len = desep(argtmp, buf),
+		n = __vm_upload_page(vm_tid, ra_ptr2id(ra_process, p), img->hi, argtmp, len,
+			PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED);
+	free(argtmp);
+	if(n != 0) return n < 0 ? n : -EIO;
+
+	img->hi = (img->hi + len + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+	return 0;
+}
+
+
+static int cmp_fdlist_by_fd(const void *ap, const void *bp) {
+	const struct sneks_fdlist *a = ap, *b = bp;
+	return (long)b->fd - (long)a->fd;
+}
+
+
+/* returns number of pages at *@data_p, or negative errno. */
+static int make_fdlist_page(void **data_p,
+	const L4_Word_t *fd_servs, unsigned fd_servs_len,
+	const L4_Word_t *fd_cookies, unsigned fd_cookies_len,
+	const int *fd_fds, unsigned fd_fds_len)
+{
+	int n_fds = min(min(fd_fds_len, fd_cookies_len), fd_servs_len);
+	struct sneks_fdlist *list;
+	size_t sz = ((n_fds + 1) * sizeof *list + PAGE_SIZE - 1) & ~PAGE_MASK;
+	list = calloc(1, sz);
+	if(list == NULL) return -ENOMEM;
+	for(int i=0; i < n_fds; i++) {
+		list[i] = (struct sneks_fdlist){
+			.next = sizeof *list, .fd = fd_fds[i],
+			.cookie = fd_cookies[i],
+			.serv.raw = fd_servs[i],
+		};
+	}
+	qsort(list, n_fds, sizeof *list, &cmp_fdlist_by_fd);
+	for(int i=1; i < n_fds; i++) {
+		if(list[i - 1].fd == list[i].fd) {
+			free(list);
+			return -EINVAL;
+		}
+	}
+	assert(list[n_fds].next == 0);	/* terminated by calloc() */
+	*data_p = list;
+	return sz / PAGE_SIZE;
+}
+
+
+/* compose and upload fdlist to @p:@img->hi. */
+static int upload_fdlist(struct process *p,
+	struct program_image *img,
+	const L4_Word_t *fd_servs, unsigned fd_servs_len,
+	const L4_Word_t *fd_handles, unsigned fd_handles_len,
+	const int *fd_fds, unsigned fd_fds_len)
+{
+	void *fd_pages;
+	int n_fd_pages = make_fdlist_page(&fd_pages,
+		fd_servs, fd_servs_len, fd_handles, fd_handles_len,
+		fd_fds, fd_fds_len);
+	if(n_fd_pages < 0) return n_fd_pages;
+	uintptr_t vaddr = img->hi;
+	for(int i=0; i < n_fd_pages; i++, vaddr += PAGE_SIZE) {
+		int n = __vm_upload_page(vm_tid, ra_ptr2id(ra_process, p), vaddr,
+			fd_pages + i * PAGE_SIZE, PAGE_SIZE,
+			PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED);
+		if(n != 0) return n < 0 ? n : -EIO;
+	}
+	free(fd_pages);
+
+	img->hi = (vaddr + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+	return 0;
+}
+
+
+static int launch_process(struct process *p,
+	struct program_image *img, uintptr_t argpos)
+{
+	void *utcb_loc;
+	L4_ThreadId_t first_tid = allocate_thread(ra_ptr2id(ra_process, p), &utcb_loc);
+	if(L4_IsNilThread(first_tid)) return -ENOMEM;
+
+	int n = make_space(first_tid, p->task.kip_area, p->task.utcb_area);
+	if(n < 0) return n;
+	L4_Word_t res = L4_ThreadControl(first_tid, first_tid, L4_Myself(), vm_tid, utcb_loc);
+	if(res != 1) {
+		printf("uapi:%s: ThreadControl failed, ec=%lu\n", __func__, L4_ErrorCode());
+		abort();	/* FIXME: cleanup and return error of some kind */
+	}
+
+	L4_Word_t status;
+	n = __vm_breath_of_life(vm_tid, &status, first_tid.raw, argpos, img->start);
+	if(n < 0) {
+		printf("uapi:%s: VM::breath_of_life() failed, n=%d\n", __func__, n);
+		abort();	/* FIXME: cleanup */
+	} else if(status != 0) {
+		printf("uapi:%s: VM::breath_of_life() failed, inner ec=%lu\n", __func__, status);
+		abort();	/* FIXME: cleanup */
+	}
+
+	return 0;
+}
+
+
+static int notify_exec(pid_t pid)
+{
+	assert(!L4_IsNilThread(sysmsg_tid));
+	L4_Word_t msg[] = { pid, MPL_EXEC };
+	int n = __sysmsg_broadcast(sysmsg_tid, &(bool){ false },
+		1 << MSGB_PROCESS_LIFECYCLE, 0, msg, ARRAY_SIZE(msg));
+	return n <= 0 ? n : -EIO;
 }
 
 
@@ -742,7 +1045,7 @@ static void process_ctor(struct process *p)
 /* gets next userspace PID in the correct Unix fashion. allocates memory when
  * successful, or returns NULL.
  */
-static struct process *alloc_process(int *pid_p)
+static struct process *alloc_process(void)
 {
 	for(int iter=0; iter < SNEKS_MAX_PID; iter++) {
 		int maybe = atomic_fetch_add_explicit(
@@ -756,70 +1059,11 @@ static struct process *alloc_process(int *pid_p)
 		struct process *p = ra_alloc(ra_process, maybe);
 		if(p != NULL) {
 			assert(ra_ptr2id(ra_process, p) == maybe);
-			*pid_p = maybe;
 			process_ctor(p);
 			return p;
 		}
 	}
 	return NULL;
-}
-
-
-static int desep(char *dst, const char *src)
-{
-	int i = 0;
-	while(src[i] != '\0') {
-		dst[i] = src[i] == 0x1e ? '\0' : src[i];
-		i++;
-	}
-	dst[i] = '\0';
-	dst[i + 1] = '\0';
-	assert(strlen(src) == i);
-	return i + 1;
-}
-
-
-static int cmp_fdlist_by_fd_desc(const void *ap, const void *bp) {
-	const struct sneks_fdlist *a = ap, *b = bp;
-	return (long)b->fd - (long)a->fd;
-}
-
-
-static int make_fdlist_page(
-	void **ptr, int *n_pages_p,
-	const L4_Word_t *fd_servs, unsigned fd_servs_len,
-	const L4_Word_t *fd_cookies, unsigned fd_cookies_len,
-	const int32_t *fd_fds, unsigned fd_fds_len)
-{
-	int n_fds = min(min(fd_fds_len, fd_cookies_len), fd_servs_len);
-	if(n_fds == 0) {
-		*ptr = NULL;
-		*n_pages_p = 0;
-		return 0;
-	}
-	struct sneks_fdlist *list;
-	size_t alloc = ((n_fds + 1) * sizeof *list + PAGE_SIZE - 1) & ~PAGE_MASK;
-	list = aligned_alloc(PAGE_SIZE, alloc);
-	if(list == NULL) return -ENOMEM;
-	memset(list + n_fds, '\0', alloc - n_fds * sizeof *list);
-	for(int i=0; i < n_fds; i++) {
-		list[i] = (struct sneks_fdlist){
-			.next = sizeof *list, .fd = fd_fds[i],
-			.cookie = fd_cookies[i],
-			.serv.raw = fd_servs[i],
-		};
-	}
-	qsort(list, n_fds, sizeof *list, &cmp_fdlist_by_fd_desc);
-	for(int i=1; i < n_fds; i++) {
-		if(list[i - 1].fd == list[i].fd) {
-			free(list);
-			return -EINVAL;
-		}
-	}
-	assert(list[n_fds].next == 0);	/* terminated w/ memset */
-	*ptr = list;
-	*n_pages_p = alloc / PAGE_SIZE;
-	return 0;
 }
 
 
@@ -831,14 +1075,27 @@ static int uapi_spawn(
 	const int *fd_fds, unsigned fd_fds_len)
 {
 	assert(!L4_IsNilThread(vm_tid));
+	struct program_image *img = NULL;
+	struct process *p = NULL;
 
-	int newpid;
-	struct process *p = alloc_process(&newpid);
-	if(p == NULL) return -ENOMEM;
+	FILE *file = fopen(filename, "rb");
+	if(file == NULL) return -ENOENT;
+	pid_t caller = pidof_NP(muidl_get_sender());
+	/* TODO: fstat() it to check execute permission */
+
+	/* FIXME: use binfmt_switch() */
+	int n = read_elf(&img, file);
+	if(n < 0) {
+		fclose(file);
+		return n;
+	}
+
+	p = alloc_process();
+	if(p == NULL) { n = -ENOMEM; goto fail; }
+	pid_t newpid = ra_ptr2id(ra_process, p);
 	assert(newpid > 0 && newpid <= SNEKS_MAX_PID);
 
-	L4_ThreadId_t caller = muidl_get_sender();
-	if(IS_SYSTASK(pidof_NP(caller))) {
+	if(IS_SYSTASK(caller)) {
 		/* systask spawn always start at root privilege. this could be
 		 * specified otherwise so that root-privileged processes aren't
 		 * created willy nilly.
@@ -847,152 +1104,70 @@ static int uapi_spawn(
 		/* TODO: same for gids */
 		p->ppid = 0;
 	} else {
-		struct process *parent = get_process(pidof_NP(caller));
-		if(parent == NULL) {
-			printf("%s: can't find parent process (caller=%#lx:%#lx, pid=%u)\n",
-				__func__, L4_ThreadNo(caller), L4_Version(caller),
-				pidof_NP(caller));
-			p->task.utcb_area = L4_Nilpage;
-			ra_free(ra_process, p);
-			return -EINVAL;
-		}
+		struct process *parent = get_process(caller);
+		if(parent == NULL) { n = -EINVAL; goto fail; }
 
 		p->real_uid = parent->real_uid;
 		p->eff_uid = parent->eff_uid;
 		/* TODO: saved_uid, same for gid. or maybe stick 'em in a struct and
 		 * assign that.
 		 */
-		p->ppid = pidof_NP(caller);
+		p->ppid = caller;
 	}
 
-	int n = __vm_fork(vm_tid, 0, newpid);
-	if(n != 0) {
-		p->task.utcb_area = L4_Nilpage;
-		ra_free(ra_process, p);
-		goto fail;
-	}
+	n = __vm_fork(vm_tid, 0, newpid);
+	if(n != 0) goto fail;
 
-	L4_Word_t lo = ~0ul, hi = 0, start_addr = ~0ul;
-	n = map_elf_image(newpid, filename, &lo, &hi, &start_addr);
-	if(n != 0) {
-		/* FIXME: destroy `p', its space on vm */
-		goto fail;
+	/* load process image, configure address space, upload launch data, and
+	 * let teh bodies hit the floor
+	 */
+	n = load_program(p, img, file);
+	if(n == 0) n = configure(p, img);
+	uintptr_t argpos = img->hi;
+	if(n == 0) n = upload_argbuf(p, img, argbuf);
+	if(n == 0) n = upload_argbuf(p, img, envbuf);
+	if(n == 0) {
+		n = upload_fdlist(p, img, fd_servs, fd_servs_len,
+			fd_cookies, fd_cookies_len, fd_fds, fd_fds_len);
 	}
-	int n_threads = 1024, utcb_size = 512;	/* FIXME: get from KIP etc */
-	L4_Word_t ua_size = 1ul << size_to_shift(utcb_size * n_threads),
-		resv_size = ua_size + L4_KipAreaSize(the_kip) + PAGE_SIZE,
-		resv_start;
-	if(resv_size >= lo - 0x10000) {		/* preserve low 64k */
-		/* can't fit in low space; set them up after "hi" instead. userspace
-		 * crt should initialize its sbrk after the sysinfo page.
-		 */
-		resv_start = (hi + ua_size - 1) & ~(ua_size - 1);
-		assert(resv_start > hi);
-	} else {
-		/* low space. nice! */
-		resv_start = ((lo - resv_size) & ~(ua_size - 1));
-		assert(resv_start >= 0x10000);
-		assert(resv_start + resv_size < lo);
-	}
-	p->task.utcb_area = L4_Fpage(resv_start, ua_size);
-	p->task.kip_area = L4_Fpage(resv_start + ua_size,
-		L4_KipAreaSize(the_kip));
-	darray_init(p->task.threads);
-	p->task.utcb_free = alloc_utcb_bitmap(p->task.utcb_area);
-	if(p->task.utcb_free == NULL) {
-		/* FIXME: cleanup */
-		printf("%s: can't allocate utcb bitmap\n", __func__);
-		n = -ENOMEM;
-		goto fail;
-	}
+	fclose(file);
+	if(n == 0) n = launch_process(p, img, argpos);
+	if(n < 0) goto fail;
 
-	L4_Word_t resvhi;
-	n = __vm_configure(vm_tid, &resvhi, newpid, p->task.utcb_area,
-		p->task.kip_area);
-	if(n != 0) {
-		/* FIXME: cleanup */
-		goto fail;
-	}
-	assert(resvhi < lo);
-
-	/* compose and deliver args, env */
-	L4_Word_t argpos = (hi + PAGE_SIZE - 1) & ~PAGE_MASK;
-	const char *bufs[] = { argbuf, envbuf };
-	void *argtmp = malloc(max(strlen(argbuf), strlen(envbuf)) + 8);
-	for(int i=0; i < ARRAY_SIZE(bufs); i++) {
-		int len = desep(argtmp, bufs[i]);
-		n = __vm_upload_page(vm_tid, newpid, argpos, argtmp, len,
-			PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED);
-		if(n != 0) {
-			free(argtmp);
-			/* FIXME: cleanup */
-			goto fail;
-		}
-		argpos += (len + PAGE_SIZE - 1) & ~PAGE_MASK;
-	}
-	free(argtmp);
-
-	/* also the fdlist. */
-	L4_Word_t fdlist_start = 0;
-	void *fd_pages;
-	int n_fdlist_pages;
-	n = make_fdlist_page(&fd_pages, &n_fdlist_pages,
-		fd_servs, fd_servs_len, fd_cookies, fd_cookies_len,
-		fd_fds, fd_fds_len);
-	if(n != 0) goto fail;	/* FIXME: cleanup */
-	if(n_fdlist_pages > 0) {
-		fdlist_start = argpos;
-		for(int i=0; i < n_fdlist_pages; i++, argpos += PAGE_SIZE) {
-			n = __vm_upload_page(vm_tid, newpid, argpos,
-				fd_pages + i * PAGE_SIZE, PAGE_SIZE,
-				PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED);
-			if(n != 0) {
-				/* FIXME: cleanup */
-				goto fail;
-			}
-		}
-	}
-	free(fd_pages);
-
-	/* create first thread and address space. */
-	void *utcb_loc;
-	L4_ThreadId_t first_tid = allocate_thread(newpid, &utcb_loc);
-	if(L4_IsNilThread(first_tid)) {
-		printf("%s: allocate_thread() failed!\n", __func__);
-		abort();	/* FIXME: cleanup and return error */
-	}
-	n = make_space(first_tid, p->task.kip_area, p->task.utcb_area);
-	if(n < 0) {
-		printf("%s: make_space() failed, n=%d\n", __func__, n);
-		/* FIXME: cleanup */
-		goto fail;
-	}
-	L4_Word_t res = L4_ThreadControl(first_tid, first_tid,
-		L4_Myself(), vm_tid, utcb_loc);
-	if(res != 1) {
-		printf("%s: ThreadControl failed, ec=%lu\n", __func__, L4_ErrorCode());
-		abort();	/* FIXME: cleanup and return error */
-	}
-
-	/* send it. */
-	L4_Word_t status;
-	n = __vm_breath_of_life(vm_tid, &status, first_tid.raw,
-		fdlist_start, start_addr);
-	if(n < 0) {
-		printf("%s: VM::breath_of_life() failed, n=%d\n", __func__, n);
-		/* FIXME: cleanup */
-		goto fail;
-	} else if(status != 0) {
-		printf("%s: VM::breath_of_life() failed, inner ec=%lu\n",
-			__func__, status);
-		/* FIXME: cleanup */
-		goto fail;
-	}
-
+	free(img);
 	return newpid;
 
 fail:
-	return n <= 0 ? n : -EIO;
+	free(img);
+	if(p != NULL) {
+		p->task.utcb_area = L4_Nilpage;
+		ra_free(ra_process, p);
+	}
+	return n < 0 ? n : -EIO;
+}
+
+
+static int accept_exec_file(FILE **fp, L4_ThreadId_t fd_serv, int ffd)
+{
+	int n = __io_touch(fd_serv, ffd);
+	if(n != 0) return n < 0 ? n : -EBADF;
+
+	struct sneks_io_statbuf st;
+	n = __io_stat_handle(fd_serv, ffd, &st);
+	if(n != 0) goto fail;
+	const int x_any = S_IXUSR | S_IXGRP | S_IXOTH;
+	if((st.st_mode & S_IFMT) != S_IFREG || !(st.st_mode & x_any)) {
+		n = -EACCES;
+		goto fail;
+	}
+
+	*fp = sfdopen_NP(fd_serv, ffd, "rb");
+	if(*fp == NULL) { n = -errno; goto fail; }
+	return 0;
+
+fail:
+	__io_close(fd_serv, ffd);
+	return n < 0 ? n : -EIO;
 }
 
 
@@ -1003,7 +1178,67 @@ static int uapi_exec(
 	const L4_Word_t *fd_cookies, unsigned fd_cookies_len,
 	const int *fd_fds, unsigned fd_fds_len)
 {
-	return -ENOSYS;
+	assert(!L4_IsNilThread(vm_tid));
+
+	pid_t caller = pidof_NP(muidl_get_sender());
+	if(IS_SYSTASK(caller)) return -EINVAL;
+	struct process *p = get_process(caller);
+	if(p == NULL) {
+		printf("uapi:%s: no caller=%d (%lu:%lu)\n", __func__, caller,
+			L4_ThreadNo(muidl_get_sender()), L4_Version(muidl_get_sender()));
+		abort();	/* FIXME: very confus. */
+	}
+
+	FILE *file;
+	int n = accept_exec_file(&file, (L4_ThreadId_t){ .raw = server_tid_raw }, ffd);
+	if(n < 0) return n;
+
+	struct program_image *img;
+	char *args = (char *)argbuf;
+	n = binfmt_switch(&args, &img, &file);
+	if(n < 0) {
+		if(args != argbuf) free(args);
+		fclose(file);
+		return n;
+	}
+
+	/* clear and recreate @p */
+	process_dtor(p);
+	muidl_raise_no_reply();
+	n = __vm_fork(vm_tid, 0, caller);
+	if(n != 0) {
+		printf("%s: can't recreate caller, VM::fork n=%d\n", __func__, n);
+		fclose(file);
+		goto fail;
+	}
+
+	/* load process image, configure address space, upload launch data, and
+	 * let teh bodies hit the floor
+	 */
+	n = load_program(p, img, file);
+	if(n == 0) n = configure(p, img);
+	uintptr_t argpos = img->hi;
+	if(n == 0) n = upload_argbuf(p, img, args);
+	if(n == 0) n = upload_argbuf(p, img, envbuf);
+	if(n == 0) {
+		n = upload_fdlist(p, img, fd_servs, fd_servs_len,
+			fd_cookies, fd_cookies_len, fd_fds, fd_fds_len);
+	}
+	fclose(file);
+	if(n == 0) n = notify_exec(caller);
+	if(n == 0) n = launch_process(p, img, argpos);
+	if(n < 0) goto fail;
+
+	if(args != argbuf) free(args);
+	free(img);
+	return 0;
+
+fail:
+	if(args != argbuf) free(args);
+	free(img);
+	printf("%s: failed for caller=%d (dead in the cradle)\n", __func__, caller);
+	/* FIXME: destroy caller's process, deliver SIGKILL exit status */
+	return 0;
 }
 
 
@@ -1143,9 +1378,9 @@ static int uapi_fork(L4_Word_t *tid_raw_p, L4_Word_t sp, L4_Word_t ip)
 	struct process *src = get_process(pid);
 	assert(src != NULL);	/* per control of PID assignment */
 
-	int newpid;
-	struct process *dst = alloc_process(&newpid);
+	struct process *dst = alloc_process();
 	if(dst == NULL) return -EAGAIN;
+	pid_t newpid = ra_ptr2id(ra_process, dst);
 	assert(newpid > 0);
 	assert(!IS_SYSTASK(newpid));
 

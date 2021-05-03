@@ -143,10 +143,6 @@ START_LOOP_TEST(path_search, iter, 0,
 	int st, dead = waitpid(child, &st, 0);
 	ok1(dead == child);
 
-#ifdef __sneks__
-	todo_start("unfinished");
-#endif
-
 	skip_start(!ok1(WIFEXITED(st)), 4, "didn't exit") {
 		int exst = WEXITSTATUS(st);
 		iff_ok1(exst & 0x80, term->exst != 0);
