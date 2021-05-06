@@ -125,9 +125,9 @@ pid_t waitpid(pid_t pid, int *wstatus, int options)
 	if(wstatus != NULL) {
 		switch(si.si_code) {
 			case CLD_EXITED:
-				*wstatus = si.si_status << 1 | 1;
+				*wstatus = (si.si_status & 0xff) << 1 | 1;
 				assert(WIFEXITED(*wstatus));
-				assert(WEXITSTATUS(*wstatus) == si.si_status);
+				assert(WEXITSTATUS(*wstatus) == (si.si_status & 0xff));
 				assert(!WIFSIGNALED(*wstatus));
 				assert(!WCOREDUMP(*wstatus));
 				break;

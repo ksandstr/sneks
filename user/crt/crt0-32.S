@@ -1,4 +1,3 @@
-
 	.text
 	.global _start
 
@@ -10,7 +9,8 @@ _start:
 	pushl %ebx
 	call __crt1_entry
 	pushl %eax
-	jmp __return_from_main
+	call exit
+	int $3
 
 # two pages' worth should be well enough.
 	.bss

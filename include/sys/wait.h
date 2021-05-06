@@ -7,10 +7,10 @@
 #include <sneks/process.h>
 
 
-#define WIFEXITED(st) (((st) & 1) != 0)
-#define WEXITSTATUS(st) ((st) >> 1)
+#define WIFEXITED(st) (!!((st) & 1))
+#define WEXITSTATUS(st) (((st) >> 1) & 0xff)
 #define WIFSIGNALED(st) (((st) & 3) == 0)
-#define WTERMSIG(st) ((st) >> 2)
+#define WTERMSIG(st) (((st) >> 2) & 0xff)
 #define WCOREDUMP(st) (((st) & 3) == 2)
 /* FIXME: fill these in once they can be tested */
 #define WIFSTOPPED(st) 0

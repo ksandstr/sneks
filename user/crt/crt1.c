@@ -28,16 +28,6 @@ struct __sysinfo *__the_sysinfo = NULL;
 L4_ThreadId_t __main_tid;
 
 
-void __return_from_main(int status)
-{
-	/* this truley just exits the main thread. other threads may remain if any
-	 * were spawnt. (NOTE: this might not agree with the STDs. verify whether
-	 * it does.)
-	 */
-	exit(status);
-}
-
-
 void __assert_failure(
 	const char *cond,
 	const char *file, unsigned int line, const char *fn)
