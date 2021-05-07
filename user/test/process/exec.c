@@ -6,11 +6,13 @@
 #include <string.h>
 #include <assert.h>
 #include <errno.h>
+#include <dirent.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <ccan/str/str.h>
 #include <ccan/talloc/talloc.h>
+#include <ccan/array_size/array_size.h>
 #include <ccan/darray/darray.h>
 
 #include <sneks/test.h>
@@ -248,4 +250,105 @@ static const char *find_env(char *const envp[], const char *key)
 		if(streq(tmp, key)) return brk + 1;
 	}
 	return NULL;
+}
+
+
+/* test that the current directory is inherited by the child image. */
+
+static int ord_str(const void *, const void *);
+
+static const char *cwd_dirs[] = {
+	"", "/user/test", "/user/test/io/dir",
+};
+
+START_LOOP_TEST(cwd, iter, 0, ARRAY_SIZE(cwd_dirs) - 1)
+{
+	const char *target = cwd_dirs[iter];
+	diag("target=`%s'", target);
+	plan_tests(9);
+
+	TALLOC_CTX *tal = talloc_new(NULL);
+	char *actual = talloc_asprintf(tal, "%s/%s", TESTDIR, target);
+	ok1(chdir(actual) == 0);
+
+#ifdef __sneks__
+	todo_start("unimplemented");
+#endif
+
+	int pfd[2], n = pipe(pfd);
+	assert(n == 0);
+
+	pid_t child = fork();
+	if(child == 0) {
+		close(pfd[0]);
+		dup2(pfd[1], STDOUT_FILENO);
+		dup2(pfd[1], STDERR_FILENO);
+		close(pfd[1]);
+		execl(TESTDIR "/user/test/tools/cwdlister", "cwdlister", (char *)NULL);
+		exit(errno | 0x80);
+	}
+	close(pfd[1]);
+	diag("child=%d", child);
+	int st, dead = waitpid(child, &st, 0), err = errno;
+	skip_start(!ok(dead == child, "waitpid"), 2, "errno=%d", err) {
+		ok1(WIFEXITED(st));
+		ok1(WEXITSTATUS(st) == EXIT_SUCCESS);
+	} skip_end;
+
+	FILE *input = fdopen(pfd[0], "r");
+	assert(input != NULL);
+	bool got_input = false, malformed = false;
+	char line[200];
+	darray(char *) ents = darray_new();
+	while(fgets(line, sizeof line, input) != NULL) {
+		int len = strlen(line);
+		while(len > 0 && line[len - 1] == '\n') line[--len] = '\0';
+		if(len > 0) got_input = true;
+		if(!strstarts(line, "ENT ")) {
+			diag("malformed line `%s'", line);
+			malformed = true;
+			continue;
+		}
+
+		darray_push(ents, talloc_strdup(tal, line + 4));
+	}
+	fclose(input);
+
+	/* repeat locally */
+	darray(char *) local = darray_new();
+	DIR *d = opendir(".");
+	struct dirent *ent;
+	while(errno = 0, ent = readdir(d), ent != NULL) {
+		darray_push(local, talloc_strdup(tal, ent->d_name));
+	}
+	ok(errno == 0, "readdir");
+
+	/* examine teh entrails */
+	ok1(got_input);
+	ok1(!malformed);
+	skip_start(!ok1(local.size == ents.size), 1, "unequal results") {
+		qsort(ents.item, ents.size, sizeof ents.item[0], &ord_str);
+		qsort(local.item, local.size, sizeof local.item[0], &ord_str);
+
+		bool all_same = true;
+		for(size_t i=0; i < ents.size; i++) {
+			if(!streq(ents.item[i], local.item[i])) {
+				diag("item %u differs; local=`%s', other=`%s'",
+					(unsigned)i, local.item[i], ents.item[i]);
+				all_same = false;
+			}
+		}
+		ok1(all_same);	/* arr rook same */
+	} skip_end;
+
+	darray_free(ents); darray_free(local);
+	talloc_free(tal);
+}
+END_TEST
+
+DECLARE_TEST("process:exec", cwd);
+
+
+static int ord_str(const void *a, const void *b) {
+	return strcmp(*(const char **)a, *(const char **)b);
 }
