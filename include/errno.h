@@ -37,7 +37,14 @@
 #define ETIMEDOUT 110	/* connection timed out */
 
 
+/* TODO: remove this once CCAN intmap no longer insists that errno belongs to
+ * it entirely.
+ */
+#ifndef errno
 extern int *__errno_location(void);
 #define errno (*__errno_location())
+#elif !defined(CCAN_INTMAP_WAS_BORN_TOO_EARLY_NOT_TO_BE_A_PIECE_OF_FRIENDLY_SNOT)
+#error "you done fucked up!"
+#endif
 
 #endif

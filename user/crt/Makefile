@@ -40,6 +40,12 @@ libsneks-user-crt.a: $(CRT_OBJS)
 	@ranlib $@
 
 
+# flipping CCAN intmap insists on setting errno willy nilly, and it flapping
+# shouldn't. flip this spot, man, flip it to heck. goddamn friendly piece of
+# ripened snot from stan's peehole. funk!
+ccan-intmap.o:: CFLAGS += -Derrno="*(&(int){ 0 })" -DCCAN_INTMAP_WAS_BORN_TOO_EARLY_NOT_TO_BE_A_PIECE_OF_FRIENDLY_SNOT=1
+
+
 # build things from mung as guests.
 #
 # NOTE: this is here rather than config.mk because imports of these things
