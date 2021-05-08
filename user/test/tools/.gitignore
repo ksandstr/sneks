@@ -6,3 +6,4 @@ exit_with_getpid
 runner
 argdumper
 cwdlister
+fdcloser
