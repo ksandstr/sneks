@@ -9,6 +9,9 @@
 #include <ccan/hash/hash.h>
 
 
+char **environ = NULL;
+
+
 static size_t hash_env_str(const void *ptr, void *priv);
 
 
