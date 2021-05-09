@@ -294,8 +294,6 @@ START_LOOP_TEST(environ_reset, iter, 0, 1)
 	diag("use_clearenv=%s", btos(use_clearenv));
 	plan_tests(5);
 
-	todo_start("unimplemented");
-
 	ok1(setenv("FOO", "foo", 1) == 0);
 	ok1(setenv("BAR", "bar", 1) == 0);
 	if(use_clearenv) {
@@ -317,8 +315,6 @@ SYSTEST("crt:env", environ_reset);
 START_TEST(environ_replace)
 {
 	plan_tests(11);
-
-	todo_start("unimplemented");
 
 	ok1(setenv("FOO", "foo", 1) == 0);
 	ok1(setenv("BAR", "bar", 1) == 0);
