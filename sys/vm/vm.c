@@ -1241,8 +1241,10 @@ static int vm_mmap(
 		.flags = prot_to_l4_rights(prot) << 16 | (flags & ~MAP_FIXED),
 		.fd_serv.raw = fd_serv, .ino = fd, .offset = offset >> PAGE_BITS,
 	};
+	int eck = e_begin();
 	n = reserve_mmap(mm, sp, *addr_ptr, (length + PAGE_SIZE - 1) & ~PAGE_MASK,
 		!!(flags & MAP_FIXED));
+	e_end(eck);
 	if(n < 0) {
 		free(mm);
 		goto end;
