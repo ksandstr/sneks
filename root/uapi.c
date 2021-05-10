@@ -34,6 +34,7 @@
 #include <sneks/api/proc-defs.h>
 #include <sneks/sys/msg-defs.h>
 #include <sneks/sys/info-defs.h>
+#include <sneks/sys/sysmem-defs.h>
 
 #include "muidl.h"
 #include "root-impl-defs.h"
@@ -189,8 +190,8 @@ static bool task_common_ctor(
 }
 
 
-/* destroys threads, releases tno bitmap slots, clears the tidlist, tosses
- * associated memory, but doesn't invalidate the structure.
+/* destroys threads, releases tno bitmap slots, clears the tidlist, but
+ * doesn't invalidate the structure.
  */
 static void task_common_dtor(struct task_common *task)
 {
@@ -210,14 +211,6 @@ static void task_common_dtor(struct task_common *task)
 	darray_free(task->threads); darray_init(task->threads);
 	free(task->utcb_free); task->utcb_free = NULL;
 	assert(!L4_IsNilFpage(task->utcb_area));
-
-	/* deconfigure virtual memory as well */
-	int n = __vm_erase(vm_tid, ra_ptr2id(ra_process,
-		container_of(task, struct process, task)));
-	if(n != 0) {
-		printf("root: VM::erase failed, n=%d\n", n);
-		/* not a lot we can do besides that */
-	}
 }
 
 
@@ -263,6 +256,18 @@ int add_systask(int pid, L4_Fpage_t kip, L4_Fpage_t utcb)
 	}
 
 	return ra_ptr2id(ra_systask, st) + SNEKS_MIN_SYSID;
+}
+
+
+static void destroy_systask(pid_t pid, struct systask *s)
+{
+	assert(get_systask(pid) == s);
+	task_common_dtor(&s->task);
+	int n = __sysmem_rm_task(sysmem_tid, pid);
+	if(n != 0) {
+		fprintf(stderr, "uapi:%s: Sysmem::rm_task failed, n=%d\n", __func__, n);
+	}
+	ra_free(ra_systask, s);
 }
 
 
@@ -389,7 +394,15 @@ static void destroy_process(struct process *p)
  */
 void zombify(struct process *p)
 {
+	if(!L4_IsNilThread(p->sighelper_tid)) sig_remove_helper(p);
 	task_common_dtor(&p->task);
+
+	/* deconfigure virtual memory as well */
+	int n = __vm_erase(vm_tid, ra_ptr2id(ra_process, p));
+	if(n != 0) {
+		printf("root: VM::erase failed, n=%d\n", n);
+		/* not a lot we can do besides that */
+	}
 
 	struct process *parent = get_process(p->ppid);
 	if(parent == NULL) {
@@ -453,7 +466,7 @@ void zombify(struct process *p)
 		MPL_EXIT | p->signo << 8, p->status, p->code,
 	};
 	bool dummy;
-	int n = __sysmsg_broadcast(sysmsg_tid, &dummy,
+	n = __sysmsg_broadcast(sysmsg_tid, &dummy,
 		1 << MSGB_PROCESS_LIFECYCLE, 0, msg, ARRAY_SIZE(msg));
 	if(n != 0) {
 		printf("%s: Sysmsg::broadcast failed, n=%d\n", __func__, n);
@@ -998,17 +1011,21 @@ void sig_remove_helper(struct process *p)
 
 static void uapi_exit(int status)
 {
-	int pid = pidof_NP(muidl_get_sender());
+	pid_t pid = pidof_NP(muidl_get_sender());
 	if(IS_SYSTASK(pid)) {
-		printf("%s: not implemented for systasks (pid=%d)\n", __func__, pid);
-		/* but should it be? */
+		struct systask *s = get_systask(pid);
+		if(s != NULL) destroy_systask(pid, s);
+		else {
+			printf("uapi:exit: systask pid=%d not found?\n", pid);
+			abort();
+		}
 	} else {
 		struct process *p = get_process(pid);
 		assert(p != NULL);
 		p->code = CLD_EXITED; p->status = status; p->signo = 0;
 		zombify(p);
-		muidl_raise_no_reply();
 	}
+	muidl_raise_no_reply();
 }
 
 

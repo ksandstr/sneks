@@ -7,8 +7,6 @@
 #include <errno.h>
 #include <unistd.h>
 
-#include <ccan/likely/likely.h>
-
 #include <l4/types.h>
 #include <l4/thread.h>
 #include <l4/ipc.h>
@@ -23,21 +21,13 @@
 #include <sneks/sys/sysmem-defs.h>
 #include <sneks/sys/info-defs.h>
 #include <sneks/sys/kmsg-defs.h>
+#include <sneks/api/proc-defs.h>
 
 #include "private.h"
 
 
 static tss_t errno_key;
 static uintptr_t current_brk = 0, heap_bottom = 0;
-
-
-void __return_from_main(int main_rc)
-{
-	int n = __sysmem_rm_task(L4_Pager(), getpid());
-	assert(n != 0);
-	L4_KDB_PrintString("systask __return_from_main failed!");
-	for(;;) { L4_Sleep(L4_Never); }
-}
 
 
 void __assert_failure(
@@ -82,7 +72,7 @@ int *__errno_location(void)
 noreturn void panic(const char *msg)
 {
 	printf("!!! PANIC: %s\n", msg);
-	for(;;) { L4_Sleep(L4_Never); }
+	exit(666);
 }
 
 
@@ -195,22 +185,22 @@ void *sbrk(intptr_t increment)
 }
 
 
-int atexit(void (*fn)(void)) {
-	/* does nothing since systasks don't exit in a conventional sense. */
-	return 0;
-}
-
-
 int getpid(void) {
 	return pidof_NP(L4_Myself());
 }
 
 
+int atexit(void (*fn)(void)) {
+	/* TODO */
+	return 0;
+}
+
+
 void exit(int status)
 {
-	int n = __sysmem_rm_task(L4_Pager(), getpid());
-	printf("%s: Sysmem::rm_task() returned n=%d\n", __func__, n);
-	for(;;) abort();
+	int n = __proc_exit(__uapi_tid, status);
+	printf("sys/crt:%s: Proc::exit failed, n=%d\n", __func__, n);
+	for(;;) L4_Sleep(L4_Never);
 }
 
 
@@ -229,7 +219,7 @@ L4_ThreadId_t __get_rootfs(bool *root_mounted_p)
 {
 	struct sneks_rootfs_info blk;
 	int n = __info_rootfs_block(L4_Pager(), &blk);
-	if(unlikely(n != 0)) {
+	if(n != 0) {
 		log_crit("can't get rootfs block, n=%d", n);
 		abort();
 	}
@@ -264,7 +254,7 @@ int __crt1_entry(void)
 	}
 
 	int n = sneks_setup_console_stdio();
-	if(unlikely(n < 0)) {
+	if(n < 0) {
 		/* blind dumb dead! */
 		return -n;
 	}

@@ -8,7 +8,8 @@ _start:
 	subl $128, %esp	# don't stomp <struct thrd>
 	call __crt1_entry
 	pushl %eax
-	jmp __return_from_main
+	call exit
+	int $3
 
 # two pages' worth should be well enough.
 	.bss

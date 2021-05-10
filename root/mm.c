@@ -35,7 +35,7 @@ static uintptr_t current_brk = 0, heap_bottom;
 static L4_Fpage_t pre_heap_pages[N_PRE_HEAP];
 static int pre_heap_pos = 0;	/* < 0 indicates sysmem paging */
 
-static L4_ThreadId_t sysmem_tid;
+L4_ThreadId_t sysmem_tid;
 
 
 static void get_more_memory(L4_Word_t start)
@@ -62,7 +62,6 @@ static void get_more_memory(L4_Word_t start)
 			memset((void *)L4_Address(p), '\0', L4_Size(p));
 			if(have_sysmem) {
 				/* transfer immediately. */
-				extern L4_ThreadId_t sysmem_tid;	/* FIXME: terrible hack */
 				send_phys_to_sysmem(sysmem_tid, true, p);
 			} else {
 				/* defer until mm_enable_sysmem(). */

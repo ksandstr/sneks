@@ -68,7 +68,7 @@ L4_KernelInterfacePage_t *the_kip;
 L4_ThreadId_t vm_tid = { .raw = 0 }, sysmsg_tid = { .raw = 0 },
 	initrd_tid = { .raw = 0 };
 
-static L4_ThreadId_t sigma0_tid, sysmem_tid;
+static L4_ThreadId_t sigma0_tid;
 static int sysmem_pages = 0, sysmem_self_pages = 0;
 
 struct cookie_key device_cookie_key;
@@ -184,9 +184,9 @@ static void add_sysmem_pages(struct htable *ht, L4_Word_t start, L4_Word_t end)
 /* adds the page to root's space if @self is true; or to either sysmem's free
  * memory pool or its set of reserved pages otherwise.
  */
-void send_phys_to_sysmem(L4_ThreadId_t sysmem_tid, bool self, L4_Fpage_t pg)
+void send_phys_to_sysmem(L4_ThreadId_t sm, bool self, L4_Fpage_t pg)
 {
-	int n = __sysmem_send_phys(sysmem_tid,
+	int n = __sysmem_send_phys(sm,
 		self ? L4_Myself().raw : L4_nilthread.raw,
 		L4_Address(pg) >> PAGE_BITS, L4_SizeLog2(pg));
 	if(n != 0) {
@@ -198,7 +198,7 @@ void send_phys_to_sysmem(L4_ThreadId_t sysmem_tid, bool self, L4_Fpage_t pg)
 	L4_Accept(L4_UntypedWordsAcceptor);
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.t = 2 }.raw);
 	L4_LoadMRs(1, 2, gi.raw);
-	L4_MsgTag_t tag = L4_Send_Timeout(sysmem_tid, L4_TimePeriod(10 * 1000));
+	L4_MsgTag_t tag = L4_Send_Timeout(sm, L4_TimePeriod(10 * 1000));
 	if(L4_IpcFailed(tag)) {
 		printf("%s: failed to send grant, ec=%lu\n", __func__,
 			L4_ErrorCode());
@@ -420,8 +420,8 @@ static L4_ThreadId_t start_sysmem(
 	}
 
 	/* set up the address space & start the main thread. */
-	L4_ThreadId_t sysmem_tid = L4_GlobalId(500, (1 << 2) | 2);
-	L4_Word_t res = L4_ThreadControl(sysmem_tid, sysmem_tid,
+	L4_ThreadId_t sm_tid = L4_GlobalId(500, (1 << 2) | 2);
+	L4_Word_t res = L4_ThreadControl(sm_tid, sm_tid,
 		*pager_p, *pager_p, (void *)-1);
 	if(res != 1) {
 		fprintf(stderr, "%s: ThreadControl failed, ec %lu\n",
@@ -431,14 +431,14 @@ static L4_ThreadId_t start_sysmem(
 	*utcb_area = L4_FpageLog2(0x100000, 14);
 	*kip_area = L4_FpageLog2(0xff000, 12);
 	L4_Word_t old_ctl;
-	res = L4_SpaceControl(sysmem_tid, 0, *kip_area, *utcb_area,
+	res = L4_SpaceControl(sm_tid, 0, *kip_area, *utcb_area,
 		L4_anythread, &old_ctl);
 	if(res != 1) {
 		fprintf(stderr, "%s: SpaceControl failed, ec %lu\n",
 			__func__, L4_ErrorCode());
 		abort();
 	}
-	res = L4_ThreadControl(sysmem_tid, sysmem_tid, *pager_p,
+	res = L4_ThreadControl(sm_tid, sm_tid, *pager_p,
 		*pager_p, (void *)L4_Address(*utcb_area));
 	if(res != 1) {
 		fprintf(stderr, "%s: ThreadControl failed, ec %lu\n",
@@ -451,7 +451,7 @@ static L4_ThreadId_t start_sysmem(
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2, .X.flags = 1 }.raw);
 	L4_LoadMR(1, ee->e_entry);
 	L4_LoadMR(2, 0xdeadbeef);
-	L4_MsgTag_t tag = L4_Send_Timeout(sysmem_tid, L4_TimePeriod(50 * 1000));
+	L4_MsgTag_t tag = L4_Send_Timeout(sm_tid, L4_TimePeriod(50 * 1000));
 	if(L4_IpcFailed(tag)) {
 		fprintf(stderr, "%s: breath-of-life to forkserv failed: ec=%#lx\n",
 			__func__, L4_ErrorCode());
@@ -465,7 +465,7 @@ static L4_ThreadId_t start_sysmem(
 		ptr != NULL; ptr = htable_next(&pre_sysmem_resv, &it))
 	{
 		L4_Fpage_t fp = { .raw = (L4_Word_t)ptr };
-		send_phys_to_sysmem(sysmem_tid, false, fp);
+		send_phys_to_sysmem(sm_tid, false, fp);
 	}
 	htable_clear(&pre_sysmem_resv);
 	/* and the memory where sysmem's own binary was loaded. */
@@ -473,7 +473,7 @@ static L4_ThreadId_t start_sysmem(
 		p != NULL; p = htable_next(pages, &it))
 	{
 		assert(p->address != 0);
-		send_phys_to_sysmem(sysmem_tid, false, L4_FpageLog2(p->address, PAGE_BITS));
+		send_phys_to_sysmem(sm_tid, false, L4_FpageLog2(p->address, PAGE_BITS));
 		htable_delval(pages, &it);
 		free(p);
 	}
@@ -481,7 +481,7 @@ static L4_ThreadId_t start_sysmem(
 	htable_clear(pages);
 	/* from now, sysmem_pager_fn will only report segfaults for sysmem. */
 
-	return sysmem_tid;
+	return sm_tid;
 }
 
 
@@ -489,7 +489,7 @@ static L4_ThreadId_t start_sysmem(
  * by page to sysmem. then trigger mm.c heap transition and toss a few pages
  * at sysmem to tide us over until start_vm().
  */
-static void move_to_sysmem(L4_ThreadId_t sm_pager)
+static void move_to_sysmem(L4_ThreadId_t sm_pager, L4_ThreadId_t sm)
 {
 	assert(L4_SameThreads(sigma0_tid, L4_Pager()));
 
@@ -501,15 +501,15 @@ static void move_to_sysmem(L4_ThreadId_t sm_pager)
 		volatile L4_Word_t *ptr = (void *)addr;
 		*ptr = *ptr;
 	}
-	L4_Set_Pager(sysmem_tid);
-	L4_Set_PagerOf(sm_pager, sysmem_tid);
+	L4_Set_Pager(sm);
+	L4_Set_PagerOf(sm_pager, sm);
 	for(L4_Word_t addr = (L4_Word_t)&_start & ~PAGE_MASK;
 		addr < (L4_Word_t)&_end;
 		addr += PAGE_SIZE)
 	{
-		send_phys_to_sysmem(sysmem_tid, true, L4_FpageLog2(addr, PAGE_BITS));
+		send_phys_to_sysmem(sm, true, L4_FpageLog2(addr, PAGE_BITS));
 	}
-	mm_enable_sysmem(sysmem_tid);
+	mm_enable_sysmem(sm);
 }
 
 
@@ -1667,9 +1667,9 @@ int main(void)
 	random_init(sigma0_tid.raw);
 
 	L4_Fpage_t sm_utcb = L4_Nilpage, sm_kip = L4_Nilpage;
-	L4_ThreadId_t sm_pager = L4_nilthread;
-	sysmem_tid = start_sysmem(&sm_pager, &sm_utcb, &sm_kip);
-	move_to_sysmem(sm_pager);
+	L4_ThreadId_t sm_pager = L4_nilthread,
+		sm_tid = start_sysmem(&sm_pager, &sm_utcb, &sm_kip);
+	move_to_sysmem(sm_pager, sm_tid);
 	struct htable root_args = HTABLE_INITIALIZER(root_args, &hash_arg, NULL);
 	parse_initrd_args(&root_args);
 

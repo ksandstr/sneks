@@ -74,13 +74,17 @@ static inline uint64_t rdtsc(void) {
 }
 
 
-/* from mm.c. sends pre-heap sbrk()'d pages to sysmem and switches to sysmem
- * brk() handling.
+/* from mm.c */
+
+extern L4_ThreadId_t sysmem_tid;
+
+/* sends pre-heap sbrk()'d pages to sysmem and switches to sysmem brk()
+ * handling.
  */
 extern void mm_enable_sysmem(L4_ThreadId_t sysmem_tid);
 
 
-/* from main.c . */
+/* from main.c */
 
 extern L4_ThreadId_t vm_tid, sysmsg_tid, initrd_tid;
 extern L4_KernelInterfacePage_t *the_kip;
