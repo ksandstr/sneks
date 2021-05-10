@@ -491,11 +491,10 @@ static bool replace_active_page(struct p_page *p)
 }
 
 
-/* TODO: add proper termination so that a proper and honest OOM doesn't
- * turn into a perpetual spin.
- */
-static int replace_pages(void)
+static int replace_pages(bool *looped_p)
 {
+	assert(looped_p != NULL);
+
 	static struct p_page *hand = NULL;
 	if(hand == NULL || hand->owner == NULL) {
 		hand = list_top(&active_page_list, struct p_page, link);
@@ -506,6 +505,7 @@ static int replace_pages(void)
 	struct p_page *ps[ARRAY_SIZE(unmaps)];
 	int n_seen = 0;
 	struct p_page *start = hand;
+	*looped_p = false;
 	do {
 		if(hand == NULL && list_empty(&active_page_list)) {
 			panic("active_page_list was drained. woe is me");
@@ -518,6 +518,7 @@ static int replace_pages(void)
 		hand = list_next(&active_page_list, hand, link);
 		if(hand == NULL) {
 			hand = list_top(&active_page_list, struct p_page, link);
+			*looped_p = true;
 		}
 	} while(++n_seen < ARRAY_SIZE(unmaps) && start != hand);
 
@@ -563,17 +564,36 @@ static int replace_pages(void)
 static struct p_page *get_free_page(void)
 {
 	struct p_page *p = list_pop(&free_page_list, struct p_page, link);
-	if(p == NULL) panic("out of memory in get_free_page()!");
+	if(p == NULL) panic("no free pages in get_free_page()!");
 	num_free_pages--;
 	p->age = 1;
 
-	/* static low and high watermarks. */
+	/* static low and high watermarks. sixteen is likely a bit on the high
+	 * side; replacement shouldn't allocate any memory on its own.
+	 */
 	if(repl_enable && num_free_pages < 16) {
+		int loops = 0, loop_freed = 0;
 		while(num_free_pages < 48) {
-			int n_freed = replace_pages();
-			if(n_freed > 0) {
-				// printf("sysmem: replaced %d pages\n", n_freed);
+			bool looped;
+			int n_freed = replace_pages(&looped);
+			loop_freed += n_freed;
+			if(looped) {
+				if(loops > 0 && loop_freed == 0) break;
+				loop_freed = 0;
+				loops++;
 			}
+#ifdef DEBUG_ME_HARDER
+			if(n_freed > 0) {
+				printf("sysmem: replaced %d pages\n", n_freed);
+			}
+#endif
+		}
+		if(num_free_pages < 16) {
+			/* BOOM!
+			 *
+			 * TODO: do protocol w/ vm to get more memory.
+			 */
+			panic("cannot replace memory in get_free_page()!");
 		}
 	}
 
