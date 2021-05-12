@@ -5,6 +5,8 @@
 #include <stdarg.h>
 #include <errno.h>
 
+#include <sneks/chrdev.h>
+
 #include "private.h"
 
 

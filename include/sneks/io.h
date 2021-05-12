@@ -44,11 +44,12 @@ enum lifecycle_tag {
 };
 
 /* file status flags IOF_*. */
-#define IOF_NONBLOCK O_NONBLOCK
+#define IOF_NONBLOCK SNEKS_IO_O_NONBLOCK
 #define IOF_VALID_MASK (IOF_NONBLOCK)
 
-/* file descriptor flags IOD_*. */
-#define IOD_VALID_MASK 0
+/* file descriptor flags IOD_* at bit 16 in fd->flags. */
+#define IOD_CLOEXEC (SNEKS_IO_FD_CLOEXEC << 16)
+#define IOD_VALID_MASK (IOD_CLOEXEC)
 
 /* fast confirm flags IO_CONFIRM_*. */
 #define IO_CONFIRM_READ		0x1

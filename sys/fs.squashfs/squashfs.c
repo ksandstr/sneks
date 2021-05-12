@@ -924,11 +924,10 @@ static int squashfs_open(int *handle_p,
 	if(nod == NULL) return -EINVAL;
 	if(squashfs_i(nod)->X.base.inode_type != SQUASHFS_REG_TYPE) return -EINVAL;
 
-	/* TODO: translate O_CLOEXEC to IOD_CLOEXEC for io_add_fd() */
 	iof_t *f = iof_new(0);
 	if(f == NULL) return -ENOMEM;
 	*f = (iof_t){ .i = nod, .pos = 0, .refs = 1 };
-	int n = io_add_fd(caller_pid, f, 0);
+	int n = io_add_fd(caller_pid, f, flags & O_CLOEXEC ? IOD_CLOEXEC : 0);
 	if(n < 0) {
 		iof_undo_new(f);
 		return n;
@@ -1132,13 +1131,12 @@ static int squashfs_opendir(int *handle_p,
 	}
 	const struct squashfs_dir_inode *dir = &squashfs_i(nod)->X.dir;
 
-	/* FIXME: are @flags for file, or descriptor? */
 	iof_t *f = iof_new(0);
 	if(f == NULL) return -ENOMEM;
 	*f = (iof_t){ .i = nod, .pos = 0, .refs = 1 };
 	rewind_directory(f, dir);
 
-	int fd = io_add_fd(caller_pid, f, 0);
+	int fd = io_add_fd(caller_pid, f, flags & O_CLOEXEC ? IOD_CLOEXEC : 0);
 	if(fd < 0) {
 		iof_undo_new(f);
 		return fd;

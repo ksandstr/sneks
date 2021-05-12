@@ -67,7 +67,6 @@ static int null_close(chrfile_t *h) {
 static int null_open(chrfile_t *h,
 	char type, int major, int minor, int flags)
 {
-	if(flags != 0) return -EINVAL;
 	static const enum null_dev ds[] = {
 		[3] = DEV_NULL, [5] = DEV_ZERO, [7] = DEV_FULL,
 	};

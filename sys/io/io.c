@@ -375,6 +375,7 @@ static int fork_handle(struct fd *fd, struct client *child)
 	if(copy == NULL) return -ENOMEM;
 
 	*copy = *fd;
+	copy->orig_fd = ra_ptr2id(fd_ra, fd);
 	copy->owner = child;
 	copy->flags &= ~IOD_TRANSFER;
 	copy->flags |= IOD_SHADOW;
@@ -635,11 +636,12 @@ int io_impl_set_file_flags(int *old, int fd, int or_mask, int and_mask)
 	struct fd *f = get_fd(sender_pid, fd);
 	if(f == NULL) return -EBADF;
 
-	const unsigned permitted_flags = IOF_NONBLOCK;
-	if((~and_mask | or_mask) & ~permitted_flags) return -EINVAL;
+	const unsigned permitted = IOF_NONBLOCK;
+	and_mask |= ~permitted;
+	or_mask &= permitted;
 
-	*old = f->file->flags;
-	f->file->flags = (*old & and_mask) | or_mask | (*old & ~permitted_flags);
+	*old = f->file->flags & IOF_VALID_MASK;
+	f->file->flags = (*old & and_mask) | or_mask | (*old & ~permitted);
 
 	assert(invariants());
 	return 0;
@@ -648,7 +650,22 @@ int io_impl_set_file_flags(int *old, int fd, int or_mask, int and_mask)
 
 int io_impl_set_handle_flags(int *old, int fd, int or_mask, int and_mask)
 {
-	return -ENOSYS;
+	sync_confirm();
+
+	pid_t sender_pid = pidof_NP(muidl_get_sender());
+	struct fd *f = get_fd(sender_pid, fd);
+	if(f == NULL) return -EBADF;
+
+	const unsigned permitted = SNEKS_IO_FD_CLOEXEC;
+	and_mask |= ~permitted;
+	or_mask &= permitted;
+
+	*old = (f->flags & IOD_CLOEXEC) >> 16;
+	int new_set = (*old & and_mask) | or_mask | (*old & ~permitted);
+	f->flags = (f->flags & ~IOD_VALID_MASK) | ((new_set << 16) & IOD_VALID_MASK);
+
+	assert(invariants());
+	return 0;
 }
 
 
@@ -785,11 +802,11 @@ static void late_close_fd(L4_Word_t param, struct fd *f)
 {
 	assert(f->owner != NULL);
 
-	/* clean up fork indirection. */
-	int orig_fd = param;
-	assert((~f->flags & IOD_SHADOW)
-		|| (orig_fd < f->owner->fd_table_len && f->owner->fd_table[orig_fd] > 0));
-	if(f->flags & IOD_SHADOW) f->owner->fd_table[orig_fd] = 0;
+	if(f->flags & IOD_SHADOW) {
+		assert(f->orig_fd < f->owner->fd_table_len);
+		assert(f->owner->fd_table[f->orig_fd] > 0);
+		f->owner->fd_table[f->orig_fd] = 0;
+	}
 
 	int n = fd_dtor(f, true);
 	if(n != 0) {
@@ -811,7 +828,7 @@ int io_impl_close(int fd)
 	struct fd *f = get_fd(sender_pid, fd);
 	if(f == NULL) return -EBADF;
 
-	set_confirm(&late_close_fd, fd, f);
+	set_confirm(&late_close_fd, 0, f);
 	if(fast_confirm_flags & IO_CONFIRM_CLOSE) io_set_fast_confirm();
 
 	assert(invariants());
@@ -819,8 +836,10 @@ int io_impl_close(int fd)
 }
 
 
-static int internal_dup(int *newfd_p, int oldfd, pid_t receiver_pid)
+static int internal_dup(int *newfd_p, int oldfd, pid_t receiver_pid, int flags)
 {
+	if(flags & ~SNEKS_IO_FD_CLOEXEC) return -EINVAL;
+
 	pid_t sender_pid = pidof_NP(muidl_get_sender());
 	struct fd *fd = get_fd(sender_pid, oldfd);
 	if(fd == NULL) return -EBADF;
@@ -831,10 +850,10 @@ static int internal_dup(int *newfd_p, int oldfd, pid_t receiver_pid)
 		if(t == NULL) return -ENOMEM;
 	}
 
-	/* TODO: use a lower-level operation here since fd->owner need not be
-	 * htable_got again.
-	 */
-	int n = io_add_fd(sender_pid, IOF_T(fd->file), fd->flags & ~IOD_PRIVATE_MASK);
+	int h_flags = fd->flags & ~(IOD_PRIVATE_MASK | IOD_CLOEXEC);
+	if(flags & SNEKS_IO_FD_CLOEXEC) h_flags |= IOD_CLOEXEC;
+	assert(!!(flags & SNEKS_IO_FD_CLOEXEC) == !!(h_flags & IOD_CLOEXEC));
+	int n = io_add_fd(sender_pid, IOF_T(fd->file), h_flags);
 	if(n < 0) {
 		free(t);
 		return n;
@@ -861,13 +880,13 @@ static int internal_dup(int *newfd_p, int oldfd, pid_t receiver_pid)
 
 int io_impl_dup(int *newfd_p, int oldfd, int flags) {
 	sync_confirm();
-	return internal_dup(newfd_p, oldfd, -1);
+	return internal_dup(newfd_p, oldfd, -1, flags);
 }
 
 
 int io_impl_dup_to(int *newfd_p, int oldfd, pid_t receiver_pid) {
 	sync_confirm();
-	return internal_dup(newfd_p, oldfd, receiver_pid);
+	return internal_dup(newfd_p, oldfd, receiver_pid, 0);
 }
 
 
@@ -1026,6 +1045,12 @@ static void lifecycle_sync(void)
 				(*callbacks.lifecycle)(c->pid, CLIENT_FORK, cur->child);
 				break;
 			case MPL_EXEC:
+				for(size_t i=0; i < c->handles.size; i++) {
+					struct fd *fd = c->handles.item[i];
+					if(~fd->flags & IOD_CLOEXEC) continue;
+					late_close_fd(0, fd);
+					i--;
+				}
 				(*callbacks.lifecycle)(c->pid, CLIENT_EXEC);
 				break;
 			case MPL_EXIT:

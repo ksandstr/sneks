@@ -22,6 +22,7 @@
 
 /* <struct fd>.flags:
  *   - 31..28 are EPOLL{EXCLUSIVE,WAKEUP,ONESHOT,ET};
+ *   - 16 is SNEKS_IO_FD_CLOEXEC
  *   - 13 is EPOLLRDHUP
  *   - 4..0 are EPOLL{HUP,ERR,OUT,PRI,IN}
  *
@@ -70,6 +71,7 @@ struct fd {
 	struct io_file *file;
 	struct client *owner;
 	int flags;	/* IOD_*, EPOLL* */
+	int orig_fd;	/* fd_table pos when ->flags & IOD_SHADOW, or 0 */
 	unsigned short file_ix, client_ix;
 };
 

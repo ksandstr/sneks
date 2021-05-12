@@ -13,6 +13,7 @@
 
 #include <l4/types.h>
 
+#include <sneks/api/io-defs.h>
 #include <sneks/process.h>
 #include <sneks/rollback.h>
 #include <sneks/systask.h>
@@ -66,17 +67,19 @@ static int chrdev_pipe(int *rd_p, int *wr_p, int flags)
 	int n;
 	sync_confirm();
 
-	if(flags != 0) return -EINVAL;
+	int h_flags = 0, f_flags = 0;
+	if(flags & O_CLOEXEC) h_flags |= IOD_CLOEXEC;
+	if(flags & O_NONBLOCK) f_flags |= IOF_NONBLOCK;
 
-	/* TODO: parse pipe2(2) @flags into IOD_* and IOF_* */
-	chrfile_t *readf = iof_new(0), *writef = iof_new(0);
+	chrfile_t *readf = iof_new(f_flags), *writef = iof_new(f_flags);
 	if(readf == NULL || writef == NULL) goto Enomem;
 
 	n = (*chrdev_callbacks.pipe)(readf, writef, flags);
 	if(n < 0) goto fail;
 
 	pid_t caller = pidof_NP(muidl_get_sender());
-	int rd = io_add_fd(caller, readf, 0), wr = io_add_fd(caller, writef, 0);
+	int rd = io_add_fd(caller, readf, h_flags),
+		wr = io_add_fd(caller, writef, h_flags);
 	if(rd < 0 || wr < 0) {
 		n = min(rd, wr);
 		goto fail;
@@ -106,11 +109,12 @@ static int chrdev_open(int *handle_p,
 	 * and we don't have the key material anyway.)
 	 */
 
-	/* TODO: parse open(2) @flags into IOF_*, IOD_* */
-	flags &= ~(O_RDONLY | O_WRONLY | O_RDWR);
-	if(flags != 0) return -EINVAL;
+	if(flags & ~(O_RDONLY | O_WRONLY | O_RDWR | O_CLOEXEC | O_NONBLOCK)) {
+		log_info("flags=%#x (bad)", flags);
+		return -EINVAL;
+	}
 
-	chrfile_t *file = iof_new(0);
+	chrfile_t *file = iof_new(flags & O_NONBLOCK ? IOF_NONBLOCK : 0);
 	if(file == NULL) return -ENOMEM;
 
 	static const char objtype[] = { [2] = 'c' };
@@ -118,7 +122,8 @@ static int chrdev_open(int *handle_p,
 		(object >> 15) & 0x7fff, object & 0x7fff, flags);
 	if(n < 0) goto fail;
 
-	n = io_add_fd(pidof_NP(muidl_get_sender()), file, 0);
+	n = io_add_fd(pidof_NP(muidl_get_sender()), file,
+		flags & O_CLOEXEC ? IOD_CLOEXEC : 0);
 	if(n < 0) goto fail;
 
 	add_rollback(file, NULL);

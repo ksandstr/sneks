@@ -64,8 +64,6 @@ static void *membuf_snub(struct membuf *mb, void *rawptr, size_t newsize) {
 
 static int pipe_pipe(chrfile_t *readf, chrfile_t *writef, int flags)
 {
-	if(flags != 0) return -EINVAL;
-
 	struct pipehead *hd = malloc(sizeof *hd);
 	char *firstbuf = aligned_alloc(4096, PIPESZ);
 	if(hd == NULL || firstbuf == NULL) {
