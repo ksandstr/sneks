@@ -91,10 +91,6 @@ START_LOOP_TEST(cloexec, iter, 0, 2 * ARRAY_SIZE(gens) - 1)
 	}
 	ok1(prep_ok);
 
-#ifdef __sneks__
-	todo_start("unimplemented");
-#endif
-
 	int testfd = (*gen->fn)(gen->param), err = errno;
 	ok1(testfd >= 0);
 	for(int i=0; i < ARRAY_SIZE(spam); i++) {

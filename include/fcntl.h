@@ -10,7 +10,7 @@
 #define O_RDWR 2
 
 /* TODO: get all of these from io-defs.h, file-defs.h, etc. and group
- * according to what goes in open/openat flags and what in F_SETFL.
+ * according to what goes in open/openat flags and what only in F_SETFL.
  */
 #define O_CREAT		0100
 #define O_TRUNC		01000

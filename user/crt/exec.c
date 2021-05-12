@@ -63,6 +63,8 @@ static bool collect_exec_fds(sintmap_index_t fd,
 	struct fd_bits *bits, struct exec_fds *bufs)
 {
 	assert(bufs->alloc >= bufs->size);
+
+	if(bits->flags & FD_CLOEXEC) return true;
 	if(bufs->alloc == bufs->size) {
 		size_t na = max(64 / sizeof(L4_ThreadId_t), bufs->alloc * 2);
 		assert(na > bufs->size);
@@ -173,8 +175,7 @@ int execvp(const char *file, char *const argv[]) {
 
 int execve(const char *pathname, char *const argv[], char *const envp[])
 {
-	/* TODO: use O_CLOEXEC, of course */
-	int fd = openat(AT_FDCWD, pathname, O_RDONLY);
+	int fd = openat(AT_FDCWD, pathname, O_RDONLY | O_CLOEXEC);
 	if(fd >= 0) {
 		fexecve(fd, argv, envp);
 		close(fd);
@@ -281,7 +282,7 @@ int execveat(int dirfd, const char *pathname,
 	}
 
 	/* TODO: use O_CLOEXEC, of course */
-	int fd = openat(dirfd, pathname, O_RDONLY, flags & pass_flags);
+	int fd = openat(dirfd, pathname, O_RDONLY, (flags & pass_flags) | O_CLOEXEC);
 	if(fd >= 0) {
 		fexecve(fd, argv, envp);
 		close(fd);

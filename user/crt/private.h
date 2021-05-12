@@ -23,11 +23,9 @@
 #define MAX_FD ((1 << 15) - 1)	/* TODO: get from sysconf(), stash somewhere */
 
 
-struct fd_bits
-{
+struct fd_bits {
 	L4_ThreadId_t server;
-	intptr_t handle;
-	uint8_t flags;
+	int handle, flags;
 };
 
 
@@ -63,9 +61,10 @@ static inline struct fd_bits *__fdbits(int fd) {
 }
 
 /* creation. if @fd < 0, allocates the lowest available file descriptor.
- * otherwise if @fd is already valid, returns -EEXIST.
+ * otherwise if @fd is already valid, returns -EEXIST. @flags may contain
+ * FD_CLOEXEC, returns -EINVAL for invalid flags set.
  */
-extern int __create_fd(int fd, L4_ThreadId_t server, intptr_t handle, int flags);
+extern int __create_fd(int fd, L4_ThreadId_t server, int handle, int flags);
 
 
 /* from path.c */

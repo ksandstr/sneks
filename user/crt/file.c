@@ -107,6 +107,8 @@ int __create_fd(int fd, L4_ThreadId_t server, intptr_t handle, int flags)
 {
 	assert(invariants());
 
+	if(unlikely(flags & ~FD_CLOEXEC)) return -EINVAL;
+
 	if(fd >= 0 && sintmap_get(&fd_map, fd) != NULL) {
 		return -EEXIST;
 	} else if(fd < 0) {
@@ -150,8 +152,8 @@ COLD void __file_init(struct sneks_fdlist *fdlist)
 		do {
 			if(fdlist->fd > prev) abort();	/* invalid fdlist */
 			prev = fdlist->fd;
-			/* NOTE: flags is always 0 because FD_CLOEXEC (O_CLOEXEC) doesn't
-			 * carry through spawn or exec.
+			/* NOTE: flags is always 0 since FD_CLOEXEC doesn't carry through
+			 * exec for obvious reasons and cannot be set for spawn.
 			 */
 			n = __create_fd(fdlist->fd, fdlist->serv, fdlist->cookie, 0);
 			fdlist = sneks_fdlist_next(fdlist);
@@ -256,12 +258,14 @@ int dup2(int oldfd, int newfd)
 /* TODO: make this signal-safe */
 int dup3(int oldfd, int newfd, int flags)
 {
-	/* TODO: support FD_CLOEXEC, FD_RENAME_NP */
-	if(oldfd == newfd || flags != 0) { errno = EINVAL; return -1; }
-	struct fd_bits *bits = __fdbits(oldfd);
-	if(bits == NULL) { errno = EBADF; return -1; }
+	if(oldfd == newfd) goto Einval;
+	if(flags & ~O_CLOEXEC) goto Einval;
+	flags = (flags & O_CLOEXEC) ? SNEKS_IO_FD_CLOEXEC : 0;
 
-	int new_handle = -1, n = __io_dup(bits->server, &new_handle, bits->handle, 0);
+	struct fd_bits *bits = __fdbits(oldfd);
+	if(bits == NULL) return -1;
+	int new_handle = -1,
+		n = __io_dup(bits->server, &new_handle, bits->handle, flags);
 	if(n != 0) return NTOERR(n);
 
 	if(newfd >= 0 && __fdbits(newfd) != NULL) close(newfd);
@@ -272,13 +276,22 @@ int dup3(int oldfd, int newfd, int flags)
 		errno = -n;
 		return -1;
 	}
+
+Einval: errno = EINVAL; return -1;
 }
 
+
+typedef int (*getsetfn)(L4_ThreadId_t, int *, int, int, int);
 
 int fcntl(int fd, int cmd, ...)
 {
 	struct fd_bits *b = __fdbits(fd);
 	if(b == NULL) goto Ebadf;
+
+	static const getsetfn fns[] = {
+		[F_GETFD] = &__io_set_handle_flags, [F_SETFD] = &__io_set_handle_flags,
+		[F_GETFL] = &__io_set_file_flags, [F_SETFL] = &__io_set_file_flags,
+	};
 	va_list al; va_start(al, cmd);
 	switch(cmd) {
 		default: va_end(al); goto Einval;
@@ -290,16 +303,19 @@ int fcntl(int fd, int cmd, ...)
 			if(newfd < 0) return NTOERR(newfd);
 			return dup2(fd, newfd);
 		}
-		case F_GETFL: {
+		case F_GETFL: case F_GETFD: {
+			assert(cmd < ARRAY_SIZE(fns));
+			int old = 0, n = (*fns[cmd])(b->server, &old, b->handle, 0, ~0);
 			va_end(al);
-			int old = 0;
-			int n = __io_set_file_flags(b->server, &old, b->handle, 0, ~0l);
+			if(n == 0) b->flags = old;
 			return NTOERR(n, old);
 		}
-		case F_SETFL: {
-			int val = va_arg(al, int);
+		case F_SETFL: case F_SETFD: {
+			assert(cmd < ARRAY_SIZE(fns));
+			int val = va_arg(al, int),
+				n = (*fns[cmd])(b->server, &(int){ 0 }, b->handle, val, 0);
 			va_end(al);
-			int foo, n = __io_set_file_flags(b->server, &foo, b->handle, val, ~val);
+			if(n == 0) b->flags = val;
 			return NTOERR(n);
 		}
 	}
