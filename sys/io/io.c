@@ -456,11 +456,10 @@ static int fork_client(struct client *parent, pid_t child_pid)
 	 * loop.
 	 */
 	for(size_t i=0; i < min(max_fd + 1, parent->fd_table_len); i++) {
-		int pdesc = parent->fd_table[i];
-		if(pdesc <= 0) continue;
-		struct fd *f = ra_id2ptr(fd_ra, pdesc);
-		if(f->owner != parent) continue;
-		assert(f->flags & IOD_SHADOW);
+		if(parent->fd_table[i] <= 0) continue;
+		struct fd *f = ra_id2ptr(fd_ra, i);
+		if(f->owner == NULL) continue;
+		assert(~f->flags & IOD_SHADOW);
 
 		int newfd = fork_handle(f, child);
 		if(newfd < 0) {
