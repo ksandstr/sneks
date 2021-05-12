@@ -1422,14 +1422,13 @@ static int bootcon_close(int fd) {
 }
 
 
-static int bootcon_set_flags(int *old, int fd, int or, int and)
-{
+static int bootcon_ignore_flags(int *old, int fd, int or, int and) {
 	*old = 0;
 	return 0;
 }
 
 
-static int bootcon_dup(int *new_p, int old) {
+static int bootcon_dup(int *new_p, int old, int flags) {
 	*new_p = old;
 	return 0;
 }
@@ -1459,7 +1458,8 @@ static int bootcon_thread_fn(void *param_ptr)
 		.read = &bootcon_read,
 		.write = &bootcon_write,
 		.close = &bootcon_close,
-		.set_flags = &bootcon_set_flags,
+		.set_file_flags = &bootcon_ignore_flags,
+		.set_handle_flags = &bootcon_ignore_flags,
 		.dup = &bootcon_dup,
 		.dup_to = &bootcon_dup_to,
 		.stat_handle = &bootcon_stat_handle,

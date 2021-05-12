@@ -242,9 +242,10 @@ static int dup_ctor(handle_ctor_fn base, handles *result, bool send_only)
 		goto end;
 	}
 	L4_Accept(L4_UntypedWordsAcceptor);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2, .X.label = SNEKS_IO_DUP_LABEL }.raw);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 3, .X.label = SNEKS_IO_DUP_LABEL }.raw);
 	L4_LoadMR(1, SNEKS_IO_DUP_SUBLABEL);
 	L4_LoadMR(2, bits->handle);
+	L4_LoadMR(3, 0);
 	L4_MsgTag_t tag = send_only ? L4_Send_Timeout(bits->server, A_SHORT_NAP)
 		: L4_Call_Timeouts(bits->server, A_SHORT_NAP, A_SHORT_NAP);
 	if(L4_IpcFailed(tag)) return L4_ErrorCode();
@@ -252,6 +253,7 @@ static int dup_ctor(handle_ctor_fn base, handles *result, bool send_only)
 	if(!send_only && L4_Label(tag) == 1) {
 		L4_Word_t error; L4_StoreMR(1, &error);
 		n = -(int)error;
+		diag("%s: raw IO::dup failed, error=%lu", __func__, error);
 	} else if(!send_only && L4_UntypedWords(tag) == 1) {
 		L4_Word_t handle; L4_StoreMR(1, &handle);
 		int fd = __create_fd(-1, bits->server, handle, 0);

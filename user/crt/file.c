@@ -261,7 +261,7 @@ int dup3(int oldfd, int newfd, int flags)
 	struct fd_bits *bits = __fdbits(oldfd);
 	if(bits == NULL) { errno = EBADF; return -1; }
 
-	int new_handle = -1, n = __io_dup(bits->server, &new_handle, bits->handle);
+	int new_handle = -1, n = __io_dup(bits->server, &new_handle, bits->handle, 0);
 	if(n != 0) return NTOERR(n);
 
 	if(newfd >= 0 && __fdbits(newfd) != NULL) close(newfd);
@@ -293,13 +293,13 @@ int fcntl(int fd, int cmd, ...)
 		case F_GETFL: {
 			va_end(al);
 			int old = 0;
-			int n = __io_set_flags(b->server, &old, b->handle, 0, ~0l);
+			int n = __io_set_file_flags(b->server, &old, b->handle, 0, ~0l);
 			return NTOERR(n, old);
 		}
 		case F_SETFL: {
 			int val = va_arg(al, int);
 			va_end(al);
-			int foo, n = __io_set_flags(b->server, &foo, b->handle, val, ~val);
+			int foo, n = __io_set_file_flags(b->server, &foo, b->handle, val, ~val);
 			return NTOERR(n);
 		}
 	}

@@ -41,7 +41,7 @@ int main(int argc, char *argv[])
 		return EXIT_FAILURE;
 	}
 	int newh;
-	n = __io_dup(server, &newh, handle);
+	n = __io_dup(server, &newh, handle, 0);
 	if(n != 0 && n != -EBADF) {
 		printf("fdcloser: IO/dup returned unexpected n=%d", n);
 	}

@@ -627,7 +627,7 @@ iof_t *io_get_file(pid_t pid, int fd) {
 }
 
 
-int io_impl_set_flags(int *old, int fd, int or_mask, int and_mask)
+int io_impl_set_file_flags(int *old, int fd, int or_mask, int and_mask)
 {
 	sync_confirm();
 
@@ -643,6 +643,12 @@ int io_impl_set_flags(int *old, int fd, int or_mask, int and_mask)
 
 	assert(invariants());
 	return 0;
+}
+
+
+int io_impl_set_handle_flags(int *old, int fd, int or_mask, int and_mask)
+{
+	return -ENOSYS;
 }
 
 
@@ -853,7 +859,7 @@ static int internal_dup(int *newfd_p, int oldfd, pid_t receiver_pid)
 }
 
 
-int io_impl_dup(int *newfd_p, int oldfd) {
+int io_impl_dup(int *newfd_p, int oldfd, int flags) {
 	sync_confirm();
 	return internal_dup(newfd_p, oldfd, -1);
 }

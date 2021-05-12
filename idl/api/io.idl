@@ -28,8 +28,11 @@ interface IO
 		Posix::timespec st_atim, st_mtim, st_ctim;
 	};
 
-	/* bits for ::set_flags(). same values as on Linux. */
+	/* bits for set_file_flags(). follows Linux. */
 	const long O_NONBLOCK = 04000;
+
+	/* bits for set_handle_flags(). follows Linux. */
+	const long FD_CLOEXEC = 1;
 
 	/* this is the weak I/O interface where data is copied through the
 	 * microkernel, so the max transfer size can be fairly small.
@@ -38,16 +41,21 @@ interface IO
 	typedef sequence<octet, IOSEG_MAX> ioseg;
 
 	/* sets @fd's flags' = (flags & @and_mask) | @or_mask. returns previous
-	 * flags in @old_flags. raises EBADF when @fd doesn't exist, and EINVAL
-	 * when an unknown flag would be set.
+	 * flags in @old_flags. raises EBADF when @fd doesn't exist.
 	 *
-	 * this alters the set of file status flags (O_*) as opposed to file
-	 * descriptor flags present in userspace (FD_*), or some other set of
-	 * flags accessed by ioctl.
+	 * this alters the set of handle (descriptor) flags (FD_*) as opposed to
+	 * file status flags (O_*), or some other set of flags accessed by ioctl.
 	 */
-	void set_flags(out long old_flags,
+	void set_handle_flags(out long old_flags,
 		in handle fd, in long or_mask, in long and_mask)
-		raises(Posix::Errno);
+			raises(Posix::Errno);
+
+	/* alter status flags of file described by @fd. O_* analogue to
+	 * set_handle_flags, with same call semantics.
+	 */
+	void set_file_flags(out long old_flags,
+		in handle fd, in long or_mask, in long and_mask)
+			raises(Posix::Errno);
 
 	/* when write (read) blocks on a full (empty) buffer, wakeup happens in
 	 * the form of an EAGAIN error result. when O_NONBLOCK is set, instead
@@ -75,8 +83,10 @@ interface IO
 	void stat_handle(in handle fd, out statbuf result)
 		raises(Posix::Errno);
 
-	/* dup2(2) analogue */
-	void dup(out handle newfd, in handle oldfd)
+	/* dup3(2) analogue, except @newfd is out-only and @fd_flags is FD_*
+	 * instead of O_*.
+	 */
+	void dup(out handle newfd, in handle oldfd, in long fd_flags)
 		raises(Posix::Errno);
 
 	/* interface for transferring file descriptors between tasks.

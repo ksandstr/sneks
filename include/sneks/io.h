@@ -214,7 +214,8 @@ extern void io_notify(iof_t *file, int epoll_mask);
  * @vtab to the corresponding io_impl_{name}() routines.
  */
 #define FILL_SNEKS_IO(vtab) do { \
-		(vtab)->set_flags = &io_impl_set_flags; \
+		(vtab)->set_file_flags = &io_impl_set_file_flags; \
+		(vtab)->set_handle_flags = &io_impl_set_handle_flags; \
 		(vtab)->write = &io_impl_write; \
 		(vtab)->read = &io_impl_read; \
 		(vtab)->close = &io_impl_close; \
@@ -240,11 +241,12 @@ extern void _io_dispatch_func(L4_Word_t (*fn)(void *priv), const void *priv);
 /* implementations of Sneks::IO. these are either used in the implementor's
  * IDL vtable or wrapped through something else.
  */
-extern int io_impl_set_flags(int *, int, int, int);
+extern int io_impl_set_file_flags(int *, int, int, int);
+extern int io_impl_set_handle_flags(int *, int, int, int);
 extern int io_impl_write(int, off_t, const uint8_t *, unsigned);
 extern int io_impl_read(int, int, off_t, uint8_t *, unsigned *);
 extern int io_impl_close(int);
-extern int io_impl_dup(int *, int);
+extern int io_impl_dup(int *, int, int);
 extern int io_impl_dup_to(int *, int, int);
 extern int io_impl_touch(int);
 extern int io_impl_stat_handle(int fd, struct sneks_io_statbuf *result_ptr);

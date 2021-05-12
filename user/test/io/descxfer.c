@@ -111,7 +111,7 @@ START_LOOP_TEST(transfer_ownership, iter, 0, 7)
 				n = __io_dup_to(server, &new_handle, handle, sub);
 				if(!ok(n == 0, "Sneks::IO/dup_to")) diag("n=%d", n);
 			} else {
-				n = __io_dup(server, &new_handle, handle);
+				n = __io_dup(server, &new_handle, handle, 0);
 				if(!ok(n == 0, "Sneks::IO/dup")) diag("n=%d", n);
 				skip(1, "not calling dup_to");
 			}
