@@ -13,7 +13,7 @@ all: tags
 	+@make -C user/crt all
 	+@make -C sys/test all
 	+@make -C user/test all
-	+@make -C user/init all
+	+@make -C user/base all
 	+@make -C root all
 	+@make initrd.img
 
@@ -22,7 +22,7 @@ clean:
 	@rm -f *.o initrd.img $(CLEAN_PATS)
 	+@make -C user/crt clean
 	+@make -C user/test clean
-	+@make -C user/init clean
+	+@make -C user/base clean
 	+@make -C sys clean
 	+@make -C root clean
 	+@make -C lib clean
@@ -31,7 +31,7 @@ clean:
 distclean: clean
 	@rm -f tags
 	@rm -rf .deps
-	+@make -C user/init distclean
+	+@make -C user/base distclean
 	+@make -C user/test distclean
 	+@make -C user/crt distclean
 	+@make -C sys distclean

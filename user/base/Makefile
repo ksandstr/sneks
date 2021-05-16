@@ -9,7 +9,7 @@ LDFLAGS:=$(LDFLAGS) -e_start -nostdlib -L $(MUNG_DIR)/user/lib/l4 \
 # the stack properly. FIXME: repair that, then remove -mstackrealign.
 CFLAGS:=$(CFLAGS) -D__KERNEL__ -D__sneks__=1 -D__l4x2__=1 -mstackrealign
 
-OUTPUTS=init
+OUTPUTS=init sh
 
 
 all: $(OUTPUTS)
@@ -23,11 +23,13 @@ distclean:
 	@rm -rf .deps $(OUTPUTS)
 
 
-initrd-install: init
+initrd-install: init sh
 	@mkdir -p $(INITRD)/sbin
-	@install $< $(INITRD)/sbin/
+	@install init $(INITRD)/sbin/
 	@mkdir -p $(INITRD)/etc
 	@install etc/inittab $(INITRD)/etc/
+	@mkdir -p $(INITRD)/bin
+	@install sh $(INITRD)/bin/
 
 
 init: $(LDSCRIPT) init.o inittab.o optcompat.o ccan-opt.a
@@ -39,6 +41,14 @@ init: $(LDSCRIPT) init.o inittab.o optcompat.o ccan-opt.a
 
 inittab.o: etc/inittab
 	@objcopy -I binary -O elf32-i386 -B i386 $< $@
+
+
+sh: $(LDSCRIPT) sh.o
+	@echo "  LD $@"
+	@$(LD) $(LDFLAGS) -static -o $@ -b elf32-i386 -T $(LDSCRIPT) \
+		$(filter %.o,$^) $(filter %.a,$^) \
+		-lsneks-user-crt -lsneks -ll4 -L /usr/lib32 -lm \
+		$(shell gcc $(CFLAGS) -print-libgcc-file-name)
 
 
 include $(wildcard .deps/*.d)
