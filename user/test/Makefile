@@ -14,7 +14,7 @@ CFLAGS:=$(CFLAGS) -D__KERNEL__ -D__sneks__=1 -D__l4x2__=1 -mstackrealign \
 TEST_SOURCE:=$(filter-out tools/%.c,$(wildcard */*.c))
 TEST_OBJS:=$(TEST_SOURCE:%.c=%.o)
 
-TESTSUITE_OBJS:=main.o harness.o optcompat.o $(TEST_OBJS) \
+TESTSUITE_OBJS:=main.o harness.o util.o optcompat.o $(TEST_OBJS) \
 	ccan-talloc.o
 
 HOSTSUITE_TESTDIR:=/tmp/sneks-hostsuite-$(shell stat -c "u%u_i%i" .)/
@@ -82,6 +82,14 @@ test-files-install:
 		echo "exit 123" >$(INITRD)/user/test/io/stat/$$i; \
 		chmod u=$$i $(INITRD)/user/test/io/stat/$$i; \
 	done
+	@mkdir -p $(INITRD)/user/test/exec/isdir/exit_with_0
+	@mkdir -p $(INITRD)/user/test/exec/noexec_script
+	@echo "#!$(INITRD)/user/test/exec/noexec/exit_with_0" \
+		>>$(INITRD)/user/test/exec/noexec_script/exit_with_0
+	@echo "exit 666" >>$(INITRD)/user/test/exec/noexec_script/exit_with_0
+	@find $(INITRD)/user/test/exec -name exit_with_0 -exec chmod u+x {} +
+	@mkdir -p $(INITRD)/user/test/exec/xnotset
+	@echo "exit 667" >>$(INITRD)/user/test/exec/xnotset/exit_with_0
 
 
 # hostsuite stuff. perhaps dirtier than necessary.

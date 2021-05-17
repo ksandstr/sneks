@@ -156,6 +156,17 @@ extern noreturn void vbail(const char *fmt, va_list args);
 extern bool in_test(void);
 
 
+/* from util.c */
+
+/* computes x! */
+extern unsigned factorial(unsigned x);
+
+/* generates a n-permutation of integers [0, n). outputs guaranteed distinct
+ * while @perm < n! .
+ */
+extern void gen_perm(unsigned *buf, unsigned n, unsigned perm);
+
+
 /* from tap.c */
 
 extern void _fail_unless(
