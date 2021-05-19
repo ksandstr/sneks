@@ -23,10 +23,10 @@ int pipe2(int pipefd[2], int flags)
 	for(int i=0; i < 2; i++) {
 		pipefd[i] = __create_fd(-1, server, rdwr[i], flags);
 		if(pipefd[i] < 0) {
-			errno = -pipefd[i];
 			if(i > 0) close(pipefd[0]);
 			__io_close(server, rdwr[0]);
 			__io_close(server, rdwr[1]);
+			errno = -pipefd[i];
 			return -1;
 		}
 	}

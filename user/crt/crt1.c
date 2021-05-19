@@ -148,11 +148,11 @@ static bool use_cwd_handle(char **envp)
 	if(L4_IsLocalId(server)) fprintf(stderr, "crt1: UwU what's this?\n");
 	int fd = __create_fd(-1, server, handle, 0);
 	if(unlikely(fd < 0)) {
-		fprintf(stderr, "crt1: __create_fd() failed, errno=%d\n", errno);
+		fprintf(stderr, "crt1:%s: __create_fd() failed, n=%d\n", __func__, fd);
 		return false;
 	}
 	if(unlikely(fchdir(fd) < 0)) {
-		fprintf(stderr, "crt1: fchdir() failed, errno=%d\n", errno);
+		fprintf(stderr, "crt1:%s: fchdir() failed, errno=%d\n", __func__, errno);
 		return false;
 	}
 	close(fd);

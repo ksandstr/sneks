@@ -22,9 +22,6 @@
 #include "private.h"
 
 
-#define MAX_FD ((1 << 15) - 1)	/* TODO: get from sysconf() */
-
-
 int __l4_last_errorcode = 0;	/* TODO: TSS ma bitch up */
 
 fd_map_t fd_map;
@@ -79,7 +76,7 @@ int __idl2errno(int n, ...)
 }
 
 
-/* find first free file descriptor at @low or greater. returns EMFILE when
+/* find first free file descriptor at @low or greater. returns -EMFILE when
  * there already exist FDs up to MAX_FD. this avoids O(n^2) scaling due to the
  * open(2) (etc.) requirement of using the lowest available fd number by
  * tracking first-free and last-alloc values. however, F_DUPFD that
@@ -101,8 +98,7 @@ static int next_free_fd(int low)
 		while(ix <= MAX_FD) {
 			if(sintmap_get(&fd_map, ++ix) == NULL) return ix;
 		}
-		errno = EMFILE;
-		return -1;
+		return -EMFILE;
 	}
 }
 
@@ -110,48 +106,35 @@ static int next_free_fd(int low)
 int __create_fd(int fd, L4_ThreadId_t server, intptr_t handle, int flags)
 {
 	assert(invariants());
-	if(fd < 0) {
+
+	if(fd >= 0 && sintmap_get(&fd_map, fd) != NULL) {
+		return -EEXIST;
+	} else if(fd < 0) {
 		fd = next_free_fd(0);
-		if(fd < 0) return -1;
+		if(fd < 0) return fd;
 		assert(sintmap_get(&fd_map, fd) == NULL);
 	}
 
 	/* designated file descriptor street */
 	struct fd_bits *bits = malloc(sizeof *bits);
-	if(bits == NULL) goto Enomem;
+	if(bits == NULL) return -ENOMEM;
 	*bits = (struct fd_bits){
 		.server = server, .handle = handle, .flags = flags,
 	};
 	if(!sintmap_add(&fd_map, fd, bits)) {
 		free(bits);
-		fd = -1;
-	} else {
-		last_alloc = max(last_alloc, fd);
-		if(fd == first_free) {
-			while(first_free <= MAX_FD) {
-				if(sintmap_get(&fd_map, ++first_free) == NULL) break;
-			}
+		return -ENOMEM;
+	}
+
+	last_alloc = max(last_alloc, fd);
+	if(fd == first_free) {
+		while(first_free <= MAX_FD) {
+			if(sintmap_get(&fd_map, ++first_free) == NULL) break;
 		}
-		assert(invariants());
 	}
+
+	assert(invariants());
 	return fd;
-
-Enomem:
-	errno = ENOMEM;
-	return -1;
-}
-
-
-inline struct fd_bits *__fdbits(int fd)
-{
-	struct fd_bits *b;
-	if(unlikely(fd < 0 || fd > MAX_FD
-		|| (b = sintmap_get(&fd_map, fd), b == NULL)))
-	{
-		errno = EBADF;
-		return NULL;
-	}
-	return b;
 }
 
 
@@ -161,7 +144,7 @@ COLD void __file_init(struct sneks_fdlist *fdlist)
 	sintmap_init(&fd_map);
 	assert(invariants());
 
-	int err = 0, n = 0;
+	int n = 0;
 	if(fdlist != NULL && fdlist->next != 0) {
 		int prev = fdlist->fd;
 		do {
@@ -173,7 +156,6 @@ COLD void __file_init(struct sneks_fdlist *fdlist)
 			n = __create_fd(fdlist->fd, fdlist->serv, fdlist->cookie, 0);
 			fdlist = sneks_fdlist_next(fdlist);
 		} while(n >= 0 && fdlist->next != 0);
-		err = errno;
 	}
 
 	stdin = fdopen(0, "r");
@@ -181,7 +163,7 @@ COLD void __file_init(struct sneks_fdlist *fdlist)
 	stderr = fdopen(2, "w");
 
 	if(n < 0) {
-		fprintf(stderr, "%s: __create_fd() failed, errno=%d\n", __func__, err);
+		fprintf(stderr, "%s: __create_fd() failed, n=%d\n", __func__, n);
 		abort();
 	}
 }
@@ -190,29 +172,30 @@ COLD void __file_init(struct sneks_fdlist *fdlist)
 int close(int fd)
 {
 	struct fd_bits *b = __fdbits(fd);
-	if(b == NULL) return -1;
-	else {
-		int n = __io_close(b->server, b->handle);
-		b->server = L4_nilthread;
-		sintmap_del(&fd_map, fd);
-		free(b);
-		first_free = min(first_free, fd);
-		if(fd == last_alloc) {
-			while(last_alloc > 0) {
-				if(sintmap_get(&fd_map, --last_alloc) != NULL) break;
-			}
-			first_free = min(first_free, last_alloc + 1);
+	if(b == NULL) { errno = EBADF; return -1; }
+
+	int n = __io_close(b->server, b->handle);
+	b->server = L4_nilthread;
+	sintmap_del(&fd_map, fd);
+	free(b);
+
+	first_free = min(first_free, fd);
+	if(fd == last_alloc) {
+		while(last_alloc > 0) {
+			if(sintmap_get(&fd_map, --last_alloc) != NULL) break;
 		}
-		assert(invariants());
-		return NTOERR(n);
+		first_free = min(first_free, last_alloc + 1);
 	}
+
+	assert(invariants());
+	return NTOERR(n);
 }
 
 
 long read(int fd, void *buf, size_t count)
 {
 	struct fd_bits *b = __fdbits(fd);
-	if(b == NULL) return -1;
+	if(b == NULL) { errno = EBADF; return -1; }
 	if(count == 0) return 0;
 
 	int n;
@@ -231,7 +214,7 @@ long read(int fd, void *buf, size_t count)
 long write(int fd, const void *buf, size_t count)
 {
 	struct fd_bits *b = __fdbits(fd);
-	if(b == NULL) return -1;
+	if(b == NULL) { errno = EBADF; return -1; }
 	if(count == 0) return 0;
 
 	uint16_t rc;
@@ -247,7 +230,7 @@ long write(int fd, const void *buf, size_t count)
 off_t lseek(int fd, off_t offset, int whence)
 {
 	struct fd_bits *b = __fdbits(fd);
-	if(b == NULL) return -1;
+	if(b == NULL) { errno = EBADF; return -1; }
 	switch(whence) {
 		case SEEK_CUR: case SEEK_SET: case SEEK_END: break;
 		default: errno = EINVAL; return -1;
@@ -273,30 +256,29 @@ int dup2(int oldfd, int newfd)
 /* TODO: make this signal-safe */
 int dup3(int oldfd, int newfd, int flags)
 {
-	if(oldfd == newfd) {
-		errno = EINVAL;
-		return -1;
-	}
 	/* TODO: support FD_CLOEXEC, FD_RENAME_NP */
-	if(flags != 0) {
-		errno = EINVAL;
-		return -1;
-	}
+	if(oldfd == newfd || flags != 0) { errno = EINVAL; return -1; }
 	struct fd_bits *bits = __fdbits(oldfd);
-	if(bits == NULL) return -1;
+	if(bits == NULL) { errno = EBADF; return -1; }
+
 	int new_handle = -1, n = __io_dup(bits->server, &new_handle, bits->handle);
 	if(n != 0) return NTOERR(n);
+
 	if(newfd >= 0 && __fdbits(newfd) != NULL) close(newfd);
 	n = __create_fd(newfd, bits->server, new_handle, flags);
-	if(n < 0) __io_close(bits->server, new_handle);
-	return n;
+	if(n >= 0) return n;
+	else {
+		__io_close(bits->server, new_handle);
+		errno = -n;
+		return -1;
+	}
 }
 
 
 int fcntl(int fd, int cmd, ...)
 {
 	struct fd_bits *b = __fdbits(fd);
-	if(b == NULL) return -1;
+	if(b == NULL) goto Ebadf;
 	va_list al; va_start(al, cmd);
 	switch(cmd) {
 		default: va_end(al); goto Einval;
@@ -305,7 +287,7 @@ int fcntl(int fd, int cmd, ...)
 			va_end(al);
 			if(low < 0) goto Einval;
 			int newfd = next_free_fd(low);
-			if(newfd < 0) return -1;
+			if(newfd < 0) return NTOERR(newfd);
 			return dup2(fd, newfd);
 		}
 		case F_GETFL: {
@@ -321,11 +303,8 @@ int fcntl(int fd, int cmd, ...)
 			return NTOERR(n);
 		}
 	}
+	assert(false);
 
-	errno = ENOSYS;
-	return -1;
-
-Einval:
-	errno = EINVAL;
-	return -1;
+Einval: errno = EINVAL; return -1;
+Ebadf: errno = EBADF; return -1;
 }

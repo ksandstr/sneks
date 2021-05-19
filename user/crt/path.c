@@ -99,6 +99,7 @@ int openat(int dirfd, const char *pathname, int flags, ...)
 	int fd = __create_fd(-1, server, handle, 0);
 	if(fd < 0) {
 		__io_close(server, handle);
+		errno = -fd;
 		return -1;
 	}
 

@@ -20,6 +20,17 @@
 #include <sneks/sysinfo.h>
 
 
+#define MAX_FD ((1 << 15) - 1)	/* TODO: get from sysconf(), stash somewhere */
+
+
+struct fd_bits
+{
+	L4_ThreadId_t server;
+	intptr_t handle;
+	uint8_t flags;
+};
+
+
 extern L4_KernelInterfacePage_t *__the_kip;
 extern struct __sysinfo *__the_sysinfo;
 
@@ -36,7 +47,6 @@ extern int __idl2errno(int n, ...);
 
 extern int __l4_last_errorcode;
 
-struct fd_bits;
 typedef SINTMAP(struct fd_bits *) fd_map_t;
 extern fd_map_t fd_map;
 
@@ -47,17 +57,10 @@ struct sneks_fdlist;
 extern void __file_init(struct sneks_fdlist *fdlist);
 
 
-struct fd_bits
-{
-	L4_ThreadId_t server;
-	intptr_t handle;
-	uint8_t flags;
-};
-
-
-/* returns NULL when @fd isn't valid and sets errno to EBADF. */
-extern struct fd_bits *__fdbits(int fd)
-	__attribute__((pure));
+/* NULL when @fd isn't valid. */
+static inline struct fd_bits *__fdbits(int fd) {
+	return fd < 0 || fd > MAX_FD ? NULL : sintmap_get(&fd_map, fd);
+}
 
 /* creation. if @fd < 0, allocates the lowest available file descriptor.
  * otherwise if @fd is already valid, returns -EEXIST.

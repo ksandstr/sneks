@@ -250,8 +250,8 @@ static int dup_ctor(handle_ctor_fn base, handles *result, bool send_only)
 		L4_Word_t handle; L4_StoreMR(1, &handle);
 		int fd = __create_fd(-1, bits->server, handle, 0);
 		if(fd < 0) {
-			diag("%s: __create_fd failed, errno=%d", __func__, errno);
-			n = -errno;
+			n = fd;
+			diag("%s: __create_fd failed, n=%d", __func__, n);
 			__io_close(bits->server, handle);
 		} else {
 			darray_push(*result, fd);
@@ -316,8 +316,8 @@ static int dup_to_ctor(handle_ctor_fn base, handles *result, bool send_only)
 		L4_Word_t handle; L4_StoreMR(1, &handle);
 		int fd = __create_fd(-1, bits->server, handle, 0);
 		if(fd < 0) {
-			diag("%s: __create_fd failed, errno=%d", __func__, errno);
-			n = -errno;
+			n = fd;
+			diag("%s: __create_fd failed, n=%d", __func__, n);
 			__io_close(bits->server, handle);
 		} else {
 			darray_push(*result, fd);
@@ -371,7 +371,7 @@ static int pipe_ctor(handles *result, bool send_only)
 		for(int i=0; i < 2; i++) {
 			int fd = __create_fd(-1, server, rdwr[i], 0);
 			if(fd < 0) {
-				diag("%s: __create_fd failed, errno=%d", __func__, errno);
+				diag("%s: __create_fd failed, n=%d", __func__, fd);
 				__io_close(server, rdwr[i]);
 				continue;
 			}
@@ -433,8 +433,8 @@ static int devnull_ctor(handles *result, bool send_only)
 		L4_Word_t handle; L4_StoreMR(1, &handle);
 		int fd = __create_fd(-1, server, handle, 0);
 		if(fd < 0) {
-			n = -errno;
-			diag("%s: __create_fd failed, errno=%d", __func__, errno);
+			n = fd;
+			diag("%s: __create_fd failed, n=%d", __func__, n);
 			__io_close(server, handle);
 		} else {
 			darray_push(*result, fd);
@@ -497,8 +497,8 @@ static int reg_ctor(handles *result, bool send_only)
 		L4_Word_t handle; L4_StoreMR(1, &handle);
 		int fd = __create_fd(-1, server, handle, 0);
 		if(fd < 0) {
-			n = -errno;
-			diag("%s: __create_fd failed, errno=%d", __func__, errno);
+			n = fd;
+			diag("%s: __create_fd failed, n=%d", __func__, n);
 			__io_close(server, handle);
 		} else {
 			darray_push(*result, fd);
@@ -561,8 +561,8 @@ static int dir_ctor(handles *result, bool send_only)
 		L4_Word_t handle; L4_StoreMR(1, &handle);
 		int fd = __create_fd(-1, server, handle, 0);
 		if(fd < 0) {
-			n = -errno;
-			diag("%s: __create_fd failed, errno=%d", __func__, errno);
+			n = fd;
+			diag("%s: __create_fd failed, n=%d", __func__, n);
 			__io_close(server, handle);
 		} else {
 			darray_push(*result, fd);

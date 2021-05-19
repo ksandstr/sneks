@@ -19,8 +19,7 @@
 #include "private.h"
 
 
-#define DIRP_VALID(dirp, ctx) \
-	((dirp) != NULL && __fdbits((dirp)->dirfd) != NULL)
+#define DIRP_VALID(dirp) ((dirp) != NULL && __fdbits((dirp)->dirfd) != NULL)
 
 
 struct __stdio_dir
@@ -53,14 +52,14 @@ DIR *opendir(const char *name)
 	dirp->tellpos = 0;
 	dirp->next = -1;
 	dirp->end = false;
-	assert(DIRP_VALID(dirp, NULL));
+	assert(DIRP_VALID(dirp));
 	return dirp;
 }
 
 
 int closedir(DIR *dirp)
 {
-	if(!DIRP_VALID(dirp, NULL)) {
+	if(!DIRP_VALID(dirp)) {
 		errno = EBADF;
 		return -1;
 	}
@@ -74,7 +73,7 @@ int closedir(DIR *dirp)
 DIR *fdopendir(int fd)
 {
 	struct fd_bits *bits = __fdbits(fd);
-	if(bits == NULL) return NULL;
+	if(bits == NULL) { errno = EBADF; return NULL; }
 	int pos = 0;
 	int n = __dir_seekdir(bits->server, bits->handle, &pos);
 	if(n != 0) {
@@ -83,22 +82,19 @@ DIR *fdopendir(int fd)
 	}
 
 	DIR *dirp = malloc(sizeof *dirp);
-	if(dirp == NULL) {
-		errno = ENOMEM;
-		return NULL;
-	}
+	if(dirp == NULL) return NULL;
 	dirp->dirfd = fd;
 	dirp->tellpos = pos;
 	dirp->next = -1;
 	dirp->end = false;
-	assert(DIRP_VALID(dirp, NULL));
+	assert(DIRP_VALID(dirp));
 	return dirp;
 }
 
 
 int dirfd(DIR *dirp)
 {
-	if(!DIRP_VALID(dirp, NULL)) {
+	if(!DIRP_VALID(dirp)) {
 		errno = EBADF;
 		return -1;
 	}
@@ -109,7 +105,7 @@ int dirfd(DIR *dirp)
 
 struct dirent *readdir(DIR *dirp)
 {
-	if(!DIRP_VALID(dirp, &ctx)) {
+	if(!DIRP_VALID(dirp)) {
 		errno = EBADF;
 		return NULL;
 	}
@@ -167,7 +163,7 @@ struct dirent *readdir(DIR *dirp)
 
 void seekdir(DIR *dirp, long loc)
 {
-	if(!DIRP_VALID(dirp, &ctx)) return;
+	if(!DIRP_VALID(dirp)) return;
 
 	struct fd_bits *bits = __fdbits(dirp->dirfd);
 	__dir_seekdir(bits->server, bits->handle, &(int){ loc });
@@ -180,7 +176,7 @@ void seekdir(DIR *dirp, long loc)
 
 long telldir(DIR *dirp)
 {
-	if(!DIRP_VALID(dirp, NULL)) {
+	if(!DIRP_VALID(dirp)) {
 		errno = EBADF;
 		return -1;
 	}

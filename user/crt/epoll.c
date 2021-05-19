@@ -133,6 +133,7 @@ static int poll_levels(
 			len++;
 		}
 		struct fd_bits *bits = __fdbits(ls[start]->fd);
+		assert(bits != NULL);
 		int n = __io_get_status(bits->server, hbuf, len, notif, len,
 			hbuf, &(unsigned){ SNEKS_POLL_STBUF_SIZE });
 		if(n != 0) {
@@ -615,13 +616,15 @@ int epoll_create1(int flags)
 
 	/* TODO: transfer EPFL_CLOEXEC (or some such) in @flags to FD_CLOEXEC */
 	int fd = __create_fd(-1, poll_tid, (intptr_t)ep, 0);
-	if(fd < 0) {
+	if(fd >= 0) {
+		list_add_tail(&all_epolls, &ep->all_link);
+		return fd;
+	} else {
 		htable_clear(&ep->fds);
 		free(ep);
-	} else {
-		list_add_tail(&all_epolls, &ep->all_link);
+		errno = -fd;
+		return -1;
 	}
-	return fd;
 }
 
 
@@ -709,7 +712,7 @@ static bool check_notify(int spid)
 int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
 {
 	struct fd_bits *epbits = __fdbits(epfd);
-	if(epbits == NULL) return -1;
+	if(epbits == NULL) goto Ebadf;
 	L4_ThreadId_t serv = epbits->server;
 
 	assert(!L4_IsNilThread(L4_LocalIdOf(poll_tid)));
@@ -717,7 +720,7 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
 	struct epoll *ep = (struct epoll *)epbits->handle;
 
 	struct fd_bits *fdbits = __fdbits(fd);
-	if(fdbits == NULL) return -1;
+	if(fdbits == NULL) goto Ebadf;
 	struct interest key = {
 		.spid = pidof_NP(fdbits->server), .handle = fdbits->handle,
 	};
@@ -821,6 +824,7 @@ Enomem: errno = ENOMEM; return -1;
 Enoent: errno = ENOENT; return -1;
 Eexist: errno = EEXIST; return -1;
 Eperm: errno = EPERM; return -1;
+Ebadf: errno = EBADF; return -1;
 }
 
 
@@ -829,7 +833,7 @@ int epoll_wait(int epfd,
 	int timeout)
 {
 	struct fd_bits *epbits = __fdbits(epfd);
-	if(epbits == NULL) return -1;
+	if(epbits == NULL) { errno = EBADF; return -1; }
 	assert(!L4_IsNilThread(L4_LocalIdOf(poll_tid)));
 	if(unlikely(maxevents <= 0 || !L4_SameThreads(epbits->server, poll_tid))) {
 		errno = EINVAL;

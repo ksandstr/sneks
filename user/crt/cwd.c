@@ -42,10 +42,6 @@ char *getcwd(char *buf, size_t buf_size)
 /* TODO: remove darray, catch ENOMEM everywhere */
 char *get_current_dir_name(void)
 {
-	if(__cwd_fd < 0) {
-		errno = ENOENT;
-		return NULL;
-	}
 	struct fd_bits *bits = __fdbits(__cwd_fd);
 	if(bits == NULL || bits->handle == 0) {
 		errno = ENOENT;
