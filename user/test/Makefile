@@ -63,6 +63,11 @@ test-files-install:
 	@for i in 0 1 2 3 4 5 6 7 8 9; do \
 		echo "shoop da woop $$i" >$(INITRD)/user/test/io/dir/$$i; \
 	done
+	@mkdir -p $(INITRD)/user/test/io/stat
+	@for i in r x rx; do \
+		echo "exit 123" >$(INITRD)/user/test/io/stat/$$i; \
+		chmod u=$$i $(INITRD)/user/test/io/stat/$$i; \
+	done
 
 
 # hostsuite stuff. perhaps dirtier than necessary.
