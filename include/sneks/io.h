@@ -207,6 +207,7 @@ extern void io_notify(iof_t *file, int epoll_mask);
 		(vtab)->dup = &io_impl_dup; \
 		(vtab)->dup_to = &io_impl_dup_to; \
 		(vtab)->touch = &io_impl_touch; \
+		(vtab)->stat_handle = &io_impl_stat_handle; \
 	} while(false)
 
 
@@ -232,6 +233,8 @@ extern int io_impl_close(int);
 extern int io_impl_dup(int *, int);
 extern int io_impl_dup_to(int *, int, int);
 extern int io_impl_touch(int);
+struct sneks_io_statbuf;
+extern int io_impl_stat_handle(int fd, struct sneks_io_statbuf *result_ptr);
 
 
 /* same for Sneks::Poll. */

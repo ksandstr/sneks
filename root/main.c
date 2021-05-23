@@ -38,6 +38,7 @@
 #include <sneks/sysinfo.h>
 #include <sneks/rootserv.h>
 #include <sneks/console.h>
+#include <sneks/api/io-defs.h>
 #include <sneks/api/proc-defs.h>
 #include <sneks/sys/sysmem-defs.h>
 #include <sneks/sys/kmsg-defs.h>
@@ -1434,6 +1435,18 @@ static int bootcon_dup(int *new_p, int old) {
 }
 
 
+static int bootcon_dup_to(int *newfd_ptr, int oldfd, int receiver_pid) {
+	*newfd_ptr = oldfd;
+	return 0;
+}
+
+
+static int bootcon_stat_handle(int fd, struct sneks_io_statbuf *st) {
+	*st = (struct sneks_io_statbuf){ };
+	return 0;
+}
+
+
 static int bootcon_thread_fn(void *param_ptr)
 {
 	// struct htable *root_args = param_ptr;
@@ -1448,6 +1461,8 @@ static int bootcon_thread_fn(void *param_ptr)
 		.close = &bootcon_close,
 		.set_flags = &bootcon_set_flags,
 		.dup = &bootcon_dup,
+		.dup_to = &bootcon_dup_to,
+		.stat_handle = &bootcon_stat_handle,
 	};
 	for(;;) {
 		L4_Word_t status = _muidl_boot_con_dispatch(&vtab);

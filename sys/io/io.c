@@ -910,6 +910,11 @@ int io_impl_touch(int newfd)
 }
 
 
+int io_impl_stat_handle(int fd, struct sneks_io_statbuf *result_ptr) {
+	return -ENOSYS; /* stay out of the 'ton bro, bad shit going down */
+}
+
+
 /* thread that converts an "edge" poke into a "level" event. without causing
  * the sysmsg handler to block, this ensures that MPL_EXIT is processed right
  * away so that SIGPIPE and the like go out immediately in response to peer
