@@ -30,6 +30,8 @@ clean:
 distclean:
 	@rm -rf .deps
 	@rm -f $(CFGDIR)/include/sneks/api/*-defs.h
+	@mkdir -p $(CFGDIR)/include/sneks/api
+	@rmdir --ignore-fail-on-non-empty $(CFGDIR)/include/sneks/api
 
 
 libsneks.a: $(LIB_OBJS) setjmp.o

@@ -29,6 +29,9 @@ clean:
 
 distclean:
 	@rm -rf .deps
+	@rm -f $(CFGDIR)/include/sneks/sys/*-defs.h
+	@mkdir -p $(CFGDIR)/include/sneks/sys
+	@rmdir --ignore-fail-on-non-empty $(CFGDIR)/include/sneks/sys
 
 
 libsneks-systask.a: $(LIB_OBJS)
