@@ -12,6 +12,7 @@
 #include <limits.h>
 #include <dirent.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <ccan/opt/opt.h>
 #include <ccan/endian/endian.h>
 #include <ccan/array_size/array_size.h>
@@ -950,6 +951,19 @@ static int squashfs_io_close(iof_t *file)
 }
 
 
+static int squashfs_io_stat(iof_t *file, IO_STAT *st)
+{
+	struct squashfs_base_inode *base = &squashfs_i(file->i)->X.base;
+	int access_bits = base->mode & 0777, t = base->inode_type,
+		type = t < ARRAY_SIZE(sfs_type_table) ? sfs_type_table[t] << 12 : 0;
+	*st = (IO_STAT){
+		.st_mode = access_bits | type,
+		/* TODO: the rest of the owl */
+	};
+	return 0;
+}
+
+
 /* NOTE: this is used from both squashfs_open() and squashfs_opendir() because
  * squashfs_io_close() is equally valid for results of both.
  */
@@ -1204,6 +1218,7 @@ static int squashfs_ipc_loop(
 	io_read_func(&squashfs_io_read);
 	io_write_func(&squashfs_io_write);
 	io_close_func(&squashfs_io_close);
+	io_stat_func(&squashfs_io_stat);
 	io_confirm_func(&squashfs_wr_confirm);
 
 	io_dispatch_func(&_muidl_squashfs_impl_dispatch, &vtab);

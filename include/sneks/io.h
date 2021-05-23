@@ -23,6 +23,14 @@
 #include <ccan/typesafe_cb/typesafe_cb.h>
 
 
+#if defined(__sneks__) || defined(__SNEKS__)
+struct sneks_io_statbuf;
+#define IO_STAT struct sneks_io_statbuf
+#else
+#error "IO_STAT not specified for this implementation"
+#endif
+
+
 /* defined by the implementor with its size specified to io_run().
  * prevents some void-pointer mistakes in e.g. read and write calls.
  */
@@ -142,6 +150,8 @@ extern void io_write_func(
 extern void io_ioctl_func(
 	int (*fn)(iof_t *file, long request, va_list args));
 
+extern void io_stat_func(int (*fn)(iof_t *file, IO_STAT *st));
+
 /* I/O confirmation callback.
  *
  * if set and not NULL after a read/write callback returns, sys/io sets the
@@ -196,6 +206,10 @@ extern void io_notify(iof_t *file, int epoll_mask);
 
 #include <l4/types.h>
 
+/* TODO: import only sneks_io_statbuf using preprocessor methods */
+#include <sneks/api/io-defs.h>
+
+
 /* vtable alteration. FILL_SNEKS_IO() sets all vtable entries for Sneks::IO in
  * @vtab to the corresponding io_impl_{name}() routines.
  */
@@ -233,7 +247,6 @@ extern int io_impl_close(int);
 extern int io_impl_dup(int *, int);
 extern int io_impl_dup_to(int *, int, int);
 extern int io_impl_touch(int);
-struct sneks_io_statbuf;
 extern int io_impl_stat_handle(int fd, struct sneks_io_statbuf *result_ptr);
 
 

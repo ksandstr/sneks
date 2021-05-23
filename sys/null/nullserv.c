@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/epoll.h>
 #include <ccan/array_size/array_size.h>
 
@@ -81,6 +82,16 @@ static int null_open(chrfile_t *h,
 }
 
 
+static int null_stat(chrfile_t *f, IO_STAT *st)
+{
+	*st = (IO_STAT){
+		/* TODO: st_rdev, once tests exist */
+		.st_mode = S_IFCHR,
+	};
+	return 0;
+}
+
+
 int main(int argc, char *argv[])
 {
 	chrdev_get_status_func(&null_get_status);
@@ -88,6 +99,7 @@ int main(int argc, char *argv[])
 	chrdev_write_func(&null_write);
 	chrdev_close_func(&null_close);
 	chrdev_dev_open_func(&null_open);
+	chrdev_stat_func(&null_stat);
 
 	return chrdev_run(sizeof(struct chrdev_file_impl), argc, argv);
 }

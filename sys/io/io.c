@@ -910,8 +910,11 @@ int io_impl_touch(int newfd)
 }
 
 
-int io_impl_stat_handle(int fd, struct sneks_io_statbuf *result_ptr) {
-	return -ENOSYS; /* stay out of the 'ton bro, bad shit going down */
+int io_impl_stat_handle(int fd, struct sneks_io_statbuf *result_ptr)
+{
+	sync_confirm();
+	struct fd *f = get_fd(pidof_NP(muidl_get_sender()), fd);
+	return f != NULL ? (*callbacks.stat)(IOF_T(f->file), result_ptr) : -EBADF;
 }
 
 

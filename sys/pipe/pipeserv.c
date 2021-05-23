@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/epoll.h>
 #include <ccan/minmax/minmax.h>
 #include <ccan/membuf/membuf.h>
@@ -208,6 +209,13 @@ static int pipe_ioctl(chrfile_t *f, long request, va_list args)
 }
 
 
+static int pipe_stat(chrfile_t *f, IO_STAT *st)
+{
+	*st = (IO_STAT){ .st_mode = S_IFIFO };
+	return 0;
+}
+
+
 int main(int argc, char *argv[])
 {
 	io_fast_confirm_flags(IO_CONFIRM_CLOSE);
@@ -218,6 +226,7 @@ int main(int argc, char *argv[])
 	chrdev_close_func(&pipe_close);
 	chrdev_ioctl_func(&pipe_ioctl);
 	chrdev_pipe_func(&pipe_pipe);
+	chrdev_stat_func(&pipe_stat);
 
 	return chrdev_run(sizeof(struct chrdev_file_impl), argc, argv);
 }

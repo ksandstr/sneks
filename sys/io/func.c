@@ -12,6 +12,7 @@
 
 #include <l4/types.h>
 
+#include <sneks/api/io-defs.h>
 #include <sneks/systask.h>
 #include <sneks/io.h>
 
@@ -20,6 +21,7 @@
 
 static int enosys();
 static void no_lifecycle(pid_t, enum lifecycle_tag, ...);
+static int empty_stat(iof_t *, IO_STAT *);
 static L4_Word_t dispatch_missing(void *);
 
 
@@ -27,6 +29,7 @@ struct io_callbacks callbacks = {
 	.read = &enosys, .write = &enosys, .close = &enosys, .ioctl = &enosys,
 	.lifecycle = &no_lifecycle, .confirm = NULL,
 	.dispatch = &dispatch_missing,
+	.stat = &empty_stat,
 };
 
 
@@ -34,6 +37,11 @@ static COLD int enosys() { return -ENOSYS; }
 
 static void no_lifecycle(pid_t a, enum lifecycle_tag b, ...) {
 	/* void */
+}
+
+static int empty_stat(iof_t *f, IO_STAT *st) {
+	*st = (IO_STAT){ };
+	return 0;
 }
 
 static COLD L4_Word_t dispatch_missing(void *priv UNUSED) {
@@ -59,6 +67,11 @@ void io_close_func(int (*fn)(iof_t *)) {
 
 void io_ioctl_func(int (*fn)(iof_t *, long, va_list)) {
 	callbacks.ioctl = fn != NULL ? fn : &enosys;
+}
+
+
+void io_stat_func(int (*fn)(iof_t *file, IO_STAT *st)) {
+	callbacks.stat = fn != NULL ? fn : &empty_stat;
 }
 
 

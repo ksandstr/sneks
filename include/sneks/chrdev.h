@@ -41,6 +41,7 @@ typedef struct chrdev_file_impl chrfile_t;
 #define chrdev_confirm_func(fn) io_confirm_func((fn))
 extern void chrdev_close_func(int (*fn)(chrfile_t *));
 #define chrdev_ioctl_func(fn) io_ioctl_func((fn))
+#define chrdev_stat_func(fn) io_stat_func((fn))
 
 /* TODO: wrap io_fast_confirm_flags(), io_set_fast_confirm(). for the time
  * being implementors can use those directly.

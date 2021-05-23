@@ -75,9 +75,6 @@ START_LOOP_TEST(fstat_type, iter, 0,
 
 	int fd = (*typ->genfn)();
 	skip_start(!ok(fd >= 0, "got fd"), 3, "genfn errno=%d", errno) {
-#ifdef __sneks__
-		todo_start("foo");
-#endif
 		int dupe = (*dup->dupfn)(fd);
 		skip_start(!ok(dupe >= 0, "got dupe"), 2, "dupfn errno=%d", errno) {
 			struct stat st;
@@ -183,10 +180,6 @@ START_LOOP_TEST(fstat_mode, iter, 0, ARRAY_SIZE(mode_tests) - 1)
 	if(o_mode == 0 && (exp_mode & S_IRUSR)) o_mode = O_RDONLY;
 
 	plan_tests(3);
-
-#ifdef __sneks__
-	todo_start("missing");
-#endif
 
 	int fd = open(path, o_mode);
 	skip_start(!ok(fd >= 0, "open(2)"), 2, "open errno=%d", errno) {
