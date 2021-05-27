@@ -587,7 +587,14 @@ static struct dentry *get_dentry(iof_t *file,
 		assert(hash == rehash_dentry_by_index(dent, NULL));
 		bool ok = htable_add(&dentry_index_hash, hash, dent);
 		ok = ok && htable_add(&dentry_name_hash, rehash_dentry_by_dir_ino_and_name(dent, NULL), dent);
-		ok = ok && htable_add(&dentry_ino_hash, rehash_dentry_by_ino(dent, NULL), dent);
+		if(ok && index >= 2) {
+			/* only add non-synthetic directories so that get_path doesn't get
+			 * confused.
+			 */
+			ok = htable_add(&dentry_ino_hash, rehash_dentry_by_ino(dent, NULL), dent);
+		} else {
+			assert(!ok || streq(dent->name, ".") || streq(dent->name, ".."));
+		}
 		if(!ok) {
 			*err_p = -ENOMEM;
 			htable_del(&dentry_index_hash, hash, dent);
