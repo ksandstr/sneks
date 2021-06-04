@@ -211,10 +211,6 @@ START_LOOP_TEST(stat_mode, iter, 0, ARRAY_SIZE(mode_tests) * 3 - 1)
 	diag("path=`%s', exp_mode=%#o, method=`%s'", path, exp_mode, method);
 	plan_tests(3);
 
-#ifdef __sneks__
-	todo_start("not even in kansas yet");
-#endif
-
 	struct stat st = { };
 	int n = -1;
 	if(which != 2) skip(1, "don't need dirfd");

@@ -872,6 +872,39 @@ static int squashfs_get_path(char *path, int fd, const char *suffix)
 }
 
 
+static void fill_statbuf(struct sneks_io_statbuf *st, const struct inode_ext *nod)
+{
+	const struct squashfs_base_inode *base = &nod->X.base;
+	int access_bits = base->mode & 0777, t = base->inode_type,
+		type = t < ARRAY_SIZE(sfs_type_table) ? sfs_type_table[t] << 12 : 0;
+	*st = (struct sneks_io_statbuf){
+		.st_mode = access_bits | type,
+		/* TODO: the rest of the owl */
+	};
+}
+
+
+static int squashfs_stat_object(
+	unsigned object, L4_Word_t cookie, struct sneks_io_statbuf *st)
+{
+	sync_confirm();
+
+	pid_t caller_pid = CALLER_PID;
+	/* TODO: same as in squashfs_open() about validating cookies */
+	if(!validate_cookie(cookie, &device_cookie_key, L4_SystemClock(),
+		object, caller_pid))
+	{
+		return -EINVAL;
+	}
+
+	struct inode *nod = get_inode(object);
+	if(nod == NULL) return -EINVAL;
+
+	fill_statbuf(st, squashfs_i(nod));
+	return 0;
+}
+
+
 static int squashfs_open(int *handle_p,
 	unsigned object, L4_Word_t cookie, int flags)
 {
@@ -954,21 +987,8 @@ static int squashfs_io_close(iof_t *file)
 
 static int squashfs_io_stat(iof_t *file, IO_STAT *st)
 {
-	struct squashfs_base_inode *base = &squashfs_i(file->i)->X.base;
-	int access_bits = base->mode & 0777, t = base->inode_type,
-		type = t < ARRAY_SIZE(sfs_type_table) ? sfs_type_table[t] << 12 : 0;
-	*st = (IO_STAT){
-		.st_mode = access_bits | type,
-		/* TODO: the rest of the owl */
-	};
+	fill_statbuf(st, squashfs_i(file->i));
 	return 0;
-}
-
-
-static int squashfs_stat_object(
-	unsigned object, L4_Word_t cookie, struct sneks_io_statbuf *st)
-{
-	return -ENOSYS;
 }
 
 
