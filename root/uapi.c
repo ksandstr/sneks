@@ -1368,6 +1368,7 @@ int uapi_loop(void *param_ptr)
 		.resolve = &uapi_resolve,
 		.get_path = &enosys,
 		.get_path_fragment = &enosys,
+		.stat_object = &enosys,
 	};
 	for(;;) {
 		L4_Word_t st = _muidl_root_uapi_dispatch(&vtab);

@@ -36,6 +36,7 @@
 #include <sneks/devcookie.h>
 #include <sneks/rollback.h>
 #include <sneks/io.h>
+
 #include <sneks/api/path-defs.h>
 #include <sneks/api/file-defs.h>
 #include <sneks/api/directory-defs.h>
@@ -964,6 +965,13 @@ static int squashfs_io_stat(iof_t *file, IO_STAT *st)
 }
 
 
+static int squashfs_stat_object(
+	unsigned object, L4_Word_t cookie, struct sneks_io_statbuf *st)
+{
+	return -ENOSYS;
+}
+
+
 /* NOTE: this is used from both squashfs_open() and squashfs_opendir() because
  * squashfs_io_close() is equally valid for results of both.
  */
@@ -1203,6 +1211,7 @@ static int squashfs_ipc_loop(
 		.resolve = &squashfs_resolve,
 		.get_path = &squashfs_get_path,
 		.get_path_fragment = &squashfs_get_path_fragment,
+		.stat_object = &squashfs_stat_object,
 
 		/* Sneks::File */
 		.open = &squashfs_open,

@@ -12,9 +12,9 @@
 #include <ccan/str/str.h>
 
 #include <sneks/sys/info-defs.h>
+#include <sneks/api/io-defs.h>
 #include <sneks/api/path-defs.h>
 #include <sneks/api/file-defs.h>
-#include <sneks/api/io-defs.h>
 
 #include <l4/types.h>
 #include <l4/thread.h>

@@ -76,6 +76,10 @@ interface Path
 		inout object obj, out L4X2::ThreadId server, inout cookie cookie,
 		in IO::handle desc)
 			raises(Posix::Errno, muidl::NoReply);
+
+	/* for implementing stat(2) and fstatat(2) as a resolve-stat pair */
+	void stat_object(in object obj, in cookie cookie, out IO::statbuf result)
+		raises(Posix::Errno);
 };
 
 };

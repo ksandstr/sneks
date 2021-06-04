@@ -16,6 +16,7 @@
 #include <sneks/process.h>
 #include <sneks/api/vm-defs.h>
 
+struct sneks_io_statbuf; /* foo */
 #include "muidl.h"
 #include "root-impl-defs.h"
 #include "defs.h"

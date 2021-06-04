@@ -14,9 +14,9 @@
 #include <sneks/test.h>
 #include <sneks/sysinfo.h>
 #include <sneks/crtprivate.h>
+#include <sneks/api/io-defs.h>
 #include <sneks/api/path-defs.h>
 #include <sneks/api/dev-defs.h>
-#include <sneks/api/io-defs.h>
 
 
 /* try pie, try. */

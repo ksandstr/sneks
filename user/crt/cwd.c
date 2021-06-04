@@ -9,6 +9,7 @@
 #include <sys/types.h>
 #include <ccan/darray/darray.h>
 
+#include <sneks/api/io-defs.h>
 #include <sneks/api/path-defs.h>
 
 #include "private.h"
