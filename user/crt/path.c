@@ -24,6 +24,25 @@
 #include "private.h"
 
 
+int __resolve(
+	unsigned *object_p, L4_ThreadId_t *server_p, int *ifmt_p, L4_Word_t *cookie_p,
+	int dirfd, const char *pathname, int flags)
+{
+	struct fd_bits *cwd,
+		rootfs = { .server = __the_sysinfo->api.rootfs, .handle = 0 };
+	if(pathname[0] == '/') {
+		while(pathname[0] == '/') pathname++;
+		cwd = &rootfs;
+	} else {
+		cwd = __fdbits(dirfd == AT_FDCWD ? __cwd_fd : dirfd);
+		if(cwd == NULL) return -EBADF;
+	}
+
+	return __path_resolve(cwd->server, object_p, &server_p->raw, ifmt_p, cookie_p,
+		cwd->handle, pathname, flags);
+}
+
+
 int openat(int dirfd, const char *pathname, int flags, ...)
 {
 	if(pathname == NULL) {
@@ -36,24 +55,10 @@ int openat(int dirfd, const char *pathname, int flags, ...)
 		return -1;
 	}
 
-	struct fd_bits *cwd,
-		rootfs = { .server = __the_sysinfo->api.rootfs, .handle = 0 };
-	if(pathname[0] == '/') {
-		while(pathname[0] == '/') pathname++;
-		cwd = &rootfs;
-	} else {
-		cwd = __fdbits(dirfd == AT_FDCWD ? __cwd_fd : dirfd);
-		if(cwd == NULL) {
-			errno = EBADF;
-			return -1;
-		}
-	}
-
 	unsigned object;
 	L4_ThreadId_t server;
 	L4_Word_t cookie;
-	int ifmt, n = __path_resolve(cwd->server, &object, &server.raw, &ifmt, &cookie,
-		cwd->handle, pathname, flags);
+	int ifmt, n = __resolve(&object, &server, &ifmt, &cookie, dirfd, pathname, flags);
 	if(n != 0) return NTOERR(n);
 
 	/* set VS/AS to recover actual server tid, for when Path::resolve hands

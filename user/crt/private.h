@@ -68,6 +68,13 @@ static inline struct fd_bits *__fdbits(int fd) {
 extern int __create_fd(int fd, L4_ThreadId_t server, intptr_t handle, int flags);
 
 
+/* from path.c */
+
+extern int __resolve(
+	unsigned *object_p, L4_ThreadId_t *server_p, int *ifmt_p, L4_Word_t *cookie_p,
+	int dirfd, const char *pathname, int flags);
+
+
 /* from sigaction.c */
 extern void __sig_bottom(void);
 extern void __attribute__((regparm(3))) __sig_invoke(

@@ -1,8 +1,11 @@
 
 #include <errno.h>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+
 #include <sneks/api/io-defs.h>
+#include <sneks/api/path-defs.h>
 
 #include "private.h"
 
@@ -23,10 +26,8 @@ static void convert_statbuf(struct stat *dst,
 }
 
 
-int stat(const char *pathname, struct stat *statbuf)
-{
-	errno = ENOSYS;
-	return -1;
+int stat(const char *pathname, struct stat *statbuf) {
+	return fstatat(AT_FDCWD, pathname, statbuf, 0);
 }
 
 
@@ -50,6 +51,17 @@ int lstat(const char *pathname, struct stat *statbuf)
 
 int fstatat(int dirfd, const char *pathname, struct stat *statbuf, int flags)
 {
-	errno = ENOSYS;
-	return -1;
+	if(flags != 0) { errno = ENOSYS; return -1; }
+
+	unsigned object;
+	L4_Word_t cookie;
+	L4_ThreadId_t server;
+	/* TODO: support AT_EMPTY_PATH, AT_NO_AUTOMOUNT, AT_SYMLINK_NOFOLLOW */
+	int ifmt, n = __resolve(&object, &server, &ifmt, &cookie, dirfd, pathname, 0);
+	if(n == 0) {
+		struct sneks_io_statbuf st;
+		n = __path_stat_object(server, object, cookie, &st);
+		if(n == 0) convert_statbuf(statbuf, &st);
+	}
+	return NTOERR(n);
 }
