@@ -10,7 +10,7 @@ LD=ld.gold
 
 # TODO: become independent of the mung includes
 CFLAGS=-O2 -Wall -march=native -std=gnu11 \
-	-m32 -mno-avx -mno-sse2 \
+	-m32 -mno-avx -mno-sse2 -ffunction-sections \
 	-I $(CFGDIR)/include -I $(MUNG_DIR)/include \
 	-I . -I $(MUIDL_DIR)/include -I $(LFHT_DIR) -I $(CCAN_DIR) \
 	-D_GNU_SOURCE \
@@ -20,7 +20,7 @@ CFLAGS=-O2 -Wall -march=native -std=gnu11 \
 	#-DDEBUG_ME_HARDER #-D_L4_DEBUG_ME_HARDER #-DCCAN_LIST_DEBUG
 	# (add -DNDEBUG for benchmarks without assert overhead)
 
-LDFLAGS=-L /usr/lib32 -L /usr/lib/i386-linux-gnu
+LDFLAGS=-L /usr/lib32 -L /usr/lib/i386-linux-gnu --gc-sections
 
 MUIDL:=$(abspath $(MUIDL_DIR)/muidl)
 MUIDLFLAGS=-I $(MUIDL_DIR)/share/idl -I $(MUNG_DIR)/idl -I $(CFGDIR)/idl \
