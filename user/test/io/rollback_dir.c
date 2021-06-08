@@ -1,6 +1,8 @@
 
 #ifdef __sneks__
 
+#define WANT_SNEKS_DIRECTORY_LABELS
+
 /* tests on rollbacks of failed Sneks::Directory/{seekdir,getdents} calls.
  * the general theme is that the previous position should be retained on
  * failure.
@@ -105,8 +107,8 @@ START_TEST(rollback_seekdir)
 
 	/* perform actual test */
 	L4_Accept(L4_UntypedWordsAcceptor);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 3, .X.label = 0xe80a }.raw);
-	L4_LoadMR(1, 0xb336);	/* sublabel per api/directory.idl */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 3, .X.label = SNEKS_DIRECTORY_SEEKDIR_LABEL }.raw);
+	L4_LoadMR(1, SNEKS_DIRECTORY_SEEKDIR_SUBLABEL);
 	L4_LoadMR(2, bits->handle);
 	L4_LoadMR(3, testpos);
 	L4_MsgTag_t tag = L4_Send_Timeout(bits->server, L4_TimePeriod(20 * 1000));
@@ -179,8 +181,8 @@ START_LOOP_TEST(rollback_getdents, iter, 0, 1)
 	L4_MsgBufferAppendSimpleRcvString(&msgbuf,
 		L4_StringItem(SNEKS_DIRECTORY_DENTSBUF_MAX, dentsbuf));
 	L4_AcceptStrings(L4_StringItemsAcceptor, &msgbuf);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 3, .X.label = 0xe80a }.raw);
-	L4_LoadMR(1, 0xb337);	/* sublabel per api/directory.idl */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 3, .X.label = SNEKS_DIRECTORY_GETDENTS_LABEL }.raw);
+	L4_LoadMR(1, SNEKS_DIRECTORY_GETDENTS_SUBLABEL);
 	L4_LoadMR(2, bits->handle);
 	L4_LoadMR(3, -1);
 	L4_MsgTag_t tag = L4_Send_Timeout(bits->server, L4_TimePeriod(20 * 1000));

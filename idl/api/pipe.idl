@@ -2,7 +2,6 @@
 #ifndef __API_PIPE_IDL__
 #define __API_PIPE_IDL__
 
-#include <muidl.idl>
 #include <l4x2.idl>
 #include <posixlike.idl>
 
@@ -15,7 +14,6 @@ module Sneks {
 interface Pipe
 {
 	/* @flags is undefined and must be 0. */
-	[Label(1)]	/* NOTE: required until muidl makes #defs for sublabels */
 	void pipe(out IO::handle readside, out IO::handle writeside, in long flags)
 		raises(Posix::Errno);
 };

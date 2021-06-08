@@ -2,6 +2,7 @@
 /* userspace API portion of the root task. */
 
 #define ROOTUAPI_IMPL_SOURCE
+#define WANT_SNEKS_PATH_LABELS
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,6 +33,7 @@
 #include <sneks/api/io-defs.h>
 #include <sneks/api/vm-defs.h>
 #include <sneks/api/proc-defs.h>
+#include <sneks/api/path-defs.h>
 #include <sneks/sys/msg-defs.h>
 #include <sneks/sys/info-defs.h>
 #include <sneks/sys/sysmem-defs.h>
@@ -1303,11 +1305,11 @@ static int uapi_resolve(
 		path = ".";
 	}
 
-	L4_MsgTag_t tag = { .X.label = 0xe808, .X.u = 3, .X.t = 2 };
+	L4_MsgTag_t tag = { .X.label = SNEKS_PATH_RESOLVE_LABEL, .X.u = 3, .X.t = 2 };
 	L4_Set_Propagation(&tag);
 	L4_Set_VirtualSender(muidl_get_sender());
 	L4_LoadMR(0, tag.raw);
-	L4_LoadMR(1, 0xb00b);
+	L4_LoadMR(1, SNEKS_PATH_RESOLVE_SUBLABEL);
 	L4_LoadMR(2, 0);
 	L4_LoadMR(3, flags);
 	L4_StringItem_t rp = L4_StringItem(strlen(path) + 1, (void *)path);

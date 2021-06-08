@@ -1,6 +1,7 @@
 
 #define ROOTDEVICES_IMPL_SOURCE
 #define SNEKS_DEVICENODE_IMPL_SOURCE
+#define WANT_SNEKS_DEVICE_NODE_LABELS
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -82,11 +83,11 @@ static bool propagate_devnode_open(
 	bool *live_p, struct dev_entry *cand,
 	uint32_t object, L4_Word_t cookie, int flags)
 {
-	L4_MsgTag_t tag = { .X.label = 0xe80d, .X.u = 4 };
+	L4_MsgTag_t tag = { .X.label = SNEKS_DEVICE_NODE_OPEN_LABEL, .X.u = 4 };
 	L4_Set_Propagation(&tag);
 	L4_Set_VirtualSender(muidl_get_sender());
 	L4_LoadMR(0, tag.raw);
-	L4_LoadMR(1, 0x0002);
+	L4_LoadMR(1, SNEKS_DEVICE_NODE_OPEN_SUBLABEL);
 	L4_LoadMR(2, object);
 	L4_LoadMR(3, cookie);
 	L4_LoadMR(4, flags);

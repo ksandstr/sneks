@@ -16,7 +16,6 @@ module Sneks {
 [StubPrefix(__dev), IfaceLabel(0xe80d)]
 interface DeviceNode
 {
-	[Label(0x0002)]	/* TODO: remove once muidl gets proper propagation */
 	void open(out IO::handle handle,
 		in Path::object object, in Path::cookie cookie, in long flags)
 		raises(Posix::Errno, muidl::NoReply);

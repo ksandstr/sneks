@@ -1,6 +1,12 @@
 
 #ifdef __sneks__
 
+#define WANT_SNEKS_IO_LABELS
+#define WANT_SNEKS_PIPE_LABELS
+#define WANT_SNEKS_DEVICE_NODE_LABELS
+#define WANT_SNEKS_DIRECTORY_LABELS
+#define WANT_SNEKS_FILE_LABELS
+
 /* tests on rollbacks of handle-creating IDL calls.
  *
  * right now these aren't as strong tests as one would hope, because the way
@@ -236,8 +242,8 @@ static int dup_ctor(handle_ctor_fn base, handles *result, bool send_only)
 		goto end;
 	}
 	L4_Accept(L4_UntypedWordsAcceptor);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2, .X.label = 0xe803 }.raw);
-	L4_LoadMR(1, 0x1234);	/* dup sublabel per api/io.idl */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2, .X.label = SNEKS_IO_DUP_LABEL }.raw);
+	L4_LoadMR(1, SNEKS_IO_DUP_SUBLABEL);
 	L4_LoadMR(2, bits->handle);
 	L4_MsgTag_t tag = send_only ? L4_Send_Timeout(bits->server, A_SHORT_NAP)
 		: L4_Call_Timeouts(bits->server, A_SHORT_NAP, A_SHORT_NAP);
@@ -301,8 +307,8 @@ static int dup_to_ctor(handle_ctor_fn base, handles *result, bool send_only)
 		goto end;
 	}
 	L4_Accept(L4_UntypedWordsAcceptor);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2, .X.label = 0xe803 }.raw);
-	L4_LoadMR(1, 0x1235);	/* dup_to sublabel per api/io.idl */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2, .X.label = SNEKS_IO_DUP_TO_LABEL }.raw);
+	L4_LoadMR(1, SNEKS_IO_DUP_TO_SUBLABEL);
 	L4_LoadMR(2, bits->handle);
 	L4_LoadMR(3, oth_pid);
 	L4_MsgTag_t tag = send_only ? L4_Send_Timeout(bits->server, A_SHORT_NAP)
@@ -356,8 +362,8 @@ static int pipe_ctor(handles *result, bool send_only)
 {
 	const L4_ThreadId_t server = __the_sysinfo->posix.pipe;
 	L4_Accept(L4_UntypedWordsAcceptor);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2, .X.label = 0xe804 }.raw);
-	L4_LoadMR(1, 1);	/* sublabel per api/pipe.idl */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2, .X.label = SNEKS_PIPE_PIPE_LABEL }.raw);
+	L4_LoadMR(1, SNEKS_PIPE_PIPE_SUBLABEL);
 	L4_LoadMR(2, 0);	/* flags */
 	L4_MsgTag_t tag = send_only ? L4_Send_Timeout(server, A_SHORT_NAP)
 		: L4_Call_Timeouts(server, A_SHORT_NAP, A_SHORT_NAP);
@@ -414,8 +420,8 @@ static int devnull_ctor(handles *result, bool send_only)
 	L4_Set_VirtualSender(L4_nilthread);
 	assert(L4_IsNilThread(L4_ActualSender()));
 	L4_Accept(L4_UntypedWordsAcceptor);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 4, .X.label = 0xe80d }.raw);
-	L4_LoadMR(1, 0x0002);	/* sublabel per api/dev.idl */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 4, .X.label = SNEKS_DEVICE_NODE_OPEN_LABEL }.raw);
+	L4_LoadMR(1, SNEKS_DEVICE_NODE_OPEN_SUBLABEL);
 	L4_LoadMR(2, object);
 	L4_LoadMR(3, cookie);
 	L4_LoadMR(4, 0);	/* flags */
@@ -478,8 +484,8 @@ static int reg_ctor(handles *result, bool send_only)
 	L4_Set_VirtualSender(L4_nilthread);
 	assert(L4_IsNilThread(L4_ActualSender()));
 	L4_Accept(L4_UntypedWordsAcceptor);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 4, .X.label = 0xe809 }.raw);
-	L4_LoadMR(1, 0x0001);	/* sublabel per api/file.idl */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 4, .X.label = SNEKS_FILE_OPEN_LABEL }.raw);
+	L4_LoadMR(1, SNEKS_FILE_OPEN_SUBLABEL);
 	L4_LoadMR(2, object);
 	L4_LoadMR(3, cookie);
 	L4_LoadMR(4, 0);	/* flags */
@@ -542,8 +548,8 @@ static int dir_ctor(handles *result, bool send_only)
 	L4_Set_VirtualSender(L4_nilthread);
 	assert(L4_IsNilThread(L4_ActualSender()));
 	L4_Accept(L4_UntypedWordsAcceptor);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 4, .X.label = 0xe80a }.raw);
-	L4_LoadMR(1, 0xb335);	/* sublabel per api/directory.idl */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 4, .X.label = SNEKS_DIRECTORY_OPENDIR_LABEL }.raw);
+	L4_LoadMR(1, SNEKS_DIRECTORY_OPENDIR_SUBLABEL);
 	L4_LoadMR(2, object);
 	L4_LoadMR(3, cookie);
 	L4_LoadMR(4, 0);	/* flags */

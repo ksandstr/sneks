@@ -42,10 +42,9 @@ interface Path
 	 * @path is always relative to @dirfd, so it should never have a leading
 	 * slash.
 	 *
-	 * TODO: remove the explicit register specs and funny label once muidl
-	 * gets a nicer generated propagation feature.
+	 * TODO: remove the explicit register specs once muidl gets a nicer
+	 * generated propagation feature.
 	 */
-	[Label(0xb00b)]
 	void resolve(
 		out object inode, out L4X2::ThreadId server,
 		out long ifmt, out cookie cookie,
@@ -61,7 +60,6 @@ interface Path
 	 * PATH_MAX. in the latter case, or to tell filesystem boundaries, the
 	 * client should call get_path_fragment() instead.
 	 */
-	[Label(0xb00c)]	/* TODO: for propagation, remove when muidl etc. */
 	void get_path(out path path, in IO::handle desc, in path suffix)
 		raises(Posix::Errno, muidl::NoReply);
 
