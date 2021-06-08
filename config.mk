@@ -39,7 +39,7 @@ CLEAN_PATS=*-service.s *-client.s *-common.s *-defs.h ccan-*.a
 	@echo "  CC $@"
 	@$(CC) -c -o $@ $< $(CFLAGS) -nostartfiles -nodefaultlibs -MMD
 	@test -d .deps || mkdir -p .deps
-	@mv $(<:.c=.d) .deps/
+	@mv $(if $(findstring ..,$<),$(notdir $(<:.c=.d)),$(<:.c=.d)) .deps/
 
 
 # build CCAN sources as guests.
