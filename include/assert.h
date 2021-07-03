@@ -21,5 +21,10 @@ extern _Noreturn void __assert_failure(
 #define assert(condition) do { (void)sizeof((condition)); } while(0)
 #endif
 
+#if defined __USE_ISOC11 && !defined __cplusplus
+#undef static_assert
+#define static_assert _Static_assert
+#endif
+
 
 #endif
