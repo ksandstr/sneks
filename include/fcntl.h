@@ -17,6 +17,7 @@
 #define O_APPEND	02000
 #define O_NONBLOCK	04000
 #define O_DIRECTORY	0200000
+#define O_CLOEXEC	02000000
 #define O_TMPFILE	020000000
 
 /* fcntl commands. */
@@ -25,6 +26,8 @@
 #define F_SETFD 2
 #define F_GETFL 3	/* get/set status flags (O_*) */
 #define F_SETFL 4
+
+#define FD_CLOEXEC 1
 
 #define AT_FDCWD -1	/* *at() family @dirfd special value */
 
