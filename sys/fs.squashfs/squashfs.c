@@ -1220,6 +1220,13 @@ static int squashfs_getdents(int dirfd, int *offset_ptr, int *endpos_ptr,
 }
 
 
+static int squashfs_readlink(char *data, int *data_len,
+	unsigned object, L4_Word_t cookie)
+{
+	return -ENOSYS;
+}
+
+
 static int squashfs_ipc_loop(
 	void *initrd_start, size_t initrd_size,
 	int argc, char *argv[])
@@ -1239,6 +1246,7 @@ static int squashfs_ipc_loop(
 		.opendir = &squashfs_opendir,
 		.seekdir = &squashfs_seekdir,
 		.getdents = &squashfs_getdents,
+		.readlink = &squashfs_readlink,
 	};
 	FILL_SNEKS_IO(&vtab);
 

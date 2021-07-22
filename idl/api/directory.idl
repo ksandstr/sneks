@@ -73,8 +73,13 @@ interface Directory
 	 * returns the number of <struct dentry> read, or 0 for end-of-directory.
 	 */
 	unsigned short getdents(in IO::handle dir, inout Posix::off_t offset,
-		out Posix::off_t endpos, out dentsbuf data)
+			out Posix::off_t endpos, out dentsbuf data)
 		raises(Posix::Errno, muidl::NoReply);
+
+	/* readlink(2) analogue. */
+	void readlink(out Path::path data, out long data_len,
+			in Path::object object, in Path::cookie cookie)
+		raises(Posix::Errno);
 };
 
 };
