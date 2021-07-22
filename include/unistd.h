@@ -117,6 +117,12 @@ extern int chdir(const char *path);
 extern int fchdir(int dirfd);
 
 
+extern ssize_t readlink(const char *restrict path,
+	char *restrict buf, size_t bufsize);
+extern ssize_t readlinkat(int fd, const char *restrict path,
+	char *restrict buf, size_t bufsize);
+
+
 extern int select(
 	int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
 	struct timeval *timeout);
