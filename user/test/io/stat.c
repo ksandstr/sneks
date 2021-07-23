@@ -240,3 +240,35 @@ START_LOOP_TEST(stat_mode, iter, 0, ARRAY_SIZE(mode_tests) * 3 - 1)
 END_TEST
 
 DECLARE_TEST("io:stat", stat_mode);
+
+
+/* statting a symlink. */
+START_LOOP_TEST(symlink_terminal, iter, 0, 3)
+{
+	const char *pathspec = TESTDIR "/user/test/io/stat/exploding_symlink";
+	const bool follow = !!(iter & 1), use_fstatat = !!(iter & 2);
+	diag("follow=%s, use_fstatat=%s", btos(follow), btos(use_fstatat));
+	plan_tests(3);
+
+#ifdef __sneks__
+	todo_start("not implemented");
+#endif
+
+	struct stat st = { };
+	int n;
+	if(!use_fstatat) {
+		if(!follow) n = lstat(pathspec, &st); else n = stat(pathspec, &st);
+	} else {
+		n = fstatat(AT_FDCWD, pathspec, &st, follow ? 0 : AT_SYMLINK_NOFOLLOW);
+	}
+	if(n < 0) diag("errno=%d", errno);
+
+	imply_ok1(!follow, n == 0);
+	imply_ok1(follow, n < 0 && errno == ENOENT);
+	skip_start(n < 0, 1, "no entrails to see") {
+		if(!ok1((st.st_mode & S_IFMT) == S_IFLNK)) diag("mode=%#o", st.st_mode);
+	} skip_end;
+}
+END_TEST
+
+DECLARE_TEST("io:stat", symlink_terminal);
