@@ -8,6 +8,7 @@
  *       non-symlink object.
  */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
@@ -72,6 +73,50 @@ START_LOOP_TEST(readlink, iter, 0, 2)
 END_TEST
 
 DECLARE_TEST("io:symlink", readlink);
+
+
+/* test symlink dereferencing in positive cases. variables:
+ *   - whether symlink is terminal or non-terminal path component
+ *   - whether symlink causes another symlink to be dereferenced
+ *   - whether symlink is absolute or relative
+ */
+START_LOOP_TEST(deref_positive, iter, 0, 7)
+{
+	const bool terminal = !!(iter & 1), absolute = !!(iter & 2),
+		iterated = !!(iter & 4);
+	diag("terminal=%s, absolute=%s, iterated=%s",
+		btos(terminal), btos(absolute), btos(iterated));
+	plan_tests(5);
+
+#ifdef __sneks__
+	todo_start("unimplemented");
+#endif
+
+	char pathspec[256];
+	snprintf(pathspec, sizeof pathspec,
+		TESTDIR "/user/test/io/symlink/%sterminal%s%s%s",
+		terminal ? "" : "non", iterated ? "_iterated" : "",
+		absolute ? "_absolute" : "_relative",
+		terminal ? "" : "/testfile");
+	diag("pathspec=`%s'", pathspec);
+
+	/* self-verification */
+	char linkbuf[100];
+	int n = readlink(pathspec, linkbuf, sizeof linkbuf);
+	imply_ok1(!terminal, n < 0 && errno == EINVAL);
+	imply_ok1(terminal, n > 0);
+	skip_start(!terminal, 1, "readlink errno=%d", errno) {
+		if(!iff_ok1(absolute, linkbuf[0] == '/')) diag("linkbuf=`%s'", linkbuf);
+	} skip_end;
+
+	/* actual test */
+	struct stat st = { };
+	if(!ok(stat(pathspec, &st) == 0, "stat call")) diag("errno=%d", errno);
+	ok1((st.st_mode & S_IFMT) == S_IFREG);
+}
+END_TEST
+
+DECLARE_TEST("io:symlink", deref_positive);
 
 
 /* test symlink dereferencing in the case where a symlink leads to a

@@ -65,7 +65,7 @@ initrd-install: testsuite $(TOOLS)
 	@install -t $(INITRD)/user/test/tools $(TOOLS)
 	@mkdir -p $(INITRD)/user/test/scripts
 	@install -t $(INITRD)/user/test/scripts $(SCRIPTS)
-	+@make test-files-install
+	+@make TARGET_INITRD=/initrd test-files-install
 
 test-files-install:
 	@mkdir -p $(INITRD)/user/test/io/reg
@@ -87,6 +87,14 @@ test-files-install:
 	@ln -s foo/bar/zot $(INITRD)/user/test/io/symlink/teh_linkz0r
 	@ln -s looping_terminal $(INITRD)/user/test/io/symlink/looping_terminal
 	@ln -s looping_middle/deez/nutz $(INITRD)/user/test/io/symlink/looping_middle
+	@ln -s ../reg/testfile $(INITRD)/user/test/io/symlink/terminal_relative
+	@ln -s terminal_relative $(INITRD)/user/test/io/symlink/terminal_iterated_relative
+	@ln -s $(TARGET_INITRD)/user/test/io/reg/testfile $(INITRD)/user/test/io/symlink/terminal_absolute
+	@ln -s $(TARGET_INITRD)/user/test/io/symlink/terminal_relative $(INITRD)/user/test/io/symlink/terminal_iterated_absolute
+	@ln -s ../reg $(INITRD)/user/test/io/symlink/nonterminal_relative
+	@ln -s nonterminal_relative $(INITRD)/user/test/io/symlink/nonterminal_iterated_relative
+	@ln -s $(TARGET_INITRD)/user/test/io/reg $(INITRD)/user/test/io/symlink/nonterminal_absolute
+	@ln -s $(TARGET_INITRD)/user/test/io/symlink/nonterminal_relative $(INITRD)/user/test/io/symlink/nonterminal_iterated_absolute
 	@mkdir -p $(INITRD)/user/test/exec/isdir/exit_with_0
 	@mkdir -p $(INITRD)/user/test/exec/noexec_script
 	@echo "#!$(INITRD)/user/test/exec/noexec/exit_with_0" \
@@ -110,7 +118,8 @@ hostsuite: $(HOSTSUITE_OBJS) $(CFGDIR)/lib/tap.c $(CFGDIR)/lib/strscpy.c \
 	@mkdir -p $(HOSTSUITE_TESTDIR)/user/test/scripts
 	@install -t $(HOSTSUITE_TESTDIR)/user/test/scripts $(SCRIPTS)
 	@rename 's/\.host//' $(HOSTSUITE_TESTDIR)/user/test/tools/*.host
-	+@make INITRD=$(HOSTSUITE_TESTDIR) test-files-install
+	+@make INITRD=$(HOSTSUITE_TESTDIR) TARGET_INITRD=$(HOSTSUITE_TESTDIR) \
+		test-files-install
 	@echo "  LD $@ <impure!>"
 	@$(CC) -o $@ $(filter-out tools/%,$^) $(HOSTSUITE_CFLAGS)
 
