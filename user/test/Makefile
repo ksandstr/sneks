@@ -85,6 +85,8 @@ test-files-install:
 	@ln -s does_not_exist $(INITRD)/user/test/io/stat/exploding_symlink
 	@mkdir -p $(INITRD)/user/test/io/symlink
 	@ln -s foo/bar/zot $(INITRD)/user/test/io/symlink/teh_linkz0r
+	@ln -s looping_terminal $(INITRD)/user/test/io/symlink/looping_terminal
+	@ln -s looping_middle/deez/nutz $(INITRD)/user/test/io/symlink/looping_middle
 	@mkdir -p $(INITRD)/user/test/exec/isdir/exit_with_0
 	@mkdir -p $(INITRD)/user/test/exec/noexec_script
 	@echo "#!$(INITRD)/user/test/exec/noexec/exit_with_0" \
