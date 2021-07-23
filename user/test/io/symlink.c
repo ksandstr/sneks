@@ -39,10 +39,6 @@ START_LOOP_TEST(readlink, iter, 0, 2)
 	diag("method=`%s'", method);
 	plan_tests(5);
 
-#ifdef __sneks__
-	todo_start("not implemented");
-#endif
-
 	const char *dirbase = TESTDIR "/user/test/io";
 	int dirfd = open(dirbase, O_DIRECTORY | O_RDONLY);
 	if(!ok1(dirfd >= 0)) diag("errno=%d", errno);

@@ -72,6 +72,7 @@ struct inode {
 		struct {
 			int max_index;
 		} dir;
+		char *symlink;	/* coallocated w/ containing inode_ext */
 	};
 };
 
@@ -351,6 +352,7 @@ static int inode_size(int type)
 	static const uint8_t sizes[] = {
 		[SQUASHFS_DIR_TYPE] = sizeof(struct squashfs_dir_inode),
 		[SQUASHFS_REG_TYPE] = sizeof(struct squashfs_reg_inode),
+		[SQUASHFS_SYMLINK_TYPE] = sizeof(struct squashfs_symlink_inode),
 	};
 
 	return type < 0 || type >= ARRAY_SIZE(sizes) ? 0 : sizes[type];
@@ -364,10 +366,6 @@ static struct inode *read_inode(unsigned blkoffs)
 	struct inode_ext *nod_ext = malloc(sizeof *nod_ext);
 	if(nod_ext == NULL) return NULL;	/* TODO: pop ENOMEM */
 	struct inode *nod = &nod_ext->fs_inode;
-	/* TODO: switch according to inode type once there's more than one thing
-	 * in the union.
-	 */
-	nod->dir.max_index = INT_MAX;
 
 	uint64_t block = fs_super->inode_table_start + SQUASHFS_INODE_BLK(blkoffs);
 	int offset = SQUASHFS_INODE_OFFSET(blkoffs);
@@ -376,18 +374,43 @@ static struct inode *read_inode(unsigned blkoffs)
 	int n = read_metadata(base, &blk, &block, &offset, sizeof *base);
 	if(n < sizeof *base) goto Eio;
 
+	/* read the per-type static part */
 	int sz = inode_size(base->inode_type);
-	if(sz > 0) {
-		n = read_metadata(base + 1, &blk, &block, &offset, sz - sizeof *base);
-		if(n < sz - sizeof *base) goto Eio;
-		squashfs_i(nod)->rest_start = block;
-		squashfs_i(nod)->offset = offset;
-	} else {
+	if(sz <= 0) {
+		/* (this is just a matter of typing them into inode_size()'s array.) */
 		log_err("unknown inode type %d", (int)base->inode_type);
 		free(nod_ext);
 		return NULL;	/* TODO: -EINVAL */
 	}
+	n = read_metadata(base + 1, &blk, &block, &offset, sz - sizeof *base);
+	if(n < sz - sizeof *base) goto Eio;
 
+	/* then per-type dynamic parts */
+	switch(base->inode_type) {
+		default: break;
+		case SQUASHFS_DIR_TYPE:
+			nod->dir.max_index = INT_MAX;
+			break;
+		case SQUASHFS_SYMLINK_TYPE: {
+			size_t link_size = squashfs_i(nod)->X.symlink.symlink_size;
+			void *re = realloc(nod_ext, sizeof *nod_ext + link_size + 1);
+			if(re == NULL) {
+				free(nod_ext);
+				return NULL;	/* TODO: -ENOMEM */
+			}
+			nod_ext = re;
+			nod = &nod_ext->fs_inode;
+			base = &squashfs_i(nod)->X.base;
+			nod->symlink = (char *)(nod_ext + 1);
+			n = read_metadata(nod->symlink, &blk, &block, &offset, link_size);
+			if(n < link_size) goto Eio;
+			nod->symlink[link_size] = '\0';
+			break;
+		}
+	}
+
+	squashfs_i(nod)->rest_start = block;
+	squashfs_i(nod)->offset = offset;
 	return nod;
 
 Eio:
@@ -1223,7 +1246,23 @@ static int squashfs_getdents(int dirfd, int *offset_ptr, int *endpos_ptr,
 static int squashfs_readlink(char *data, int *data_len,
 	unsigned object, L4_Word_t cookie)
 {
-	return -ENOSYS;
+	sync_confirm();
+
+	/* TODO: same as in squashfs_open() about cookie validation */
+	if(!validate_cookie(cookie, &device_cookie_key, L4_SystemClock(),
+		object, CALLER_PID))
+	{
+		return -EINVAL;
+	}
+
+	struct inode *nod = get_inode(object);
+	if(nod == NULL) return -EINVAL;
+
+	*data_len = min_t(int, SNEKS_PATH_PATH_MAX,
+		squashfs_i(nod)->X.symlink.symlink_size);
+	memcpy(data, nod->symlink, *data_len);
+
+	return 0;
 }
 
 
