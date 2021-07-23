@@ -82,6 +82,8 @@ test-files-install:
 		echo "exit 123" >$(INITRD)/user/test/io/stat/$$i; \
 		chmod u=$$i $(INITRD)/user/test/io/stat/$$i; \
 	done
+	@mkdir -p $(INITRD)/user/test/io/symlink
+	@ln -s foo/bar/zot $(INITRD)/user/test/io/symlink/teh_linkz0r
 	@mkdir -p $(INITRD)/user/test/exec/isdir/exit_with_0
 	@mkdir -p $(INITRD)/user/test/exec/noexec_script
 	@echo "#!$(INITRD)/user/test/exec/noexec/exit_with_0" \

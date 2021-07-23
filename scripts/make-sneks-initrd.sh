@@ -42,6 +42,6 @@ echo -n 'Hello, world!' >$TARGET/test-directory/test-file.txt
 
 echo "  MKSQUASHFS $1"
 mksquashfs $TARGET $1 -comp lz4 -Xhc -all-root -no-fragments -info 2>/dev/null \
-    | grep -e '^file' -e '^directory'
+	| grep -e '^file' -e '^directory' -e '^symbolic link'
 
 rm -rf $TARGET
