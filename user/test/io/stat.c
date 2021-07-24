@@ -250,10 +250,6 @@ START_LOOP_TEST(symlink_terminal, iter, 0, 3)
 	diag("follow=%s, use_fstatat=%s", btos(follow), btos(use_fstatat));
 	plan_tests(3);
 
-#ifdef __sneks__
-	todo_start("not implemented");
-#endif
-
 	struct stat st = { };
 	int n;
 	if(!use_fstatat) {

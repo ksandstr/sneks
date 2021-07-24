@@ -85,7 +85,9 @@ START_LOOP_TEST(deref_positive, iter, 0, 7)
 	plan_tests(5);
 
 #ifdef __sneks__
-	todo_start("unimplemented");
+	if(absolute) {
+		todo_start("unimplemented (pending muidl exception arc)");
+	}
 #endif
 
 	char pathspec[256];
@@ -125,10 +127,6 @@ START_TEST(deref_loop)
 		TESTDIR "/user/test/io/symlink/looping_middle/whatever/else",
 	};
 	plan_tests(ARRAY_SIZE(cases));
-
-#ifdef __sneks__
-	todo_start("unimplemented");
-#endif
 
 	for(int i=0; i < ARRAY_SIZE(cases); i++) {
 		char *namepart = strstr(cases[i], "looping_"), *slash = strchr(namepart, '/');

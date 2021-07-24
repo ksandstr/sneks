@@ -173,7 +173,8 @@ static struct htable blk_cache = HTABLE_INITIALIZER(
 	dentry_name_hash = HTABLE_INITIALIZER(dentry_name_hash,
 		&rehash_dentry_by_dir_ino_and_name, NULL),
 	dentry_ino_hash = HTABLE_INITIALIZER(dentry_ino_hash,
-		&rehash_dentry_by_ino, NULL);
+		&rehash_dentry_by_ino, NULL),
+	symlink_loop_hash = HTABLE_INITIALIZER(symlink_loop_hash, &rehash_inode, NULL);
 
 /* ~0u for "not yet seen" */
 static unsigned *ino_to_blkoffset = NULL;	/* [fs_super->inodes + 1] */
@@ -686,6 +687,13 @@ static int lookup(int *type, ino_t dir_ino, const char *name)
 }
 
 
+/* pathspec remainder. */
+struct symstk {
+	struct symstk *next;
+	const char *path;
+};
+
+
 /* FIXME: this doesn't handle trailing slashes well at all. */
 static int squashfs_resolve(
 	unsigned *object_ptr, L4_Word_t *server_ptr,
@@ -704,6 +712,24 @@ static int squashfs_resolve(
 		dir_ino = df->i->ino;
 	}
 
+	struct symstk *path_stack = NULL, *ssfree = NULL;
+	int num_symstk = 0;
+	if(unlikely(htable_count(&symlink_loop_hash) >= 50)) {
+		/* presumed cheaper to do a little malloc stuff again than loop over 4
+		 * cache lines
+		 */
+		htable_clear(&symlink_loop_hash);
+		htable_init_sized(&symlink_loop_hash, &rehash_inode, NULL, 8);
+	} else if(htable_count(&symlink_loop_hash) > 0) {
+		struct htable_iter it;
+		for(struct inode *nod = htable_first(&symlink_loop_hash, &it);
+			nod != NULL; nod = htable_next(&symlink_loop_hash, &it))
+		{
+			htable_delval(&symlink_loop_hash, &it);
+		}
+		assert(htable_count(&symlink_loop_hash) == 0);
+	}
+
 	/* resolve @path one component at a time. */
 	if(path[0] == '/') return -EINVAL;
 	int type;
@@ -712,11 +738,20 @@ static int squashfs_resolve(
 	for(;;) {
 		assert(*path != '\0');
 		char *slash = strchr(path, '/'), comp[SQUASHFS_NAME_LEN + 1];
-		const bool is_last = (slash == NULL);
+		const bool is_last = slash == NULL && path_stack == NULL;
 		const char *part;
-		if(is_last) {
+		if(slash == NULL) {
 			part = path;
-			path += strlen(path);
+			if(path_stack == NULL) {
+				/* NOTE: this might be redundant as is_last will be true. */
+				path += strlen(path);
+			} else {
+				path = path_stack->path;
+				struct symstk *dead = path_stack;
+				path_stack = dead->next;
+				dead->next = ssfree;
+				ssfree = dead;
+			}
 		} else {
 			/* piece in the middle. */
 			int comp_len = slash - path;
@@ -752,22 +787,76 @@ static int squashfs_resolve(
 				| (dev->major & 0x7fff) << 15 | (dev->minor & 0x7fff);
 			type = dev->is_chr ? DT_CHR : DT_BLK;
 			break;
-		} else {
-			int ino = lookup(&type, dir_ino, part);
-			if(ino < 0) return ino;
-			if(!is_last) {
-				if(type != DT_DIR) return -ENOTDIR;
-				dir_ino = ino;
+		}
+
+		int ino = lookup(&type, dir_ino, part);
+		if(ino < 0) return ino;
+
+		struct inode *nod = NULL;
+		if(type == DT_LNK && (!is_last || (~flags & AT_SYMLINK_NOFOLLOW))) {
+			nod = get_inode(ino);
+			if(nod == NULL) {
+				log_err("get_inode(%d) failed", ino);	/* TODO: print error code */
+				return -EIO;
+			}
+			if(nod->symlink[0] == '/') {
+				/* TODO: form the aggregate path and pop it out for the caller
+				 * to resolve. this requires the muidl exception arc which
+				 * isn't quite here yet.
+				 */
+				return -ENOTDIR;
+			}
+			size_t hash = rehash_inode(nod, NULL);
+			struct inode *loop = htable_get(&symlink_loop_hash, hash, &cmp_inode_ino, &(ino_t){ ino });
+			if(unlikely(loop != NULL)) {
+				log_info("saw symlink ino=%d twice", ino);
+				return -ELOOP;
+			}
+			bool ok = htable_add(&symlink_loop_hash, hash, nod);
+			if(unlikely(!ok)) return -ENOMEM;
+		}
+
+		if(is_last) {
+			if((flags & O_DIRECTORY) && type != DT_DIR) {
+				/* only directories, please. */
+				return -ENOTDIR;
+			} else if(type == DT_LNK && (~flags & AT_SYMLINK_NOFOLLOW)) {
+				assert(nod != NULL);
+				path = nod->symlink;
+				continue;
 			} else {
-				if((flags & O_DIRECTORY) && type != DT_DIR) {
-					/* only directories, please. */
-					return -ENOTDIR;
-				}
 				/* success! */
 				final_ino = ino;
 				server = L4_Myself();
 				break;
 			}
+		}
+
+		switch(type) {
+			case DT_LNK: {
+				/* push the old one */
+				struct symstk *top;
+				if(ssfree != NULL) {
+					top = ssfree;
+					ssfree = top->next;
+				} else if(num_symstk >= 256 / sizeof *top) {
+					log_info("num_symstk=%d (too deep)", num_symstk);
+					return -ELOOP;
+				} else {
+					top = alloca(sizeof *top);
+					num_symstk++;
+				}
+				top->path = path;
+				top->next = path_stack;
+				path_stack = top;
+
+				/* proceed into new one */
+				assert(nod != NULL);
+				path = nod->symlink;
+				continue;
+			}
+			case DT_DIR: dir_ino = ino; break;
+			default: return -ENOTDIR;
 		}
 	}
 
