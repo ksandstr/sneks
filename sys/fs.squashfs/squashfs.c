@@ -384,14 +384,14 @@ static struct inode *read_inode(unsigned blkoffs)
 		squashfs_i(nod)->offset = offset;
 	} else {
 		log_err("unknown inode type %d", (int)base->inode_type);
-		free(nod);
+		free(nod_ext);
 		return NULL;	/* TODO: -EINVAL */
 	}
 
 	return nod;
 
 Eio:
-	free(nod);
+	free(nod_ext);
 	return NULL;		/* TODO: -EIO */
 }
 
@@ -414,7 +414,7 @@ static struct inode *get_inode(ino_t ino)
 		nod->ino = ino;
 		bool ok = htable_add(&inode_cache, hash, nod);
 		if(!ok) {
-			free(nod);
+			free(container_of(nod, struct inode_ext, fs_inode));
 			return NULL;	/* TODO: ENOMEM */
 		}
 	}
