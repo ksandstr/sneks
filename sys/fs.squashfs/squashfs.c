@@ -687,13 +687,6 @@ static int lookup(int *type, ino_t dir_ino, const char *name)
 }
 
 
-/* pathspec remainder. */
-struct symstk {
-	struct symstk *next;
-	const char *path;
-};
-
-
 /* FIXME: this doesn't handle trailing slashes well at all. */
 static int squashfs_resolve(
 	unsigned *object_ptr, L4_Word_t *server_ptr,
@@ -712,8 +705,8 @@ static int squashfs_resolve(
 		dir_ino = df->i->ino;
 	}
 
-	struct symstk *path_stack = NULL, *ssfree = NULL;
-	int num_symstk = 0;
+	const char *path_stack[50];	/* arbitrary but sufficient */
+	int path_stack_pos = 0;
 	if(unlikely(htable_count(&symlink_loop_hash) >= 50)) {
 		/* presumed cheaper to do a little malloc stuff again than loop over 4
 		 * cache lines
@@ -738,19 +731,16 @@ static int squashfs_resolve(
 	for(;;) {
 		assert(*path != '\0');
 		char *slash = strchr(path, '/'), comp[SQUASHFS_NAME_LEN + 1];
-		const bool is_last = slash == NULL && path_stack == NULL;
+		const bool is_last = slash == NULL && path_stack_pos == 0;
 		const char *part;
 		if(slash == NULL) {
 			part = path;
-			if(path_stack == NULL) {
+			if(path_stack_pos == 0) {
 				/* NOTE: this might be redundant as is_last will be true. */
 				path += strlen(path);
 			} else {
-				path = path_stack->path;
-				struct symstk *dead = path_stack;
-				path_stack = dead->next;
-				dead->next = ssfree;
-				ssfree = dead;
+				assert(path_stack_pos > 0);
+				path = path_stack[--path_stack_pos];
 			}
 		} else {
 			/* piece in the middle. */
@@ -804,6 +794,7 @@ static int squashfs_resolve(
 				 * to resolve. this requires the muidl exception arc which
 				 * isn't quite here yet.
 				 */
+				log_err("symlink `%s' is absolute (not handled)", nod->symlink);
 				return -ENOTDIR;
 			}
 			size_t hash = rehash_inode(nod, NULL);
@@ -835,20 +826,11 @@ static int squashfs_resolve(
 		switch(type) {
 			case DT_LNK: {
 				/* push the old one */
-				struct symstk *top;
-				if(ssfree != NULL) {
-					top = ssfree;
-					ssfree = top->next;
-				} else if(num_symstk >= 256 / sizeof *top) {
-					log_info("num_symstk=%d (too deep)", num_symstk);
+				if(path_stack_pos == ARRAY_SIZE(path_stack)) {
+					log_info("path_stack_pos=%d (too deep)", path_stack_pos);
 					return -ELOOP;
-				} else {
-					top = alloca(sizeof *top);
-					num_symstk++;
 				}
-				top->path = path;
-				top->next = path_stack;
-				path_stack = top;
+				path_stack[path_stack_pos++] = path;
 
 				/* proceed into new one */
 				assert(nod != NULL);
