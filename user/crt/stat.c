@@ -18,7 +18,7 @@ static void convert_statbuf(struct stat *dst,
 	*dst = (struct stat){
 		/* fuck me harder. */
 		F(dev), F(ino), F(mode), F(nlink), F(uid), F(gid),
-		F(rdev), F(size), F(blksize), F(blkcnt),
+		F(rdev), F(size), F(blksize), F(blocks),
 		.st_atim = { src->st_atim.tv_sec, src->st_atim.tv_nsec },
 		.st_mtim = { src->st_mtim.tv_sec, src->st_mtim.tv_nsec },
 		.st_ctim = { src->st_ctim.tv_sec, src->st_ctim.tv_nsec },

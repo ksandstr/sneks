@@ -24,7 +24,7 @@ interface IO
 		Posix::dev_t st_rdev;
 		Posix::off_t st_size;
 		Posix::blksize_t st_blksize;
-		Posix::blkcnt_t st_blkcnt;
+		Posix::blkcnt_t st_blocks;
 		Posix::timespec st_atim, st_mtim, st_ctim;
 	};
 

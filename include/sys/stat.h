@@ -54,7 +54,7 @@ struct stat
 	dev_t st_rdev;
 	off_t st_size;
 	blksize_t st_blksize;
-	blkcnt_t st_blkcnt;
+	blkcnt_t st_blocks;
 	struct timespec st_atim, st_mtim, st_ctim;
 
 #define st_atime st_atim.tv_sec
