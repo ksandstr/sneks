@@ -22,17 +22,14 @@ ssize_t readlinkat(int dirfd, const char *restrict path,
 {
 	if(bufsize == 0) goto Einval;
 
-	unsigned object;
-	L4_ThreadId_t server;
-	int ifmt;
-	L4_Word_t cookie;
-	int n = __resolve(&object, &server, &ifmt, &cookie, dirfd, path, AT_SYMLINK_NOFOLLOW);
+	struct resolve_out r;
+	int n = __resolve(&r, dirfd, path, AT_SYMLINK_NOFOLLOW);
 	if(n != 0) return NTOERR(n);
-	if(ifmt >> 12 != SNEKS_DIRECTORY_DT_LNK) goto Einval;
+	if(r.ifmt >> 12 != SNEKS_DIRECTORY_DT_LNK) goto Einval;
 
 	char *pathbuf = bufsize < PATH_MAX ? alloca(PATH_MAX + 1) : buf;
 	int pathlen = 0;
-	n = __dir_readlink(server, pathbuf, &pathlen, object, cookie);
+	n = __dir_readlink(r.server, pathbuf, &pathlen, r.object, r.cookie);
 	if(n != 0) return NTOERR(n);
 	assert(pathbuf[pathlen] == '\0');
 

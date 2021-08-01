@@ -25,7 +25,7 @@
 
 
 int __resolve(
-	unsigned *object_p, L4_ThreadId_t *server_p, int *ifmt_p, L4_Word_t *cookie_p,
+	struct resolve_out *res,
 	int dirfd, const char *pathname, int flags)
 {
 	struct fd_bits *cwd,
@@ -38,7 +38,8 @@ int __resolve(
 		if(cwd == NULL) return -EBADF;
 	}
 
-	return __path_resolve(cwd->server, object_p, &server_p->raw, ifmt_p, cookie_p,
+	return __path_resolve(cwd->server,
+		&res->object, &res->server.raw, &res->ifmt, &res->cookie,
 		cwd->handle, pathname, flags);
 }
 
@@ -55,10 +56,8 @@ int openat(int dirfd, const char *pathname, int flags, ...)
 		return -1;
 	}
 
-	unsigned object;
-	L4_ThreadId_t server;
-	L4_Word_t cookie;
-	int ifmt, n = __resolve(&object, &server, &ifmt, &cookie, dirfd, pathname, flags);
+	struct resolve_out r;
+	int n = __resolve(&r, dirfd, pathname, flags);
 	if(n != 0) return NTOERR(n);
 
 	/* set VS/AS to recover actual server tid, for when Path::resolve hands
@@ -68,14 +67,14 @@ int openat(int dirfd, const char *pathname, int flags, ...)
 	assert(L4_IsNilThread(L4_ActualSender()));
 	L4_ThreadId_t actual = L4_nilthread;
 	int handle;
-	switch(ifmt & S_IFMT) {
+	switch(r.ifmt & S_IFMT) {
 		case S_IFCHR: case S_IFBLK:
-			n = __dev_open(server, &handle, object, cookie, flags);
+			n = __dev_open(r.server, &handle, r.object, r.cookie, flags);
 			actual = L4_ActualSender();
 			break;
 		case S_IFREG: case S_IFIFO: case S_IFSOCK:
-			n = __file_open(server, &handle, object, cookie, flags);
-			if((ifmt & S_IFMT) != S_IFREG) {
+			n = __file_open(r.server, &handle, r.object, r.cookie, flags);
+			if((r.ifmt & S_IFMT) != S_IFREG) {
 				/* fifos and sockets generally won't be handled by the
 				 * Sneks::File provider. allow propagated handling when
 				 * resolve's `server' output wasn't the socket or fifo server.
@@ -84,7 +83,7 @@ int openat(int dirfd, const char *pathname, int flags, ...)
 			}
 			break;
 		case S_IFDIR:
-			n = __dir_opendir(server, &handle, object, cookie, flags);
+			n = __dir_opendir(r.server, &handle, r.object, r.cookie, flags);
 			actual = L4_ActualSender();
 			break;
 		case S_IFLNK:
@@ -96,13 +95,13 @@ int openat(int dirfd, const char *pathname, int flags, ...)
 		default: errno = ENOSYS; return -1;
 	}
 	if(n != 0) return NTOERR(n);
-	if(!L4_IsNilThread(actual)) server = actual;
+	if(!L4_IsNilThread(actual)) r.server = actual;
 
 	int fflags = 0;
 	if(flags & O_CLOEXEC) fflags |= FD_CLOEXEC;
-	int fd = __create_fd(-1, server, handle, fflags);
+	int fd = __create_fd(-1, r.server, handle, fflags);
 	if(fd < 0) {
-		__io_close(server, handle);
+		__io_close(r.server, handle);
 		errno = -fd;
 		return -1;
 	}

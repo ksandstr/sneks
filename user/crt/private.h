@@ -28,6 +28,13 @@ struct fd_bits {
 	int handle, flags;
 };
 
+struct resolve_out {
+	L4_ThreadId_t server;
+	unsigned object;
+	L4_Word_t cookie;
+	int ifmt;
+};
+
 
 extern L4_KernelInterfacePage_t *__the_kip;
 extern struct __sysinfo *__the_sysinfo;
@@ -70,7 +77,7 @@ extern int __create_fd(int fd, L4_ThreadId_t server, int handle, int flags);
 /* from path.c */
 
 extern int __resolve(
-	unsigned *object_p, L4_ThreadId_t *server_p, int *ifmt_p, L4_Word_t *cookie_p,
+	struct resolve_out *result,
 	int dirfd, const char *pathname, int flags);
 
 

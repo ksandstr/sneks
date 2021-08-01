@@ -52,13 +52,11 @@ int fstatat(int dirfd, const char *pathname, struct stat *statbuf, int flags)
 {
 	if(flags & ~AT_SYMLINK_NOFOLLOW) { errno = ENOSYS; return -1; }
 
-	unsigned object;
-	L4_Word_t cookie;
-	L4_ThreadId_t server;
-	int ifmt, n = __resolve(&object, &server, &ifmt, &cookie, dirfd, pathname, flags);
+	struct resolve_out r;
+	int n = __resolve(&r, dirfd, pathname, flags);
 	if(n == 0) {
 		struct sneks_io_statbuf st;
-		n = __path_stat_object(server, object, cookie, &st);
+		n = __path_stat_object(r.server, r.object, r.cookie, &st);
 		if(n == 0) convert_statbuf(statbuf, &st);
 	}
 	return NTOERR(n);
