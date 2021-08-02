@@ -14,7 +14,12 @@
 #include <l4/ipc.h>
 #include <l4/kdebug.h>
 
+#ifdef __SNEKS__
 #include <sneks/mm.h>
+#else
+#include <limits.h>
+#endif
+
 #include <sneks/process.h>
 #include <sneks/sysinfo.h>
 
@@ -47,6 +52,7 @@ void malloc_panic(void) {
 }
 
 
+#ifdef __SNEKS__
 /* copypasta'd from sys/crt/crt1.c */
 long sysconf(int name)
 {
@@ -56,6 +62,7 @@ long sysconf(int name)
 		default: errno = EINVAL; return -1;
 	}
 }
+#endif
 
 
 /* TODO: move this wherever */
@@ -202,11 +209,11 @@ int __crt1_entry(uintptr_t argpos)
 	 */
 
 	int n_args, argbuflen = nstrlen(&n_args, (char *)argpos);
-	uintptr_t envs_base = (argpos + argbuflen + PAGE_SIZE - 1) & ~PAGE_MASK;
+	uintptr_t envs_base = (argpos + argbuflen + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 	int n_envs, envbuflen = nstrlen(&n_envs, (char *)envs_base);
-	uintptr_t fdlistptr = (envs_base + envbuflen + PAGE_SIZE - 1) & ~PAGE_MASK,
+	uintptr_t fdlistptr = (envs_base + envbuflen + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1),
 		fdlist_end = fdlist_last(fdlistptr);
-	brk((void *)((fdlist_end + PAGE_SIZE - 1) & ~PAGE_MASK));
+	brk((void *)((fdlist_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1)));
 	/* right. malloc is now good. */
 
 	__file_init((void *)fdlistptr);

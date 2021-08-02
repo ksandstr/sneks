@@ -7,8 +7,13 @@
 #include <errno.h>
 #include <sys/mman.h>
 
-#include <l4/thread.h>
+#ifndef __SNEKS__
+#include <limits.h>
+#else
 #include <sneks/mm.h>
+#endif
+
+#include <l4/thread.h>
 #include <sneks/api/vm-defs.h>
 
 #include "private.h"
@@ -53,10 +58,10 @@ void *sbrk(intptr_t increment)
 	void *ret = (void *)current_brk;
 	uintptr_t new_brk;
 	if(increment > 0) {
-		new_brk = (current_brk + increment + PAGE_MASK) & ~PAGE_MASK;
+		new_brk = (current_brk + increment + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 	} else {
 		assert(increment < 0);
-		increment = (-increment + PAGE_MASK) & ~PAGE_MASK;
+		increment = (-increment + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 		new_brk = current_brk - increment;
 	}
 	if(brk((void *)new_brk) != 0) ret = (void *)-1;
@@ -66,7 +71,7 @@ void *sbrk(intptr_t increment)
 
 void *mmap(
 	void *_addr, size_t length, int prot, int flags,
-	int fd, unsigned long offset)
+	int fd, off_t offset)
 {
 	int n;
 	if(~flags & MAP_ANONYMOUS) {
