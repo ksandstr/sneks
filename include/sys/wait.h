@@ -18,10 +18,20 @@
 #define WIFCONTINUED(st) 0
 
 
+/* constants for waitid(2). */
+typedef enum __idtype {
+	P_ALL = 0,
+	P_PID = 1,
+	P_PGID = 2,
+} idtype_t;
+
+#define WNOHANG 1	/* return 0 instead of blocking */
+#define WUNTRACED 2	/* report status of stopped children */
+/* TODO: WSTOPPED, WEXITED, WCONTINUED, WNOWAIT */
+
+
 struct __siginfo_s;
 
-
-typedef enum __idtype_e idtype_t;
 
 extern pid_t wait(int *wstatus);
 extern pid_t waitpid(pid_t pid, int *wstatus, int options);

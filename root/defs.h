@@ -21,7 +21,7 @@
 #define THREAD_STACK_SIZE 4096
 
 /* flags in <struct process>. comment describes behaviour when set. */
-#define PF_WAIT_ANY 1	/* sleeping in passive waitid(P_ANY, ...) */
+#define PF_WAIT_ANY 1	/* sleeping in passive waitid(P_ALL, ...) */
 #define PF_SAVED_MASK 2	/* signal delivery is in sigsuspend mode */
 
 

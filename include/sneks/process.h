@@ -81,19 +81,6 @@ static inline struct sneks_fdlist *sneks_fdlist_next(
 #endif
 
 
-/* constants for waitid(2). */
-enum __idtype_e {
-	P_PID = 0,
-	P_PGID = 1,
-	P_ANY = 2,
-};
-
-#define WNOHANG 1	/* return 0 instead of blocking */
-#define WUNTRACED 2	/* report status of stopped children */
-/* TODO: WSTOPPED, WEXITED, WCONTINUED, WNOWAIT */
-
-
-
 extern unsigned pidof_NP(L4_ThreadId_t tid);
 
 /* execve() without the fork(). returns pidof_NP() of the created task's

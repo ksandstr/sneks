@@ -120,7 +120,7 @@ pid_t wait(int *status_p) {
 pid_t waitpid(pid_t pid, int *wstatus, int options)
 {
 	siginfo_t si;
-	int n = waitid(pid == -1 ? P_ANY : P_PID, pid, &si, options);
+	int n = waitid(pid == -1 ? P_ALL : P_PID, pid, &si, options);
 	if(n != 0) return n;
 	if(wstatus != NULL) {
 		switch(si.si_code) {

@@ -105,7 +105,7 @@ static int tno_free_counts[4];
 /* PID allocator, backed by rangealloc. */
 static _Atomic int next_user_pid = 1;
 
-/* pid-to-children multimap. used to return -ECHILD in waitid(P_ANY, ...). */
+/* pid-to-children multimap. used to return -ECHILD in waitid(P_ALL, ...). */
 static struct htable pid_to_child_hash = HTABLE_INITIALIZER(
 	pid_to_child_hash, &hash_ppid, NULL);
 
@@ -1307,7 +1307,7 @@ static int uapi_wait(
 			if(dead->task.threads.size > 0) { live = dead; dead = NULL; }
 			break;
 
-		case P_ANY:
+		case P_ALL:
 			dead = list_top(&self->dead_list, struct process, dead_link);
 			if(dead == NULL && !has_children(caller)) return -ECHILD;
 			assert(dead == NULL || dead->ppid == caller);
@@ -1337,8 +1337,8 @@ static int uapi_wait(
 		live->wait_tid = muidl_get_sender();
 		muidl_raise_no_reply();
 		return 0;
-	} else if((options & WNOHANG) == 0) {
-		assert(idtype == P_ANY);
+	} else if(~options & WNOHANG) {
+		assert(idtype == P_ALL);
 		/* TODO: this may fail in htable_add(), but the wait(2) family doesn't
 		 * allow for -ENOMEM return value. in practice it's very unlikely to
 		 * do so since 32-bit L4.X2 permits up to 256k threads which would
