@@ -1400,7 +1400,7 @@ static void parse_initrd_args(struct htable *dest)
 
 /* TODO: move into bootcon.c */
 
-static int bootcon_read(int cookie, off_t length, off_t offset,
+static int bootcon_read(int cookie, int length, off_t offset,
 	uint8_t *buf, unsigned *len_p)
 {
 	*len_p = 0;
@@ -1434,7 +1434,7 @@ static int bootcon_dup(int *new_p, int old, int flags) {
 }
 
 
-static int bootcon_dup_to(int *newfd_ptr, int oldfd, int receiver_pid) {
+static int bootcon_dup_to(int *newfd_ptr, int oldfd, pid_t receiver_pid) {
 	*newfd_ptr = oldfd;
 	return 0;
 }

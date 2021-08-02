@@ -13,8 +13,9 @@ exception Errno {
 };
 
 /* as in <sys/types.h> */
-typedef long id_t;
-typedef long off_t;
+typedef unsigned long id_t;
+typedef long pid_t;
+typedef long long off_t;
 typedef unsigned long ino_t;
 typedef long dev_t;
 typedef long mode_t;

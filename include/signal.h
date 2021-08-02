@@ -3,6 +3,7 @@
 #define _SIGNAL_H
 
 #include <stdint.h>
+#include <sys/types.h>
 
 /* from the host environment, because it appears to work. */
 #include <bits/signum.h>
@@ -20,10 +21,9 @@ typedef __sighandler_t sighandler_t;
 typedef struct __siginfo_s
 {
 	int si_signo, si_errno, si_code, si_trapno, si_status;
-	int si_pid, si_uid;
-#if 0
 	pid_t si_pid;
 	uid_t si_uid;
+#if 0
 	clock_t si_utime, si_stime;
 	sigval_t si_value;
 	int si_int;
@@ -78,7 +78,7 @@ extern int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 extern int sigpending(sigset_t *set);
 extern int sigsuspend(const sigset_t *mask);
 
-extern int kill(int __pid, int __sig);
+extern int kill(pid_t __pid, int __sig);
 extern int raise(int __sig);
 
 

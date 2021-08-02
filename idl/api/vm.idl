@@ -27,7 +27,7 @@ interface VM
 	 * system minimum physical page size.
 	 */
 	void mmap(
-		in Posix::id_t target_pid,
+		in Posix::pid_t target_pid,
 		inout word addr, in word length, in long prot, in long flags,
 		in L4X2::ThreadId fd_serv, in IO::handle fd,
 		in Posix::off_t offset)
@@ -42,7 +42,7 @@ interface VM
 	 * otherwise a copy-on-write duplicate of @srcpid is created and the UTCB
 	 * and KIP areas inherited.
 	 */
-	void fork(in Posix::id_t srcpid, in Posix::id_t destpid)
+	void fork(in Posix::pid_t srcpid, in Posix::pid_t destpid)
 		raises(Posix::Errno);
 
 	/* systask only. configuration of freshly-created address spaces. @utcb
@@ -53,7 +53,7 @@ interface VM
 	 */
 	void configure(
 		out word last_resv,
-		in Posix::id_t pid,
+		in Posix::pid_t pid,
 		in L4X2::Fpage utcb, in L4X2::Fpage kip)
 			raises(Posix::Errno);
 
@@ -66,7 +66,7 @@ interface VM
 	 * be nonzero.
 	 */
 	void upload_page(
-		in Posix::id_t target_pid,
+		in Posix::pid_t target_pid,
 		in word addr, in page data,
 		in long prot, in long flags)
 			raises(Posix::Errno);
@@ -88,7 +88,7 @@ interface VM
 	 * returns EPERM when called from userspace and EINVAL if @pid isn't
 	 * associated with an existing address space.
 	 */
-	void erase(in Posix::id_t pid)
+	void erase(in Posix::pid_t pid)
 		raises(Posix::Errno);
 };
 

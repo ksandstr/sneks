@@ -248,7 +248,7 @@ extern int io_impl_write(int, off_t, const uint8_t *, unsigned);
 extern int io_impl_read(int, int, off_t, uint8_t *, unsigned *);
 extern int io_impl_close(int);
 extern int io_impl_dup(int *, int, int);
-extern int io_impl_dup_to(int *, int, int);
+extern int io_impl_dup_to(int *, int, pid_t);
 extern int io_impl_touch(int);
 extern int io_impl_stat_handle(int fd, struct sneks_io_statbuf *result_ptr);
 

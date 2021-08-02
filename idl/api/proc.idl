@@ -10,6 +10,7 @@
 
 #define uid_t Posix::id_t
 #define gid_t Posix::id_t
+#define pid_t Posix::pid_t
 
 
 module Sneks {
@@ -77,8 +78,10 @@ interface Proc
 		in fd_servs servs, in fd_cookies handles, in fd_fds fds)
 			raises(Posix::Errno);
 
-	/* like POSIX kill(2) */
-	void kill(in long pid, in long sig)
+	/* like POSIX kill(2) except that @pid is signed so that it can carry
+	 * negative values, where Posix::id_t can be unsigned (and is).
+	 */
+	void kill(in pid_t pid, in long sig)
 		raises(muidl::NoReply, Posix::Errno);
 
 	/* POSIX exit(3). since there's no waitpid(2), @status goes nowhere. */
@@ -92,7 +95,7 @@ interface Proc
 	 */
 	[Label(0x1235)]	/* see create_thread */
 	void wait(
-		[MR(1)] out long si_pid, [MR(2)] out long si_uid,
+		[MR(1)] out pid_t si_pid, [MR(2)] out uid_t si_uid,
 		[MR(3)] out long si_signo, [MR(4)] out long si_status,
 		[MR(5)] out long si_code,
 		in long idtype, in long id, in long options)

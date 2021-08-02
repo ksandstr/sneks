@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <assert.h>
 #include <signal.h>
+#include <sys/types.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -131,7 +132,7 @@ void sig_send(struct process *p, int sig, bool self)
 }
 
 
-int root_uapi_kill(int pid, int sig)
+int root_uapi_kill(pid_t pid, int sig)
 {
 	struct process *p = get_process(pid);
 	if(p == NULL) return -ESRCH;

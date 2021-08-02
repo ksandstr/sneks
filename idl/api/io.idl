@@ -68,9 +68,11 @@ interface IO
 		raises(Posix::Errno, muidl::NoReply);
 
 	/* unlike pread(2), @offset can be -1 in which case the file's own
-	 * position is both used and modified.
+	 * position is both used and modified. @length is not Posix::off_t
+	 * to match the L4.X2 string transfer limit of 124M even when off_t
+	 * changes to long long.
 	 */
-	void read(in handle fd, in Posix::off_t length, in Posix::off_t offset,
+	void read(in handle fd, in long length, in Posix::off_t offset,
 		out ioseg buf)
 		raises(Posix::Errno, muidl::NoReply);
 
@@ -97,7 +99,7 @@ interface IO
 	 * lifecycle. once touch() is called, the dup_to() caller is no longer
 	 * allowed access to @newfd.
 	 */
-	void dup_to(out handle newfd, in handle oldfd, in Posix::id_t receiver_pid)
+	void dup_to(out handle newfd, in handle oldfd, in Posix::pid_t receiver_pid)
 		raises(Posix::Errno);
 	void touch(in handle newfd)
 		raises(Posix::Errno);

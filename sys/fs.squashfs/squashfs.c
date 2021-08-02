@@ -1134,7 +1134,7 @@ static int squashfs_open(int *handle_p,
 }
 
 
-static int squashfs_seek(int handle, int *offset_p, int whence)
+static int squashfs_seek(int handle, off_t *offset_p, int whence)
 {
 	sync_confirm();
 
@@ -1349,9 +1349,10 @@ static void confirm_seekdir(L4_Word_t newpos, iof_t *file) {
 }
 
 
-static int squashfs_seekdir(int dirfd, int *position_ptr)
+static int squashfs_seekdir(int dirfd, off_t *position_ptr)
 {
 	sync_confirm();
+	if(*position_ptr < 0) return -EINVAL;
 
 	iof_t *file = io_get_file(CALLER_PID, dirfd);
 	if(file == NULL) return -EBADF;
@@ -1360,7 +1361,7 @@ static int squashfs_seekdir(int dirfd, int *position_ptr)
 		return -EBADF;
 	}
 
-	set_confirm(&confirm_seekdir, max(*position_ptr, 0), file);
+	set_confirm(&confirm_seekdir, max_t(L4_Word_t, *position_ptr, 0), file);
 	*position_ptr = file->pos;
 	return 0;
 }
@@ -1373,7 +1374,7 @@ static void rollback_getdents(L4_Word_t last_pos, iof_t *file) {
 }
 
 
-static int squashfs_getdents(int dirfd, int *offset_ptr, int *endpos_ptr,
+static int squashfs_getdents(int dirfd, off_t *offset_ptr, off_t *endpos_ptr,
 	uint8_t *data_buf, unsigned *data_len_p)
 {
 	sync_confirm();
@@ -1384,7 +1385,10 @@ static int squashfs_getdents(int dirfd, int *offset_ptr, int *endpos_ptr,
 		return -EBADF;
 	}
 
-	int dix = *offset_ptr >= 0 ? *offset_ptr : file->pos,
+	/* NOTE: the (int) cast here is to avoid what's seemingly a
+	 * miscompilation, but may instead just be muidl fuckery.
+	 */
+	int dix = (int)*offset_ptr >= 0 ? *offset_ptr : file->pos,
 		n = 0, got = 0, buf_pos = 0,
 		limit = min(USHRT_MAX, max(2, file->dir.last_fetch * 2));
 	*offset_ptr = file->pos;

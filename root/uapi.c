@@ -1292,7 +1292,7 @@ static void call_destroy_process(L4_Word_t dead_ptr, void *self_ptr)
 
 
 static int uapi_wait(
-	int32_t *si_pid_p, int32_t *si_uid_p, int32_t *si_signo_p,
+	pid_t *si_pid_p, uid_t *si_uid_p, int32_t *si_signo_p,
 	int32_t *si_status_p, int32_t *si_code_p,
 	int32_t idtype, int32_t id, int32_t options)
 {

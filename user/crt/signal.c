@@ -5,6 +5,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include <assert.h>
+#include <limits.h>
 #include <errno.h>
 
 #include <l4/types.h>
@@ -36,7 +37,7 @@ int pause(void)
 }
 
 
-int kill(int pid, int signum)
+int kill(pid_t pid, int signum)
 {
 	int n = __proc_kill(__the_sysinfo->api.proc, pid, signum);
 	if(n == 0) {

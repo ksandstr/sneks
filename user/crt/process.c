@@ -46,7 +46,7 @@ static char *p_to_argbuf(char *const strp[])
 }
 
 
-int getpid(void) {
+pid_t getpid(void) {
 	/* well isn't that just fucking twee */
 	return pidof_NP(L4_MyGlobalId());
 }

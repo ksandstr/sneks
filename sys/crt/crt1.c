@@ -185,7 +185,7 @@ void *sbrk(intptr_t increment)
 }
 
 
-int getpid(void) {
+pid_t getpid(void) {
 	return pidof_NP(L4_Myself());
 }
 

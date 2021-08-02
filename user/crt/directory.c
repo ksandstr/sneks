@@ -74,7 +74,7 @@ DIR *fdopendir(int fd)
 {
 	struct fd_bits *bits = __fdbits(fd);
 	if(bits == NULL) { errno = EBADF; return NULL; }
-	int pos = 0;
+	off_t pos = 0;
 	int n = __dir_seekdir(bits->server, bits->handle, &pos);
 	if(n != 0) {
 		NTOERR(n);
@@ -116,7 +116,7 @@ struct dirent *readdir(DIR *dirp)
 			(int)sizeof(struct sneks_directory_dentry) -
 				offsetof(struct dirent, d_name));
 		struct fd_bits *bits = __fdbits(dirp->dirfd);
-		int offset = dirp->tellpos, endpos = -1;
+		off_t offset = dirp->tellpos, endpos = -1;
 		dirp->raw_bytes = SNEKS_DIRECTORY_DENTSBUF_MAX;
 		int n = __dir_getdents(bits->server, &dirp->remain, bits->handle,
 			&offset, &endpos, &dirp->dents_raw[read_start], &dirp->raw_bytes);
@@ -166,7 +166,7 @@ void seekdir(DIR *dirp, long loc)
 	if(!DIRP_VALID(dirp)) return;
 
 	struct fd_bits *bits = __fdbits(dirp->dirfd);
-	__dir_seekdir(bits->server, bits->handle, &(int){ loc });
+	__dir_seekdir(bits->server, bits->handle, &(off_t){ loc });
 	/* sadly there is no chance to report this error. */
 	dirp->tellpos = loc;
 	dirp->next = -1;
