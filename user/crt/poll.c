@@ -3,7 +3,9 @@
 #include <string.h>
 #include <assert.h>
 #include <errno.h>
+#include <unistd.h>
 #include <poll.h>
+#include <sys/types.h>
 #include <sys/select.h>
 #include <sys/epoll.h>
 
@@ -28,11 +30,12 @@ int select(
 	int epfd = epoll_create1(0);
 	if(epfd < 0) return -1;
 
-	int n_evs = 0, limbs = (nfds + __UINTPTR_BITS - 1) / __UINTPTR_BITS;
+	const int limb_bits = 8 * sizeof readfds->fds_bits[0];
+	int n_evs = 0, limbs = (nfds + limb_bits - 1) / limb_bits;
 	for(int j=0; j < limbs; j++) {
-		int i = ffsl(readfds->__w[j] | writefds->__w[j] | exceptfds->__w[j]);
+		int i = ffsl(readfds->fds_bits[j] | writefds->fds_bits[j] | exceptfds->fds_bits[j]);
 		if(i == 0) continue;
-		i += j-- * __UINTPTR_BITS - 1;
+		i += j-- * limb_bits - 1;
 
 		int evs = 0;
 		if(FD_ISSET(i, readfds)) {
@@ -101,29 +104,6 @@ int pselect(
 	/* TODO? eventually, alongside other "p" variants. */
 	errno = ENOSYS;
 	return -1;
-}
-
-
-#undef FD_CLR
-inline void FD_CLR(int fd, fd_set *set) {
-	set->__w[fd / __UINTPTR_BITS] &= ~(1ul << (fd % __UINTPTR_BITS));
-}
-
-
-#undef FD_ISSET
-inline int FD_ISSET(int fd, fd_set *set) {
-	return !!(set->__w[fd / __UINTPTR_BITS] & (1ul << (fd % __UINTPTR_BITS)));
-}
-
-
-#undef FD_SET
-inline void FD_SET(int fd, fd_set *set) {
-	set->__w[fd / __UINTPTR_BITS] |= 1ul << (fd % __UINTPTR_BITS);
-}
-
-
-inline void FD_ZERO(fd_set *set) {
-	memset(set, 0, sizeof *set);
 }
 
 

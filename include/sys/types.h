@@ -8,8 +8,6 @@
 
 #include <stdint.h>
 
-#define FD_SETSIZE 1024
-
 /* size_t depends on the target; use compiler headers. */
 #define __need_size_t
 #include <stddef.h>
@@ -30,10 +28,6 @@ typedef int32_t dev_t;
 typedef uint32_t ino_t;
 typedef int32_t nlink_t, blksize_t, blkcnt_t;
 
-
-typedef struct {
-	uintptr_t __w[FD_SETSIZE / (sizeof(uintptr_t) * 8)];
-} fd_set;
 
 /* ... and others */
 
