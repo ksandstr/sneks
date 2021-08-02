@@ -5,11 +5,6 @@
 #include <l4/types.h>
 
 
-/* namespace pollution guard. in a standard environment, userspace programs
- * shouldn't be impacted by this stuff.
- */
-#ifdef __SNEKS__
-
 #define SNEKS_MAX_PID 32767
 #define SNEKS_MIN_SYSID 50000	/* for legibility */
 
@@ -77,8 +72,6 @@ static inline struct sneks_fdlist *sneks_fdlist_next(
 {
 	return (void *)cur + cur->next;
 }
-
-#endif
 
 
 extern unsigned pidof_NP(L4_ThreadId_t tid);

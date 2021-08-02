@@ -14,6 +14,7 @@
 #include <l4/types.h>
 
 #include <sneks/sysinfo.h>
+#include <sneks/process.h>
 #include <sneks/api/io-defs.h>
 #include <sneks/api/proc-defs.h>
 
