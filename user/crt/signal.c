@@ -11,6 +11,7 @@
 #include <l4/types.h>
 #include <l4/ipc.h>
 
+#include <sneks/signal.h>
 #include <sneks/sysinfo.h>
 #include <sneks/api/proc-defs.h>
 
@@ -93,18 +94,16 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *oldset)
 {
 	uint64_t or = 0, and = ~0ull;
 	switch(how) {
-		case SIG_BLOCK: or = *set; break;
-		case SIG_UNBLOCK: and = ~*set; break;
-		case SIG_SETMASK: or = *set; and = 0; break;
+		case SIG_BLOCK: or = __set2mask(set); break;
+		case SIG_UNBLOCK: and = ~__set2mask(set); break;
+		case SIG_SETMASK: or = __set2mask(set); and = 0; break;
 		default:
 			errno = EINVAL;
 			return -1;
 	}
 
-	sigset_t foo = 0;
-	if(oldset == NULL) oldset = &foo;
-
-	int n = __proc_sigset(__the_sysinfo->api.proc, oldset, 2, or, and);
+	uint64_t old;
+	int n = __proc_sigset(__the_sysinfo->api.proc, &old, 2, or, and);
 	if(n == 0) {
 		if(how == SIG_UNBLOCK || how == SIG_SETMASK) {
 			atomic_signal_fence(memory_order_acq_rel);
@@ -112,13 +111,16 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *oldset)
 		}
 	}
 
+	if(oldset != NULL) *oldset = __mask2set(old);
 	return NTOERR(n);
 }
 
 
 int sigpending(sigset_t *set)
 {
-	int n = __proc_sigset(__the_sysinfo->api.proc, set, 3, 0, ~0ull);
+	uint64_t pending;
+	int n = __proc_sigset(__the_sysinfo->api.proc, &pending, 3, 0, ~0ull);
+	*set = __mask2set(pending);
 	return NTOERR(n);
 }
 
@@ -126,8 +128,8 @@ int sigpending(sigset_t *set)
 int sigsuspend(const sigset_t *mask)
 {
 	__permit_recv_interrupt();
-	uint16_t sig;
-	int n = __proc_sigsuspend(__the_sysinfo->api.proc, &sig, *mask);
+	unsigned short sig;
+	int n = __proc_sigsuspend(__the_sysinfo->api.proc, &sig, __set2mask(mask));
 	__forbid_recv_interrupt();
 	if(n != 0) return NTOERR(n);
 	else {

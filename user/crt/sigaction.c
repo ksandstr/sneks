@@ -18,6 +18,7 @@
 #include <l4/ipc.h>
 
 #include <sneks/sysinfo.h>
+#include <sneks/signal.h>
 #include <sneks/api/proc-defs.h>
 
 #include "private.h"
@@ -462,7 +463,7 @@ void __attribute__((regparm(3))) __sig_invoke(int sig, ucontext_t *uctx)
 		 * recursion.
 		 */
 		volatile uint64_t masked;
-		uint64_t old = atomic_load(&block_set), eff_mask = act->sa_mask;
+		uint64_t old = atomic_load(&block_set), eff_mask = __set2mask(&act->sa_mask);
 		if(~act->sa_flags & SA_NODEFER) eff_mask |= 1ull << (sig - 1);
 		do {
 			masked = eff_mask & ~old;

@@ -9,7 +9,10 @@
 #include <bits/signum.h>
 
 
-typedef uint64_t sigset_t;
+typedef struct __sigset_t {
+	unsigned long __bits[128 / sizeof(long)];
+} sigset_t;
+
 typedef int sig_atomic_t;
 typedef void (*__sighandler_t)(int);
 typedef __sighandler_t sighandler_t;
