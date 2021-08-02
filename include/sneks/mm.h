@@ -9,9 +9,12 @@
 #include <sneks/bitops.h>
 
 
+#ifdef __SNEKS__
+
 #define PAGE_BITS 12
 #define PAGE_MASK ((1u << PAGE_BITS) - 1)
 #define PAGE_SIZE (PAGE_MASK + 1)
+
 
 
 /* memory attributes for Sysmem::alter_flags */
@@ -53,5 +56,7 @@ static inline bool fpage_overlap(L4_Fpage_t a, L4_Fpage_t b)
 	L4_Word_t mask = ~((1ul << max_t(int, L4_SizeLog2(a), L4_SizeLog2(b))) - 1);
 	return ((a.raw ^ b.raw) & mask) == 0;
 }
+
+#endif
 
 #endif

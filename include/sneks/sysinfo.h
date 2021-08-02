@@ -47,17 +47,19 @@ struct __sysinfo
 } __attribute__((__packed__));
 
 
+#if defined(PAGE_SIZE)
 /* in userspace, sysinfopage is always located after the kernel information
  * page. this makes it easy to find using simple maths. note that the return
  * value is still read-only despite not being marked const.
  */
 static inline struct __sysinfo *__get_sysinfo(L4_KernelInterfacePage_t *kip)
 {
-	uintptr_t base = ((uintptr_t)kip + PAGE_SIZE - 1) & ~PAGE_MASK;
+	uintptr_t base = ((uintptr_t)kip + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 	struct __sysinfo *si = (struct __sysinfo *)(base + L4_KipAreaSize(kip));
 	assert(si->magic == SNEKS_SYSINFO_MAGIC);
 	return si;
 }
+#endif
 
 
 #endif

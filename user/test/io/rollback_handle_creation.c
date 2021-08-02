@@ -38,6 +38,7 @@
 #include <sneks/api/file-defs.h>
 #include <sneks/api/directory-defs.h>
 #include <sneks/process.h>
+#include <sneks/sysinfo.h>
 #include <sneks/crtprivate.h>
 #include <sneks/test.h>
 

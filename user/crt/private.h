@@ -17,8 +17,6 @@
 #include <l4/types.h>
 #include <l4/kip.h>
 
-#include <sneks/sysinfo.h>
-
 
 #define MAX_FD ((1 << 15) - 1)	/* TODO: get from sysconf(), stash somewhere */
 
@@ -34,6 +32,9 @@ struct resolve_out {
 	L4_Word_t cookie;
 	int ifmt;
 };
+
+
+struct __sysinfo;
 
 
 extern L4_KernelInterfacePage_t *__the_kip;

@@ -17,6 +17,7 @@
 #include <l4/types.h>
 #include <l4/ipc.h>
 
+#include <sneks/sysinfo.h>
 #include <sneks/api/proc-defs.h>
 
 #include "private.h"

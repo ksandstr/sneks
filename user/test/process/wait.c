@@ -16,6 +16,10 @@
 #include <l4/thread.h>
 #include <l4/ipc.h>
 #include <l4/kip.h>
+#ifndef __SNEKS__
+#define __SNEKS__
+#endif
+#include <sneks/mm.h>
 #include <sneks/sysinfo.h>
 #endif
 

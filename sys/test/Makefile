@@ -7,7 +7,8 @@ LDFLAGS:=$(LDFLAGS) -e_start -nostdlib -L $(MUNG_DIR)/user/lib/l4 \
 	-L $(CFGDIR)/lib -L $(CFGDIR)/sys/crt
 # under -O3, GCC may produce SSE instructions in a runtime that doesn't align
 # the stack properly. FIXME: repair that, then remove -mstackrealign.
-CFLAGS:=$(CFLAGS) -D__KERNEL__ -D__sneks__=1 -D__l4x2__=1 -mstackrealign
+CFLAGS:=$(CFLAGS) -D__KERNEL__ -D__SNEKS__ -D__sneks__=1 -D__l4x2__=1 \
+	-mstackrealign
 
 OUTPUTS=systest initrd_spawn_partner initrd_systask_partner
 

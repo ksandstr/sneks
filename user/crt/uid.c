@@ -6,6 +6,8 @@
 #include <errno.h>
 #include <unistd.h>
 #include <sys/types.h>
+
+#include <sneks/sysinfo.h>
 #include <sneks/api/proc-defs.h>
 
 #include "private.h"
