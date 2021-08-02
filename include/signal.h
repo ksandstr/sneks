@@ -56,6 +56,14 @@ struct sigaction
 #define SIG_UNBLOCK 1			/* remove from block set & trigger pending */
 #define SIG_SETMASK 2			/* set mask & trigger pending if unblocked */
 
+/* SIGCHLD codes */
+#define CLD_EXITED 1
+#define CLD_KILLED 2
+#define CLD_DUMPED 3
+#define CLD_TRAPPED 4
+#define CLD_STOPPED 5
+#define CLD_CONTINUED 6
+
 /* realtime signals. */
 #define SIGRTMIN __SIGRTMIN
 #define SIGRTMAX __SIGRTMAX

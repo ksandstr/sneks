@@ -92,12 +92,6 @@ enum __idtype_e {
 #define WUNTRACED 2	/* report status of stopped children */
 /* TODO: WSTOPPED, WEXITED, WCONTINUED, WNOWAIT */
 
-#define CLD_EXITED 0
-#define CLD_KILLED 1
-#define CLD_DUMPED 2
-#define CLD_STOPPED 3
-#define CLD_TRAPPED 4
-#define CLD_CONTINUED 5
 
 
 extern unsigned pidof_NP(L4_ThreadId_t tid);
