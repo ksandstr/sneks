@@ -84,12 +84,6 @@ START_LOOP_TEST(deref_positive, iter, 0, 7)
 		btos(terminal), btos(absolute), btos(iterated));
 	plan_tests(5);
 
-#ifdef __sneks__
-	if(absolute) {
-		todo_start("unimplemented (pending muidl exception arc)");
-	}
-#endif
-
 	char pathspec[256];
 	snprintf(pathspec, sizeof pathspec,
 		TESTDIR "/user/test/io/symlink/%sterminal%s%s%s",

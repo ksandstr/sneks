@@ -1,5 +1,6 @@
 
 #define SQUASHFSIMPL_IMPL_SOURCE
+#define WANT_SNEKS_PATH_LABELS
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -41,6 +42,7 @@
 #include <sneks/api/file-defs.h>
 #include <sneks/api/directory-defs.h>
 #include <sneks/api/io-defs.h>
+#include <sneks/sys/info-defs.h>
 
 #include "muidl.h"
 #include "defs.h"
@@ -153,7 +155,7 @@ static char sfs_type_table[] = {
 	[SQUASHFS_SOCKET_TYPE] = DT_SOCK,
 };
 
-static L4_ThreadId_t boot_tid, dev_tid;
+static L4_ThreadId_t boot_tid, dev_tid, rootfs_tid;
 
 static bool device_nodes_enabled;
 static ino_t dev_ino = -1;
@@ -687,6 +689,107 @@ static int lookup(int *type, ino_t dir_ino, const char *name)
 }
 
 
+/* propagate resolution of an absolute symbolic link to the root resolver as
+ * the previous IDL sender. this function makes an attempt to send all
+ * remaining parts as a string transfer to not always alloca() 4k for a
+ * buffer.
+ */
+static int propagate_symlink(L4_ThreadId_t root_resolver,
+	const char *link, const char *path_rem,
+	const char *const *path_stack, int path_stack_pos,
+	L4_Word_t resolve_flags)
+{
+	while(link[0] == '/') link++;
+	int parts_left = 1 + (path_rem != NULL ? 1 : 0) + path_stack_pos, part = 0;
+	const int max_parts = 15;
+	L4_StringItem_t sibuf[max_parts * 2], *si = &sibuf[0];
+	if(parts_left <= max_parts) {
+		/* all parts fit as a gather transfer */
+		*si = L4_StringItem(strlen(link), (void *)link);
+		part++;
+		parts_left--;
+	} else {
+		/* build first max_parts - 1 in a buffer */
+		char *buf = alloca(SNEKS_PATH_PATH_MAX);
+		int bufpos = 0;
+		while(parts_left > max_parts - 1) {
+			parts_left--;
+			const char *src;
+			switch(part++) {
+				case 0: src = link; break;
+				case 1:
+					if(path_rem == NULL) continue;
+					src = path_rem;
+					break;
+				default:
+					assert(path_stack_pos > 0);
+					src = path_stack[--path_stack_pos];
+					break;
+			}
+			if(bufpos > 0 && buf[bufpos - 1] != '/') {
+				if(bufpos == SNEKS_PATH_PATH_MAX) goto Enametoolong;
+				buf[bufpos++] = '/';
+			}
+			int n = strscpy(buf + bufpos, src, SNEKS_PATH_PATH_MAX - bufpos);
+			if(n < 0) goto Enametoolong;
+			bufpos += n;
+			assert(bufpos < SNEKS_PATH_PATH_MAX);
+		}
+		*si = L4_StringItem(bufpos, buf);
+	}
+
+	/* build string items for the rest */
+	while(parts_left-- > 0) {
+		const char *src;
+		switch(part++) {
+			case 0: src = link; break;
+			case 1:
+				if(path_rem == NULL) continue;
+				src = path_rem;
+				break;
+			default:
+				assert(path_stack_pos > 0);
+				src = path_stack[--path_stack_pos];
+				break;
+		}
+		assert(si + 2 <= &sibuf[ARRAY_SIZE(sibuf)]);
+		si->X.c = 1; *(++si) = L4_StringItem(1, "/");
+		si->X.c = 1; *(++si) = L4_StringItem(strlen(src), (void *)src);
+	}
+
+	/* compose and send the message. */
+	assert(si < &sibuf[ARRAY_SIZE(sibuf)]);
+	int send_si = si - &sibuf[0] + 1;
+#if 0
+	log_info("propagating %d string items", send_si);
+	for(int i=0; i < send_si; i++) {
+		log_info("#%d=%d:`%s'", i, (int)sibuf[i].X.string_length,
+			(const char *)sibuf[i].X.str.string_ptr);
+	}
+#endif
+	L4_MsgTag_t tag = { .X.label = SNEKS_PATH_RESOLVE_LABEL, .X.u = 3, .X.t = send_si * 2 };
+	L4_Set_Propagation(&tag);
+	L4_Set_VirtualSender(muidl_get_sender());
+	L4_LoadMR(0, tag.raw);
+	L4_LoadMR(1, SNEKS_PATH_RESOLVE_SUBLABEL);
+	L4_LoadMR(2, 0);	/* TODO: get directory handle for submounts */
+	L4_LoadMR(3, resolve_flags);
+	L4_LoadMRs(4, send_si * 2, sibuf[0].raw);
+	tag = L4_Send(root_resolver);
+	if(L4_IpcFailed(tag)) {
+		log_err("propagating send failed, ec=%lu", L4_ErrorCode());
+		return -EIO;
+	}
+
+	muidl_raise_no_reply();
+	return 0;
+
+Enametoolong:
+	log_info("intermediate buffer exceeds Sneks::Path/PATH_MAX");
+	return -ENAMETOOLONG;
+}
+
+
 /* FIXME: this doesn't handle trailing slashes well at all. */
 static int squashfs_resolve(
 	unsigned *object_ptr, L4_Word_t *server_ptr,
@@ -734,10 +837,12 @@ static int squashfs_resolve(
 		const bool is_last = slash == NULL && path_stack_pos == 0;
 		const char *part;
 		if(slash == NULL) {
+			/* final component */
 			part = path;
 			if(path_stack_pos == 0) {
-				/* NOTE: this might be redundant as is_last will be true. */
-				path += strlen(path);
+				/* of the final remainder. */
+				assert(is_last);
+				path = NULL;
 			} else {
 				assert(path_stack_pos > 0);
 				path = path_stack[--path_stack_pos];
@@ -790,12 +895,8 @@ static int squashfs_resolve(
 				return -EIO;
 			}
 			if(nod->symlink[0] == '/') {
-				/* TODO: form the aggregate path and pop it out for the caller
-				 * to resolve. this requires the muidl exception arc which
-				 * isn't quite here yet.
-				 */
-				log_err("symlink `%s' is absolute (not handled)", nod->symlink);
-				return -ENOTDIR;
+				return propagate_symlink(rootfs_tid, nod->symlink, path,
+					path_stack, path_stack_pos, flags);
 			}
 			size_t hash = rehash_inode(nod, NULL);
 			struct inode *loop = htable_get(&symlink_loop_hash, hash, &cmp_inode_ino, &(ino_t){ ino });
@@ -1505,6 +1606,15 @@ static void fs_initialize(void)
 			}
 		}
 	}
+
+	/* fetch root resolver tid in rootfs_tid. */
+	struct sneks_uapi_info ui;
+	int n = __info_uapi_block(L4_Pager(), &ui);
+	if(n != 0) {
+		log_crit("can't get uapi info block, n=%d", n);
+		abort();
+	}
+	rootfs_tid.raw = ui.service;
 }
 
 

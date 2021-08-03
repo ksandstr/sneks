@@ -41,9 +41,6 @@ interface Path
 	 *
 	 * @path is always relative to @dirfd, so it should never have a leading
 	 * slash.
-	 *
-	 * TODO: remove the explicit register specs once muidl gets a nicer
-	 * generated propagation feature.
 	 */
 	void resolve(
 		out object inode, out L4X2::ThreadId server,
