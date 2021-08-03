@@ -160,9 +160,11 @@ COLD void __file_init(struct sneks_fdlist *fdlist)
 		} while(n >= 0 && fdlist->next != 0);
 	}
 
+#ifdef __SNEKS__
 	stdin = fdopen(0, "r");
 	stdout = fdopen(1, "w");
 	stderr = fdopen(2, "w");
+#endif
 
 	if(n < 0) {
 		fprintf(stderr, "%s: __create_fd() failed, n=%d\n", __func__, n);
@@ -194,7 +196,7 @@ int close(int fd)
 }
 
 
-long read(int fd, void *buf, size_t count)
+ssize_t read(int fd, void *buf, size_t count)
 {
 	struct fd_bits *b = __fdbits(fd);
 	if(b == NULL) { errno = EBADF; return -1; }
@@ -213,7 +215,7 @@ long read(int fd, void *buf, size_t count)
 }
 
 
-long write(int fd, const void *buf, size_t count)
+ssize_t write(int fd, const void *buf, size_t count)
 {
 	struct fd_bits *b = __fdbits(fd);
 	if(b == NULL) { errno = EBADF; return -1; }
