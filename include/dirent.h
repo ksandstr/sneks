@@ -35,8 +35,8 @@ struct dirent {
 #define _DIRENT_HAVE_D_TYPE 1
 
 
-struct __stdio_dir;
-typedef struct __stdio_dir DIR;
+struct __dirstream;
+typedef struct __dirstream DIR;
 
 
 extern DIR *opendir(const char *name);

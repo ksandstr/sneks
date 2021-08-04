@@ -22,7 +22,7 @@
 #define DIRP_VALID(dirp) ((dirp) != NULL && __fdbits((dirp)->dirfd) != NULL)
 
 
-struct __stdio_dir
+struct __dirstream
 {
 	int dirfd;
 	off_t tellpos;
@@ -39,10 +39,7 @@ struct __stdio_dir
 DIR *opendir(const char *name)
 {
 	DIR *dirp = malloc(sizeof *dirp);
-	if(dirp == NULL) {
-		errno = ENOMEM;
-		return NULL;
-	}
+	if(dirp == NULL) return NULL;
 	dirp->dirfd = open(name, O_DIRECTORY | O_RDONLY);
 	if(dirp->dirfd < 0) {
 		free(dirp);
