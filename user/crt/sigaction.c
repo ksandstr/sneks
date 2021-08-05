@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <ccan/likely/likely.h>
 #include <ccan/minmax/minmax.h>
+#include <ccan/array_size/array_size.h>
 
 #include <l4/types.h>
 #include <l4/ipc.h>
@@ -122,7 +123,7 @@ static int next_signal(void)
 				 */
 				oldst = atomic_load_explicit(&sigq_status, memory_order_relaxed);
 			} else {
-				got += __SIGRTMIN - 1;
+				got += SIGRTMIN - 1;
 				assert((oldst >> 32) == 0);
 				newst = headptr | tailptr << SIGQBITS;
 			}
@@ -438,7 +439,6 @@ void __attribute__((regparm(3))) __sig_invoke(int sig, ucontext_t *uctx)
 	/* (of course we're squeezing other things through there.) */
 	const bool recv_break_ok = !!(sig & 0x100);
 	sig &= 0xff;
-	assert(sig > 0);
 
 	/* set signal_uctx so that the first __sig_invoke() re-/sets it and
 	 * inner handlers share that pointer.
@@ -450,6 +450,7 @@ void __attribute__((regparm(3))) __sig_invoke(int sig, ucontext_t *uctx)
 
 	jmp_buf sigjmpbuf;
 	do {
+		assert(sig > 0 && sig - 1 < ARRAY_SIZE(sig_actions));
 		const struct sigaction *act = &sig_actions[sig - 1];
 
 		/* FIXME: handle these. they'll appear when a dfl/ign signal appears
@@ -528,14 +529,15 @@ noreturn void longjmp(jmp_buf env, int val)
 	if(val == 0) val = 1;
 	if(signal_jmp != NULL) {
 		assert(signal_uctx != NULL);
-		mcontext_t *m = &signal_uctx->mcontext;
-		m->eax = val;
-		m->ebx = env->regs[0];
-		m->esi = env->regs[1];
-		m->edi = env->regs[2];
-		m->ebp = env->regs[3];
-		m->eip = env->regs[4];
-		m->esp = env->regs[5] + 4;
+		mcontext_t *m = &signal_uctx->uc_mcontext;
+		unsigned long *env_regs = &env->__jb[0];
+		m->gregs[REG_EAX] = val;
+		m->gregs[REG_EBX] = env_regs[0];
+		m->gregs[REG_ESI] = env_regs[1];
+		m->gregs[REG_EDI] = env_regs[2];
+		m->gregs[REG_EBP] = env_regs[3];
+		m->gregs[REG_ESP] = env_regs[4];
+		m->gregs[REG_EIP] = env_regs[5];
 		__longjmp_actual(*signal_jmp, 1);
 	} else {
 		__longjmp_actual(env, val);

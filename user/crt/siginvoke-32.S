@@ -1,4 +1,6 @@
 
+#include <asm/ucontext-offsets.h>
+
 # __invoke_sig_fast and __invoke_sig_slow, as used from sig_bottom() in
 # user/crt/sigaction.c, but also __invoke_sig_sync() for direct calling
 # when sig_bottom() runs from e.g. sigprocmask(SIG_UNBLOCK, ...).
@@ -36,17 +38,29 @@ __invoke_sig_fast:
 	.align 64,0
 
 # this routine is invoked with the parameters in front of the return address,
-# rather than after, so that it can popf;ret for an epilogue, thereby restoring
-# user context.
-__invoke_sig_slow:	# (sig, flags, ip)
-	pushal
-	addl $12, 12(%esp)	# remove params from pushed %esp
+# rather than after, so that it can popf;ret for an epilogue.
+__invoke_sig_slow:	# (0:sig, 4:flags, 8:ip)
+	subl $ucontext_t_size, %esp	# allomacate us an ucontext
+	movl %edi, o_uc_mcontext + o_gregs + oEDI(%esp)
+	movl %esi, o_uc_mcontext + o_gregs + oESI(%esp)
+	movl %ebp, o_uc_mcontext + o_gregs + oEBP(%esp)
+	leal ucontext_t_size + 12(%esp), %esi # pop params from stored %esp
+	movl %esi, o_uc_mcontext + o_gregs + oESP(%esp)
+	movl %ebx, o_uc_mcontext + o_gregs + oEBX(%esp)
+	movl %edx, o_uc_mcontext + o_gregs + oEDX(%esp)
+	movl %ecx, o_uc_mcontext + o_gregs + oECX(%esp)
+	movl %eax, o_uc_mcontext + o_gregs + oEAX(%esp)
+	movl ucontext_t_size + 8(%esp), %esi
+	movl %esi, o_uc_mcontext + o_gregs + oEIP(%esp)
+	movl $0, o_uc_link(%esp)
+	# TODO: fill rest of ucontext_t here
 	movl %gs:0, %ebx	# UTCB
-	# stash errno in the signum position, put signum in first regparm.
+	# stash errno at very bottom.
 	call __errno_location
-	mov (%eax), %eax
-	xchgl %eax, 32(%esp)
-	# store vregs in ascending order.
+	movl %esp, %edx	# second regparm: ucontext_t ptr
+	pushl (%eax)
+	movl ucontext_t_size+4(%esp), %eax # first regparm: signum
+	# then vregs in ascending order.
 	pushl -40(%ebx)	# cop/preempt flags
 	pushl -36(%ebx)	# errorcode
 	pushl -32(%ebx) # xfertimeouts
@@ -54,20 +68,17 @@ __invoke_sig_slow:	# (sig, flags, ip)
 	pushl -24(%ebx) # virtualsender/actualsender
 	pushl -20(%ebx) # threadword1
 	pushl -16(%ebx) # threadword0
-	# store MRs and BRs on stack.
+	# store MRs and BRs.
 	subl $0x184, %esp	# 64 + 33 words
 	movl %ebx, %esi		# address of MR0..MR63
-	movl %esp, %edi		# storage area
+	movl %esp, %edi		# start of storage area
 	movl $64, %ecx
 	rep movsl (%esi), (%edi)
 	leal -192(%ebx), %esi	# address of BR32..BR0
 	movl $33, %ecx
 	rep movsl (%esi), (%edi)
-	# rest of ucontext_t
-	pushl $0	# ->link
-	movl %esp, %edx	# second regparm: ucontext_t ptr
+	# invoke signal handling
 	call __sig_invoke
-	addl $4, %esp
 	# restore MRs and BRs.
 	# NOTE: retention of UTCB pointer in %ebx means that userspace threads
 	# may not return from __sig_invoke on a different kernel thread than
@@ -89,26 +100,24 @@ __invoke_sig_slow:	# (sig, flags, ip)
 	popl -36(%ebx)
 	popl -40(%ebx)
 	# restore errno.
-	movl 32(%esp), %esi
 	call __errno_location
-	movl %esi, (%eax)
-	# conditionally load ucontext %esp
-	movl 12(%esp), %eax
-	leal 44(%esp), %ecx
-	cmpl %eax, %ecx	# changed by handler?
-	jne 1f		# yes: take even slower still a path
-	popal
-	addl $4, %esp	# no: drop errno
-	popf
-	ret
-1:	# construct flags,eip in ucontext %esp
+	popl (%eax)
+	# restore GPRs. construct flags+eip in context %esp to permit
+	# swapcontext() funny business.
+	movl o_uc_mcontext + o_gregs + oESP(%esp), %eax
+	movl ucontext_t_size + 4(%esp), %edi
+	movl o_uc_mcontext + o_gregs + oEIP(%esp), %esi
 	subl $8, %eax
-	movl 36(%esp), %ecx
-	movl %ecx, (%eax)
-	movl 40(%esp), %ecx
-	movl %ecx, 4(%eax)
-	movl %eax, 32(%esp)	# reuse sig/errno for incoming %esp
-	popal
-	popl %esp
+	movl %esi, 4(%eax)	# ucontext_t eip
+	movl %edi, (%eax)	# flags
+	movl o_uc_mcontext + o_gregs + oEDI(%esp), %edi
+	movl o_uc_mcontext + o_gregs + oESI(%esp), %esi
+	movl o_uc_mcontext + o_gregs + oEBP(%esp), %ebp
+	movl o_uc_mcontext + o_gregs + oEBX(%esp), %ebx
+	movl o_uc_mcontext + o_gregs + oEDX(%esp), %edx
+	movl o_uc_mcontext + o_gregs + oECX(%esp), %ecx
+	movl o_uc_mcontext + o_gregs + oEAX(%esp), %esp
+	xchgl %esp, %eax
+	# return w/ flags
 	popf
 	ret

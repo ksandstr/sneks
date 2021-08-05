@@ -1,4 +1,3 @@
-
 /* how to fork in userspace.
  *
  * mung's testbench uses the older method of starting a helper thread and popping
@@ -31,38 +30,37 @@
 pid_t fork(void)
 {
 	/* TODO: call thread atfork()s */
-	/* TODO: mtx_lock(__malloc_lock); */
+	/* TODO: mtx_lock(__malloc_lock); et al. runtime locks */
 	/* TODO: __thrd_halt_all_NP(); incl. mutex thread etc. */
 	/* TODO: generate file descriptor buffers */
 
-	char tmpstack[128];
-	volatile L4_ThreadId_t parent_tid = L4_Myself();
+	pid_t child_pid;
+	volatile L4_ThreadId_t parent_tid = L4_MyGlobalId();
 	ucontext_t child_ctx;
 	getcontext(&child_ctx);
-	if(pidof_NP(parent_tid) != pidof_NP(L4_Myself())) {
+	if(parent_tid.raw != L4_MyGlobalId().raw) {
 		/* CHILD SIDE. */
-		/* TODO: unpack the child's files and whatnot. */
-		return 0;
+		child_pid = 0;
+	} else {
+		/* PARENT SIDE. launch the child process. */
+		char tmpstack[128] __attribute__((aligned(16)));
+		volatile L4_Word_t *stktop = (L4_Word_t *)&tmpstack[sizeof tmpstack];
+		*(--stktop) = (L4_Word_t)&child_ctx;
+		*(--stktop) = 0xdeadbeef;	/* faux return address */
+
+		L4_ThreadId_t child_tid;
+		int n = __proc_fork(__the_sysinfo->api.proc, &child_tid.raw,
+			(L4_Word_t)stktop, (L4_Word_t)&setcontext);
+		if(n == 0) child_pid = pidof_NP(child_tid);
+		else {
+			/* FIXME: set errno */
+			fprintf(stderr, "%s: Proc::fork failed, n=%d\n", __func__, n);
+			child_pid = -1;
+		}
 	}
 
-	L4_Word_t *volatile stktop = (L4_Word_t *)&tmpstack[sizeof tmpstack - 16];
-	*(--stktop) = (L4_Word_t)&child_ctx;
-	*(--stktop) = 0xdeadbeef;	/* faux return address */
-
-	pid_t child_pid;
-	L4_ThreadId_t child_tid;
-	int n = __proc_fork(__the_sysinfo->api.proc, &child_tid.raw,
-		(L4_Word_t)stktop, (L4_Word_t)&setcontext);
-	if(n == 0) child_pid = pidof_NP(child_tid);
-	else {
-		/* FIXME: set errno */
-		fprintf(stderr, "%s: Proc::fork failed, n=%d\n", __func__, n);
-		child_pid = -1;
-	}
-
-	/* TODO: __thrd_resume_all_NP(); including the mutex thread */
-	/* TODO: mtx_unlock(__malloc_lock); */
-	/* TODO: call parent-side atfork epilogs */
+	/* COMMON EPILOG. */
+	/* TODO: resume daemon threads */
 
 	return child_pid;
 }

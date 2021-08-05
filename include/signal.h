@@ -18,6 +18,14 @@ typedef void (*__sighandler_t)(int);
 typedef __sighandler_t sighandler_t;
 
 
+typedef struct __stack_s
+{
+	void *ss_sp;
+	size_t ss_size;
+	int ss_flags;
+} stack_t;
+
+
 /* straight outta the Linux sigaction(2) man page, with the "since Linux
  * x.y.z" ones dropped and untested ones if'd out.
  */

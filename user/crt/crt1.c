@@ -3,10 +3,12 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <unistd.h>
 #include <assert.h>
 #include <errno.h>
 #include <sched.h>
+#include <ucontext.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/likely/likely.h>
 
@@ -16,6 +18,7 @@
 
 #ifdef __SNEKS__
 #include <sneks/mm.h>
+#include <asm/ucontext-offsets.h>
 #else
 #include <limits.h>
 #endif
@@ -189,6 +192,21 @@ static void init_cwd(void)
 
 int __crt1_entry(uintptr_t argpos)
 {
+#ifdef __SNEKS__
+	/* verify <asm/ucontext-offsets.h> */
+	static_assert(offsetof(ucontext_t, uc_flags) == o_uc_flags);
+	static_assert(offsetof(ucontext_t, uc_link) == o_uc_link);
+	static_assert(offsetof(ucontext_t, uc_stack) == o_uc_stack);
+	static_assert(offsetof(ucontext_t, uc_mcontext) == o_uc_mcontext);
+	static_assert(offsetof(ucontext_t, uc_sigmask) == o_uc_sigmask);
+	static_assert(offsetof(ucontext_t, __fpregs_mem) == o___fpregs_mem);
+	static_assert(sizeof(ucontext_t) == ucontext_t_size);
+	static_assert(offsetof(mcontext_t, gregs) == o_gregs);
+	static_assert(offsetof(mcontext_t, fpregs) == o_fpregs);
+	static_assert(offsetof(mcontext_t, oldmask) == o_oldmask);
+	static_assert(offsetof(mcontext_t, cr2) == o_cr2);
+#endif
+
 	__the_kip = L4_GetKernelInterface();
 	__the_sysinfo = __get_sysinfo(__the_kip);
 	__main_tid = L4_MyLocalId();
