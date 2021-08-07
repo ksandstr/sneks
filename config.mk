@@ -29,17 +29,19 @@ MUIDLFLAGS=-I $(MUIDL_DIR)/share/idl -I $(MUNG_DIR)/idl -I $(CFGDIR)/idl \
 CLEAN_PATS=*-service.s *-client.s *-common.s *-defs.h ccan-*.a
 
 
+# (for mkdir in a Makefile, -p is for race proofing. the test up front, being a
+# shell builtin, reduces the number of forks and execs.)
 .deps: $(shell $(CFGDIR)/scripts/find-idl-defs.pl)
-	@mkdir -p .deps
+	@test -d .deps || mkdir -p .deps
 
 
 # pattern rules below this line.
 
 %.o: %.c
 	@echo "  CC $@"
-	@$(CC) -c -o $@ $< $(CFLAGS) -nostartfiles -nodefaultlibs -MMD
 	@test -d .deps || mkdir -p .deps
-	@mv $(if $(findstring ..,$<),$(notdir $(<:.c=.d)),$(<:.c=.d)) .deps/
+	@$(CC) -c -o $@ $< $(CFLAGS) -nostartfiles -nodefaultlibs -MMD \
+		-MF .deps/$(patsubst %.c,%.d,$(notdir $<))
 
 
 # build CCAN sources as guests.
@@ -63,9 +65,9 @@ ccan-%.a ::
 
 %.o: %-32.S
 	@echo "  AS $@"
-	@gcc -c -o $@ $< $(CFLAGS) -DIN_ASM_SOURCE -MMD
 	@test -d .deps || mkdir -p .deps
-	@mv $(<:-32.S=.d) .deps/
+	@$(CC) -c -o $@ $< $(CFLAGS) -DIN_ASM_SOURCE -MMD \
+		-MF .deps/$(patsubst %-32.S,%.d,$(notdir $<))
 
 
 %.o: %.s
