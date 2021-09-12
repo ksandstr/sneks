@@ -6,7 +6,7 @@
 #ifndef _SYS_EPOLL_H
 #define _SYS_EPOLL_H
 
-#include <sys/signal.h>
+#include <signal.h>
 
 
 #define EPOLL_CTL_ADD 1
@@ -51,6 +51,5 @@ extern int epoll_wait(int epfd,
 extern int epoll_pwait(int epfd,
 	struct epoll_event *events, int maxevents,
 	int timeout, const sigset_t *sigmask);
-
 
 #endif

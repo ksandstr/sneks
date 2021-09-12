@@ -1,12 +1,10 @@
-
 #ifndef _SIGNAL_H
 #define _SIGNAL_H
 
 #include <stdint.h>
 #include <sys/types.h>
 
-/* from the host environment, because it appears to work. */
-#include <bits/signum.h>
+#include <bits/signal.h>
 
 
 typedef struct __sigset_t {
@@ -76,8 +74,13 @@ struct sigaction
 #define CLD_CONTINUED 6
 
 /* realtime signals. */
-#define SIGRTMIN __SIGRTMIN
-#define SIGRTMAX __SIGRTMAX
+#define SIGRTMIN (SIGSYS + 1)
+#define SIGRTMAX (_NSIG - 1)
+
+/* other constants */
+#define SIG_ERR ((__sighandler_t)-1)
+#define SIG_DFL ((__sighandler_t)0)
+#define SIG_IGN ((__sighandler_t)1)
 
 
 extern int sigaction(int signum,
