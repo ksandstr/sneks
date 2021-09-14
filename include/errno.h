@@ -49,4 +49,8 @@ extern int *__errno_location(void);
 #error "you done fucked up!"
 #endif
 
+#ifdef _GNU_SOURCE
+extern char *program_invocation_name, *program_invocation_short_name;
+#endif
+
 #endif

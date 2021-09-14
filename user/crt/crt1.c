@@ -35,6 +35,8 @@ struct __sysinfo *__the_sysinfo = NULL;
 
 L4_ThreadId_t __main_tid;
 
+char *program_invocation_name = NULL, *program_invocation_short_name = NULL;
+
 
 extern char **environ;
 
