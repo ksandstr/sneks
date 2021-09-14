@@ -97,6 +97,9 @@ enum {
 };
 
 
+extern _Noreturn void _exit(int);
+
+
 extern unsigned int sleep(unsigned int seconds);
 extern int usleep(useconds_t usec);
 
@@ -116,6 +119,9 @@ extern char *get_current_dir_name(void);
 
 extern int chdir(const char *path);
 extern int fchdir(int dirfd);
+
+extern int unlink(const char *path);
+extern int unlinkat(int fdcwd, const char *path, int flags);
 
 
 extern ssize_t readlink(const char *restrict path,

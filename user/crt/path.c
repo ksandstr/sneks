@@ -121,3 +121,15 @@ int open(const char *pathname, int flags, ...)
 	}
 	return openat(AT_FDCWD, pathname, flags, mode);
 }
+
+
+int unlink(const char *path) {
+	errno = ENOSYS;
+	return -1;
+}
+
+
+int unlinkat(int fdcwd, const char *path, int flags) {
+	errno = ENOSYS;
+	return -1;
+}
