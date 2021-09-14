@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <sys/types.h>
 #include <ccan/darray/darray.h>
+#include <ccan/minmax/minmax.h>
 
 #include <sneks/api/io-defs.h>
 #include <sneks/api/path-defs.h>
@@ -93,11 +94,10 @@ int chdir(const char *path)
 {
 	int fd = open(path, O_RDONLY | O_DIRECTORY);
 	if(fd < 0) return -1;
-	else {
-		if(__cwd_fd >= 0) close(__cwd_fd);
-		__cwd_fd = fd;
-		return 0;
-	}
+	int n = fchdir(fd), err = errno;
+	close(fd);
+	errno = err;
+	return n;
 }
 
 
@@ -122,7 +122,7 @@ int fchdir(int dirfd)
 		errno = ENOTDIR;
 		return -1;
 	}
-	int copy = dup(dirfd);
+	int copy = fcntl(dirfd, F_DUPFD, min_t(int, sysconf(_SC_OPEN_MAX) + 1, 4000));
 	if(copy < 0) return -1;
 	else {
 		if(__cwd_fd >= 0) close(__cwd_fd);

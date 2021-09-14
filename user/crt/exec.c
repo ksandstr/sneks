@@ -111,8 +111,11 @@ int fexecve(int fd, char *const argv[], char *const envp[])
 	n = pack_argbuf(&args, argv, NULL);
 	if(n == 0) {
 		char cwd_handle[80];
-		if(__cwd_fd > 0) {
-			struct fd_bits *cwd_bits = __fdbits(__cwd_fd);
+		struct fd_bits *cwd_bits = __fdbits(__cwd_fd);
+		/* these can be NULL if userspace wigs out and closes __cwd_fd, which
+		 * is fucked up but shouldn't segfault the next call to fexecve().
+		 */
+		if(cwd_bits != NULL) {
 			snprintf(cwd_handle, sizeof cwd_handle, "__CWD_HANDLE=%#lx:%#lx,%#x",
 				L4_ThreadNo(cwd_bits->server), L4_Version(cwd_bits->server),
 				(unsigned)cwd_bits->handle);
@@ -139,6 +142,10 @@ end:
  */
 int execvpe(const char *file, char *const argv[], char *const envp[])
 {
+	if(file == NULL) {
+		errno = EFAULT;
+		return -1;
+	}
 	if(file[0] == '/') return execve(file, argv, envp);
 
 	const char *var = getenv("PATH");
