@@ -14,6 +14,7 @@
 #include <ccan/talloc/talloc.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/darray/darray.h>
+#include <ccan/pipecmd/pipecmd.h>
 
 #include <sneks/test.h>
 
@@ -336,3 +337,83 @@ DECLARE_TEST("process:exec", cwd);
 static int ord_str(const void *a, const void *b) {
 	return strcmp(*(const char **)a, *(const char **)b);
 }
+
+
+/* test that the program name is passed to a child process as it should be:
+ * program_invocation_name being the full directory (where applicable), the
+ * short_name being the terminal part of previous, and argv[0] being one of
+ * the two or both when they're the same.
+ *
+ * variables:
+ *   - [full_path] whether the collaborator program isn't specified with a
+ *     relative path.
+ */
+START_LOOP_TEST(program_name, iter, 0, 1)
+{
+	const bool full_path = !!(iter & 1);
+	diag("full_path=%s", btos(full_path));
+	void *tal = talloc_new(NULL);
+
+	plan_tests(9);
+
+	const char *dir = TESTDIR "/user/test/tools", *prg = "program_name_printer";
+	if(full_path) {
+		prg = talloc_asprintf(tal, "%s/%s", dir, prg);
+		dir = "/";
+	} else {
+		setenv("PATH", ".", 1);
+	}
+	diag("dir=`%s', prg=`%s'", dir, prg);
+	if(!ok(chdir(dir) == 0, "chdir")) diag("errno=%d", errno);
+
+#ifdef __sneks__
+	todo_start("not implemented");
+#endif
+
+	int cfd = -1;
+	pid_t child = pipecmd(NULL, &cfd, &cfd, prg, NULL);
+	skip_start(!ok(child > 0, "pipecmd"), 7, "no child (errno=%d)", errno) {
+		FILE *input = fdopen(cfd, "rb");
+		fail_if(input == NULL);
+		char *long_name = NULL, *short_name = NULL, *argv_0 = NULL, buf[400];
+		while(fgets(buf, sizeof buf, input) != NULL) {
+			int len = strlen(buf);
+			if(len > 0 && buf[len - 1] == '\n') buf[--len] = '\0';
+			if(len == 0) continue;
+			char *sep = strchr(buf, '=');
+			if(sep != NULL) *(sep++) = '\0';
+			if(sep != NULL && streq(buf, "argv[0]")) {
+				argv_0 = talloc_strdup(tal, sep);
+			} else if(sep != NULL && streq(buf, "program_invocation_name")) {
+				long_name = talloc_strdup(tal, sep);
+			} else if(sep != NULL && streq(buf, "program_invocation_short_name")) {
+				short_name = talloc_strdup(tal, sep);
+			} else {
+				diag("unrecognized output line `%s'", buf);
+			}
+		}
+		fclose(input);
+
+		diag("argv_0=%s$", argv_0);
+		diag("long_name=%s$", long_name);
+		diag("short_name=%s$", short_name);
+		skip_start(!ok1(argv_0 != NULL && long_name != NULL && short_name != NULL),
+			4, "didn't get all values")
+		{
+			imply_ok1(streq(long_name, short_name), streq(argv_0, long_name));
+			imply_ok1(!streq(long_name, short_name),
+				strends(long_name, talloc_asprintf(tal, "/%s", short_name)));
+			ok(streq(argv_0, long_name) || streq(argv_0, short_name),
+				"argv[0] is same as long or short name");
+			ok1(strchr(short_name, '/') == NULL);
+		} skip_end;
+
+		int st, dead = waitpid(child, &st, 0);
+		ok(dead == child, "waitpid");
+		ok(WIFEXITED(st), "collaborator exited");
+	} skip_end;
+	talloc_free(tal);
+}
+END_TEST
+
+DECLARE_TEST("process:exec", program_name);
