@@ -1527,6 +1527,14 @@ static int uapi_setresugid(
 }
 
 
+static int uapi_prlimit(pid_t pid, int resource,
+	const struct sneks_proc_rlimit *new_limit,
+	struct sneks_proc_rlimit *old_limit_p)
+{
+	return -ENOSYS;
+}
+
+
 static int uapi_resolve(
 	unsigned *object_p, L4_Word_t *server_raw_p,
 	int *ifmt_p, L4_Word_t *cookie_p,
@@ -1608,6 +1616,7 @@ int uapi_loop(void *param_ptr)
 		.sigsuspend = &root_uapi_sigsuspend,
 		.getresugid = &uapi_getresugid,
 		.setresugid = &uapi_setresugid,
+		.prlimit = &uapi_prlimit,
 #ifdef BUILD_SELFTEST
 		.get_systask_threads = &uapi_get_systask_threads,
 #endif

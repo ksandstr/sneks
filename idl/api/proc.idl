@@ -195,6 +195,16 @@ interface Proc
 		in gid_t real_gid, in gid_t eff_gid, in gid_t saved_gid)
 			raises(Posix::Errno);
 
+	/* as prlimit(2). @new_limit is ignored if @resource & 0x80000000. */
+	typedef unsigned long long rlim_t;
+	struct rlimit {
+		rlim_t rlim_cur;
+		rlim_t rlim_max;
+	};
+	void prlimit(in pid_t pid, in long resource,
+		in rlimit new_limit, out rlimit old_limit)
+			raises(Posix::Errno);
+
 #ifdef BUILD_SELFTEST
 	/* for systest: list all systask threads so they can be probed for
 	 * selftesting. returns list of thread IDs in @tids for systasks whose

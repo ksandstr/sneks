@@ -18,6 +18,7 @@
 #include <sneks/api/vm-defs.h>
 
 struct sneks_io_statbuf; /* foo */
+struct sneks_proc_rlimit; /* foo2 */
 #include "muidl.h"
 #include "root-impl-defs.h"
 #include "defs.h"
