@@ -210,6 +210,7 @@ long sysconf(int name)
 	switch(name) {
 		case _SC_PAGESIZE: return PAGE_SIZE;
 		case _SC_NPROCESSORS_ONLN: return 1;	/* FIXME: get from KIP! */
+		case _SC_OPEN_MAX: return 0;			/* systasks don't have fds */
 		default: errno = EINVAL; return -1;
 	}
 }

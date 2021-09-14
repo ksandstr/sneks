@@ -84,6 +84,7 @@ long sysconf(int name)
 			return 1 << (ffsll(L4_PageSizeMask(the_kip)) - 1);
 		case _SC_NPROCESSORS_ONLN:
 			return the_kip->ProcessorInfo.X.processors + 1;
+		case _SC_OPEN_MAX: return 0;	/* root has no fds */
 		default:
 			errno = EINVAL;
 			return -1;

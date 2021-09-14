@@ -62,6 +62,14 @@ long sysconf(int name)
 	switch(name) {
 		case _SC_PAGESIZE: return PAGE_SIZE;
 		case _SC_NPROCESSORS_ONLN: return 1;	/* FIXME: get from KIP! */
+		case _SC_OPEN_MAX:
+			/* return a conservative number, because CCAN pipecmd will iterate
+			 * the range in the face of close(2) which would explode real hard
+			 * if the entire range of 2**31 descriptors that sneks allows were
+			 * crawled through. we won't be using many FDs in the native
+			 * runtime anyway.
+			 */
+			return 256;
 		default: errno = EINVAL; return -1;
 	}
 }

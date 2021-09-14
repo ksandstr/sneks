@@ -93,6 +93,7 @@ enum {
 #define _SC_PAGESIZE _SC_PAGESIZE
 #define _SC_PAGE_SIZE _SC_PAGESIZE
 	_SC_NPROCESSORS_ONLN,
+	_SC_OPEN_MAX,
 };
 
 
