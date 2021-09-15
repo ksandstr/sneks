@@ -30,6 +30,7 @@
 #include <l4/bootinfo.h>
 #include <l4/sigma0.h>
 
+#include <sneks/elf.h>
 #include <sneks/mm.h>
 #include <sneks/hash.h>
 #include <sneks/bitops.h>
@@ -43,7 +44,6 @@
 #include <sneks/sys/sysmem-defs.h>
 #include <sneks/sys/kmsg-defs.h>
 
-#include "elf.h"
 #include "muidl.h"
 #include "root-impl-defs.h"
 #include "defs.h"

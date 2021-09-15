@@ -76,6 +76,14 @@ long sysconf(int name)
 #endif
 
 
+unsigned long getauxval(unsigned long name)
+{
+	/* we're just a stub, we don't tell if @name exists or not */
+	errno = ENOSYS;
+	return 0;
+}
+
+
 /* TODO: move this wherever */
 int sched_yield(void) {
 	L4_ThreadSwitch(L4_nilthread);

@@ -29,6 +29,7 @@
 #include <l4/ipc.h>
 #include <l4/thread.h>
 #include <ukernel/rangealloc.h>
+#include <sneks/elf.h>
 #include <sneks/hash.h>
 #include <sneks/mm.h>
 #include <sneks/msg.h>
@@ -45,7 +46,6 @@
 
 #include "muidl.h"
 #include "root-impl-defs.h"
-#include "elf.h"
 #include "defs.h"
 
 

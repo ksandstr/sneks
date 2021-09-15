@@ -19,11 +19,11 @@
 #include <l4/kip.h>
 #include <l4/bootinfo.h>
 
+#include <sneks/elf.h>
 #include <sneks/mm.h>
 #include <sneks/bitops.h>
 #include <sneks/sys/sysmem-defs.h>
 
-#include "elf.h"
 #include "defs.h"
 
 
