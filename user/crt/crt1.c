@@ -3,12 +3,15 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <stddef.h>
+#include <stdatomic.h>
+#include <string.h>
 #include <unistd.h>
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <sched.h>
 #include <ucontext.h>
+#include <sys/auxv.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/likely/likely.h>
 
@@ -18,6 +21,7 @@
 
 #ifdef __SNEKS__
 #include <sneks/mm.h>
+#include <sneks/elf.h>
 #include <asm/ucontext-offsets.h>
 #else
 #include <limits.h>
@@ -36,6 +40,9 @@ struct __sysinfo *__the_sysinfo = NULL;
 L4_ThreadId_t __main_tid;
 
 char *program_invocation_name = NULL, *program_invocation_short_name = NULL;
+
+static size_t flat_auxv[64] = { 0 };
+static uint64_t auxv_present = 0;
 
 
 extern char **environ;
@@ -80,9 +87,12 @@ long sysconf(int name)
 
 unsigned long getauxval(unsigned long name)
 {
-	/* we're just a stub, we don't tell if @name exists or not */
-	errno = ENOSYS;
-	return 0;
+	if(name < ARRAY_SIZE(flat_auxv) && (auxv_present & (1ull << name))) {
+		return flat_auxv[name];
+	} else {
+		errno = ENOENT;
+		return 0;
+	}
 }
 
 
@@ -98,117 +108,9 @@ int sched_getcpu(void) {
 }
 
 
-static size_t nstrlen(int *count_p, const char *base)
-{
-	int count = 0;
-	const char *s = base;
-	while(*s != '\0') {
-		count++;
-		s += strlen(s) + 1;
-	}
-	if(count_p != NULL) *count_p = count;
-	return s - base + 1;
-}
+void __attribute__((noinline)) __init_crt(char **, char *);
 
-
-static uintptr_t fdlist_last(uintptr_t fdlistptr)
-{
-	if(fdlistptr == 0) return 0;
-	struct sneks_fdlist *list = (void *)fdlistptr;
-	while(list->next != 0) list = sneks_fdlist_next(list);
-	return (uintptr_t)&list[1];
-}
-
-
-static char **unpack_argpage(L4_Word_t base, int buflen, int n_strs)
-{
-	char **strv = calloc(n_strs + 1, sizeof *strv);
-	if(strv == NULL) abort();
-	char *str = (char *)base;
-	for(int i=0; *str != '\0'; str += strlen(str) + 1, i++) {
-		assert(i <= n_strs);
-		strv[i] = strdup(str);
-		if(strv[i] == NULL) abort();
-	}
-	strv[n_strs] = NULL;
-	return strv;
-}
-
-
-static char *consume_env(const char *key)
-{
-	int key_len = strlen(key), found = -1;
-	char *eq = NULL;
-	for(int i=0; environ != NULL && environ[i] != NULL; i++) {
-		eq = strchr(environ[i], '=');
-		if(eq == NULL) continue;
-		if(eq - environ[i] == key_len && memcmp(key, environ[i], key_len) == 0) {
-			found = i;
-			break;
-		}
-	}
-	if(found < 0) return NULL;
-
-	for(int i = found; environ != NULL && environ[i] != NULL; i++) {
-		environ[i] = environ[i + 1];
-	}
-
-	*eq = '\0';
-	return &eq[1];
-}
-
-
-static bool use_cwd_handle(void)
-{
-	char *var = consume_env("__CWD_HANDLE");
-	if(var == NULL) return false;
-
-	/* TODO: replace with sscanf() */
-	char *colon = strchr(var, ':'),
-		*comma = strchr(colon != NULL ? colon + 1 : var, ',');
-	if(colon != NULL) *colon = '\0';
-	if(comma != NULL) *comma = '\0';
-	unsigned long tno = strtoul(var, NULL, 0),
-		version = colon != NULL ? strtoul(colon + 1, NULL, 0) : 0,
-		handle = comma != NULL ? strtoul(comma + 1, NULL, 0) : 0;
-	L4_ThreadId_t server = L4_GlobalId(tno, version);
-	if(L4_IsLocalId(server)) fprintf(stderr, "crt1: UwU what's this?\n");
-	int fd = __create_fd(-1, server, handle, 0);
-	if(unlikely(fd < 0)) {
-		fprintf(stderr, "crt1:%s: __create_fd() failed, n=%d\n", __func__, fd);
-		return false;
-	}
-	if(unlikely(fchdir(fd) < 0)) {
-		fprintf(stderr, "crt1:%s: fchdir() failed, errno=%d\n", __func__, errno);
-		return false;
-	}
-	close(fd);
-
-	return true;
-}
-
-
-static void init_cwd(void)
-{
-	char *curdir = consume_env("__CWD_PATH");
-	if(curdir != NULL) {
-		int n = chdir(curdir);
-		if(n < 0) {
-			fprintf(stderr, "crt1: chdir to `%s' failed, errno=%d\n", curdir, errno);
-			curdir = NULL;
-		}
-	}
-	if(curdir == NULL && !use_cwd_handle()) {
-		/* if all else fails, silently default to "/". */
-		if(chdir("/") < 0) {
-			fprintf(stderr, "crt1: chdir to '/' failed, errno=%d\n", errno);
-			abort();	/* screw you guys, i'm going home */
-		}
-	}
-}
-
-
-int __crt1_entry(uintptr_t argpos)
+void __init_crt(char **envp, char *progname)
 {
 #ifdef __SNEKS__
 	/* verify <asm/ucontext-offsets.h> */
@@ -225,44 +127,58 @@ int __crt1_entry(uintptr_t argpos)
 	static_assert(offsetof(mcontext_t, cr2) == o_cr2);
 #endif
 
-	__the_kip = L4_GetKernelInterface();
-	__the_sysinfo = __get_sysinfo(__the_kip);
-	__main_tid = L4_MyLocalId();
+	environ = envp;
+	int envc = 0;
+	while(envp[envc] != NULL) envc++;
+	auxv_t *auxv = (auxv_t *)(envp + envc + 1);
 
-	/* the way that argument passing works at the moment is silly: UAPI puts a
-	 * flattened array of argv[] at @argpos, followed by for envp[] starting
-	 * from the page after that array ends. fdlists go after that.
-	 *
-	 * to parse this, all userspace programs must start by parsing through all
-	 * three buffers and then choosing the page after the last of these ends
-	 * for the very first program break. this is fucktarded, and UAPI should
-	 * be changed to pass a pointer to a <struct sneks_arghdr> or some such
-	 * where argpos goes right now; uapi_spawn() crawls over its parameters to
-	 * produce the silly version already, so this way is also a performance
-	 * insult.
-	 *
-	 * TODO: unfuck it.
-	 */
+	for(int i=0; auxv[i].a_type != AT_NULL; i++) {
+		size_t name = auxv[i].a_type;
+		if(name == AT_IGNORE) continue;
+		flat_auxv[name] = auxv[i].a_val;
+		auxv_present |= 1ull << name;
+	}
+	__init_crt_cached_creds(flat_auxv);
 
-	int n_args, argbuflen = nstrlen(&n_args, (char *)argpos);
-	uintptr_t envs_base = (argpos + argbuflen + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-	int n_envs, envbuflen = nstrlen(&n_envs, (char *)envs_base);
-	uintptr_t fdlistptr = (envs_base + envbuflen + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1),
-		fdlist_end = fdlist_last(fdlistptr);
-	brk((void *)((fdlist_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1)));
-	/* right. malloc is now good. */
+	program_invocation_name = progname;
+	if((auxv_present & (1ull << AT_EXECFN)) && flat_auxv[AT_EXECFN] != 0) {
+		program_invocation_short_name = (char *)flat_auxv[AT_EXECFN];
+	} else {
+		char *slash = strrchr(progname, '/');
+		program_invocation_short_name = slash != NULL ? slash + 1 : progname;
+	}
 
-	__file_init((void *)fdlistptr);
-	/* printf() works after this line only. otherwise, use
-	 * L4_KDB_PrintString() w/ fingers crossed.
-	 */
-	__init_crt_cached_creds();
+	for(int i=0; i <= 2; i++) {
+		if(__fdbits(i) != NULL) continue;
+		int fd = open("/dev/null", O_RDWR);
+		if(fd < 0) abort();
+		assert(fd == i);
+	}
+	stdin = fdopen(0, "r");
+	stdout = fdopen(1, "w");
+	stderr = fdopen(2, "w");
+	/* printf() works now. */
 
-	char **argv = unpack_argpage(argpos, argbuflen, n_args);
-	environ = unpack_argpage(envs_base, envbuflen, n_envs);
-	/* TODO: release pages of argpos, envs_base, and fdlistptr to vm */
-	init_cwd();
+	if(__cwd_fd < 0 && chdir("/") < 0) abort();
+}
 
-	extern int main(int argc, char *argv[], char *envp[]);
-	return main(n_args, argv, environ);
+
+int __libc_start_main(int (*mainfn)(int, char **, char **), int argc, char *argv[])
+{
+	char **envp = argv + argc + 1;
+	__init_crt(envp, argv[0]);
+	atomic_thread_fence(memory_order_seq_cst);
+	/* TODO: _init, etc. */
+	return (*mainfn)(argc, argv, envp);
+}
+
+
+/* entrypoint from crt0 */
+void _start_c(long *p)
+{
+	int argc = *p;
+	char **argv = (char **)(p + 1);
+
+	extern int main(int, char **, char **);
+	exit(__libc_start_main(&main, argc, argv));
 }

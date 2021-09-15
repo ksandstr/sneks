@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <stdatomic.h>
 #include <stdnoreturn.h>
 #include <string.h>
@@ -859,14 +860,20 @@ fail:
 }
 
 
-/* adjusts @img->hi according to return from VM::configure. */
-static int configure(struct process *p, struct program_image *img)
+/* adjusts @img->hi according to return from VM::configure. sets *@stktop_p. */
+static int configure(uintptr_t *stktop_p, struct process *p,
+	struct program_image *img)
 {
-	int n_threads = 1024, utcb_size = 512;	/* FIXME: get from KIP etc */
+	/* reserve a 64k forbidden zone at the lowest addresses and another 16k
+	 * of startup stack, such that KIP/UTCB/SIP aren't mapped there.
+	 */
+	const size_t stkresv = 0x10000 + 0x4000;
+	int n_threads = 1024,	/* FIXME: get from caller rlimit */
+		utcb_size = 512;	/* FIXME: get from KIP etc */
 	L4_Word_t ua_size = 1ul << size_to_shift(utcb_size * n_threads),
 		resv_size = ua_size + L4_KipAreaSize(the_kip) + PAGE_SIZE,
 		resv_start;
-	if(resv_size + 0x10000 >= img->lo) {		/* preserve low 64k */
+	if(((img->lo - resv_size) & ~(ua_size - 1)) < stkresv) {
 		/* can't fit in low space; set them up after img->hi instead.
 		 * userspace crt should initialize its sbrk after the sysinfo page.
 		 */
@@ -874,12 +881,24 @@ static int configure(struct process *p, struct program_image *img)
 		assert(resv_start > img->hi);
 	} else {
 		/* low space. nice! */
-		resv_start = ((img->lo - resv_size) & ~(ua_size - 1));
-		assert(resv_start >= 0x10000);
-		assert(resv_start + resv_size < img->lo);
+		resv_start = (img->lo - resv_size) & ~(ua_size - 1);
+		assert(resv_start >= stkresv);
+		assert(resv_start + resv_size <= img->lo);
 	}
-	p->task.utcb_area = L4_Fpage(resv_start, ua_size);
-	p->task.kip_area = L4_FpageLog2(resv_start + ua_size, L4_KipAreaSizeLog2(the_kip));
+	if(resv_start > img->hi || (img->lo & ~(ua_size - 1)) >= resv_size - ua_size) {
+		/* utcb first, then kip. */
+		p->task.utcb_area = L4_Fpage(resv_start, ua_size);
+		p->task.kip_area = L4_FpageLog2(resv_start + ua_size, L4_KipAreaSizeLog2(the_kip));
+	} else {
+		/* kip+sip first, then utcb. this reduces space lost to alignment when a
+		 * program image starts at an address multiple of ua_size. (that space
+		 * can go to the startup stack instead.)
+		 */
+		p->task.utcb_area = L4_Fpage((img->lo & ~(ua_size - 1)) - ua_size, ua_size);
+		p->task.kip_area = L4_FpageLog2(
+			L4_Address(p->task.utcb_area) - L4_KipAreaSize(the_kip) - PAGE_SIZE,
+			L4_KipAreaSizeLog2(the_kip));
+	}
 	darray_init(p->task.threads);
 	p->task.utcb_free = alloc_utcb_bitmap(p->task.utcb_area);
 	if(p->task.utcb_free == NULL) return -ENOMEM;
@@ -892,102 +911,207 @@ static int configure(struct process *p, struct program_image *img)
 
 	assert((img->hi & PAGE_MASK) == 0);
 	img->hi = max_t(uintptr_t, resvhi + 1, img->hi);
+	*stktop_p = min_t(uintptr_t, img->lo,
+		min(L4_Address(p->task.utcb_area), L4_Address(p->task.kip_area)));
+	assert(*stktop_p >= stkresv);
 	return 0;
 }
 
 
-/* remove separators from Proc::spawn argbuf format, and add a terminating
- * zero.
+/* returns array of offsets into @buf and sets *@count_p and *@len_p, or NULL.
+ *
+ * FIXME: this should recognize RECSEP as its own quoting character and
+ * flatten them so that every non-nul byte can be carried. hit that in a test
+ * first.
  */
-static int desep(char *dst, const char *src)
+static size_t *strsplit_offsets(size_t *count_p, size_t *len_p, char *buf)
 {
-	int i = 0;
-	while(src[i] != '\0') {
-		dst[i] = src[i] == RECSEP ? '\0' : src[i];
-		i++;
-	}
-	dst[i] = '\0';
-	dst[i + 1] = '\0';
-	assert(strlen(src) == i);
-	return i + 1;
-}
-
-
-static int upload_argbuf(struct process *p, struct program_image *img, const char *buf)
-{
-	assert((img->hi & PAGE_MASK) == 0);
-	void *argtmp = malloc(strlen(buf) + 8);
-	int len = desep(argtmp, buf),
-		n = __vm_upload_page(vm_tid, ra_ptr2id(ra_process, p), img->hi, argtmp, len,
-			PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED);
-	free(argtmp);
-	if(n != 0) return n < 0 ? n : -EIO;
-
-	img->hi = (img->hi + len + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-	return 0;
-}
-
-
-static int cmp_fdlist_by_fd(const void *ap, const void *bp) {
-	const struct sneks_fdlist *a = ap, *b = bp;
-	return (long)b->fd - (long)a->fd;
-}
-
-
-/* returns number of pages at *@data_p, or negative errno. */
-static int make_fdlist_page(void **data_p,
-	const L4_Word_t *fd_servs, unsigned fd_servs_len,
-	const L4_Word_t *fd_cookies, unsigned fd_cookies_len,
-	const int *fd_fds, unsigned fd_fds_len)
-{
-	int n_fds = min(min(fd_fds_len, fd_cookies_len), fd_servs_len);
-	struct sneks_fdlist *list;
-	size_t sz = ((n_fds + 1) * sizeof *list + PAGE_SIZE - 1) & ~PAGE_MASK;
-	list = calloc(1, sz);
-	if(list == NULL) return -ENOMEM;
-	for(int i=0; i < n_fds; i++) {
-		list[i] = (struct sneks_fdlist){
-			.next = sizeof *list, .fd = fd_fds[i],
-			.cookie = fd_cookies[i],
-			.serv.raw = fd_servs[i],
-		};
-	}
-	qsort(list, n_fds, sizeof *list, &cmp_fdlist_by_fd);
-	for(int i=1; i < n_fds; i++) {
-		if(list[i - 1].fd == list[i].fd) {
-			free(list);
-			return -EINVAL;
+	size_t pos = 0, alloc = 16, count = 0, *ret = malloc(alloc * sizeof *ret);
+	if(ret == NULL) return NULL;
+	while(buf[pos] != '\0') {
+		char *seg = buf + pos, *end = strchrnul(seg, RECSEP);
+		if(*end == RECSEP) *(end++) = '\0';
+		if(count + 1 >= alloc) {
+			alloc *= 2;
+			size_t *np = realloc(ret, alloc * sizeof *ret);
+			if(np == NULL) { free(ret); return NULL; }
+			ret = np;
 		}
+		ret[count++] = pos;
+		pos += end - seg;
 	}
-	assert(list[n_fds].next == 0);	/* terminated by calloc() */
-	*data_p = list;
-	return sz / PAGE_SIZE;
+
+	*count_p = count;
+	*len_p = pos;
+	return ret;
 }
 
 
-/* compose and upload fdlist to @p:@img->hi. */
-static int upload_fdlist(struct process *p,
-	struct program_image *img,
-	const L4_Word_t *fd_servs, unsigned fd_servs_len,
-	const L4_Word_t *fd_handles, unsigned fd_handles_len,
-	const int *fd_fds, unsigned fd_fds_len)
+/* builds an auxv list w/ various defaults, drops AT_IGNORE and AT_NULL. */
+static Elf32_auxv_t *build_auxv(size_t *count_p, va_list al)
 {
-	void *fd_pages;
-	int n_fd_pages = make_fdlist_page(&fd_pages,
-		fd_servs, fd_servs_len, fd_handles, fd_handles_len,
-		fd_fds, fd_fds_len);
-	if(n_fd_pages < 0) return n_fd_pages;
-	uintptr_t vaddr = img->hi;
-	for(int i=0; i < n_fd_pages; i++, vaddr += PAGE_SIZE) {
-		int n = __vm_upload_page(vm_tid, ra_ptr2id(ra_process, p), vaddr,
-			fd_pages + i * PAGE_SIZE, PAGE_SIZE,
-			PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED);
-		if(n != 0) return n < 0 ? n : -EIO;
+	size_t vals[64] = {
+		[AT_PAGESZ] = PAGE_SIZE,	/* TODO: get from KIP */
+		[AT_FLAGS] = 0,
+	};
+	uint64_t present = (1ull << AT_PAGESZ) | (1ull << AT_FLAGS);
+	size_t name;
+	while(name = va_arg(al, size_t), name != AT_NULL) {
+		assert(name < ARRAY_SIZE(vals));
+		if(name == AT_IGNORE) continue;
+		vals[name] = va_arg(al, size_t);
+		present |= 1ull << name;
 	}
-	free(fd_pages);
+	assert(present != 0);
+	*count_p = __builtin_popcountll(present);
+	Elf32_auxv_t *auxv = malloc(*count_p * sizeof *auxv);
+	if(auxv == NULL) return NULL;
+	int auxc = 0;
+	while(present != 0) {
+		int name = ffsll(present) - 1;
+		assert(present & (1ull << name));
+		present &= ~(1ull << name);
+		auxv[auxc++] = (Elf32_auxv_t){ name, { vals[name] } };
+	}
+	assert(*count_p == auxc);
+	return auxv;
+}
 
-	img->hi = (vaddr + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-	return 0;
+
+/* move strings into a buffer, replace pointers with offsets therein. */
+static char *pack_auxv(size_t *sz_p, Elf32_auxv_t *auxv, size_t auxc)
+{
+	static const bool str_attrs[] = {
+		[AT_PLATFORM] = true, [AT_BASE_PLATFORM] = true, [AT_EXECFN] = true,
+		[AT_RANDOM] = true,
+	};
+	size_t pos = 0, alloc = 128;
+	char *buf = malloc(alloc);
+	if(buf == NULL) return NULL;
+	buf[0] = '\0';
+	for(size_t i=0; i < auxc; i++) {
+		int typ = auxv[i].a_type, n;
+		if(typ >= ARRAY_SIZE(str_attrs) || !str_attrs[typ]) continue;
+		const void *val = (void *)auxv[i].a_un.a_val;
+		if(typ == AT_RANDOM) {
+			/* static 16 bytes */
+			assert(alloc - pos >= 16);	/* ensured thru strscpy() */
+			memcpy(buf + pos, val, 16);
+			n = 16;
+		} else {
+			while(n = strscpy(buf + pos, val, alloc - pos - 16), n < 0) {
+				alloc *= 2;
+				char *nb = realloc(buf, alloc);
+				if(nb == NULL) { free(buf); return NULL; }
+				buf = nb;
+			}
+		}
+		auxv[i].a_un.a_val = pos;
+		auxv[i].a_type |= 0x80000000;
+		pos += n + 1;
+	}
+	*sz_p = max_t(size_t, 1, pos) - 1;
+	return buf;
+}
+
+
+static int upload_fdlist(struct process *p, size_t sp,
+	const L4_Word_t *fd_servs, const L4_Word_t *fd_cookies, const int *fd_fds, size_t n_fds)
+{
+	size_t *image = calloc(PAGE_SIZE, 1);
+	if(image == NULL) return -ENOMEM;
+	const size_t lim_per_page = (PAGE_SIZE - sizeof(size_t)) / sizeof(struct sneks_startup_fd);
+	int n = 0;
+	for(size_t i=0; i < n_fds && n == 0; i += lim_per_page) {
+		image[0] = min(n_fds - i, lim_per_page);
+		for(size_t j=0; j < image[0]; j++) {
+			*(struct sneks_startup_fd *)&image[1 + j * 3] = (struct sneks_startup_fd){
+				.fd_flags = fd_fds[i + j] & (0xffff | FF_CWD),
+				.serv = fd_servs[i + j], .handle = fd_cookies[i + j],
+			};
+		}
+		n = __vm_upload_page(vm_tid, ra_ptr2id(ra_process, p),
+			PAGE_CEIL(sp - PAGE_SIZE * (2 + i / lim_per_page)),
+			(const void *)image, PAGE_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC,
+			MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED);
+	}
+	if(n > 0) n = -EIO;
+
+	free(image);
+	return n;
+}
+
+
+/* construct a sysv-sneks variant startup stack for @p starting at *@sp_p
+ * (exclusive). updates *@sp_p. returns 0 on success or -errno. modifies
+ * @argbuf and @envbuf. varargs are pairs of size_t representing fields of
+ * Elf32_auxv_t, terminated by (size_t)AT_NULL .
+ */
+static int upload_startup_stack(uintptr_t *sp_p,
+	struct process *p, char *argbuf, char *envbuf, ...)
+{
+	assert((*sp_p & (PAGE_SIZE - 1)) == 0);
+	int n;
+	size_t argc, *argv = NULL, argsiz, envc, *envp = NULL, envsiz, auxc, auxsiz;
+	Elf32_auxv_t *auxv = NULL;
+	char *auxbuf = NULL;
+	void *image = NULL;
+
+	argv = strsplit_offsets(&argc, &argsiz, argbuf);
+	if(argv == NULL) goto Enomem;
+	envp = strsplit_offsets(&envc, &envsiz, envbuf);
+	if(envp == NULL) goto Enomem;
+	va_list al; va_start(al, envbuf);
+	auxv = build_auxv(&auxc, al);
+	va_end(al);
+	if(auxv == NULL) goto Enomem;
+	auxbuf = pack_auxv(&auxsiz, auxv, auxc);
+	if(auxbuf == NULL) goto Enomem;
+
+	/* pack it all together. */
+	const size_t body_len = argsiz + envsiz + auxsiz + 3,
+		body_space = (body_len + 15) & ~15,
+		meta_len = 1 + 1 + argc + 1 + envc + 1 + (auxc + 1) * 2,
+		meta_space = (sizeof(size_t) * meta_len + 15) & ~15,
+		n_pages = (body_space + meta_space + PAGE_SIZE - 1) / PAGE_SIZE;
+	image = malloc(n_pages * PAGE_SIZE);
+	if(image == NULL) goto Enomem;
+	size_t body_sp = *sp_p - body_space, mp = 0,
+		*meta = image + n_pages * PAGE_SIZE - body_space - meta_space;
+	meta[mp++] = p->limits[RLIMIT_STACK].rlim_cur;
+	meta[mp++] = argc;
+	for(int i=0; i < argc; i++) meta[mp++] = argv[i] + body_sp;
+	meta[mp++] = (size_t)NULL;
+	for(int i=0; i < envc; i++) meta[mp++] = envp[i] + body_sp + argsiz + 1;
+	meta[mp++] = (size_t)NULL;
+	for(int i=0; i < auxc; i++) {
+		size_t typ = auxv[i].a_type;
+		meta[mp++] = typ & ~0x80000000;
+		meta[mp++] = auxv[i].a_un.a_val;
+		if(typ & 0x80000000) meta[mp - 1] += body_sp + argsiz + envsiz + 2;
+	}
+	meta[mp++] = AT_NULL;
+	meta[mp++] = 0;
+	assert(mp == meta_len);
+	assert(mp * sizeof(size_t) <= meta_space);
+	void *body = image + n_pages * PAGE_SIZE - body_space;
+	memcpy(body, argbuf, ++argsiz);
+	memcpy(body + argsiz, envbuf, ++envsiz);
+	memcpy(body + argsiz + envsiz, auxbuf, ++auxsiz);
+	assert(argsiz + envsiz + auxsiz == body_len);
+
+	n = __vm_upload_page(vm_tid, ra_ptr2id(ra_process, p),
+		*sp_p - n_pages * PAGE_SIZE, image, n_pages * PAGE_SIZE,
+		PROT_READ | PROT_WRITE | PROT_EXEC,
+		MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED);
+	if(n > 0) n = -EIO;
+	*sp_p -= body_space + meta_space;
+
+end:
+	free(image); free(auxbuf); free(auxv); free(argv); free(envp);
+	return n;
+
+Enomem: n = -ENOMEM; goto end;
 }
 
 
@@ -1040,6 +1164,7 @@ static void process_ctor(struct process *p)
 	p->mask_set = 0;
 	p->pending_set = 0;
 	p->sighelper_tid = L4_nilthread;
+	memset(p->limits, 0, sizeof p->limits);
 }
 
 
@@ -1076,22 +1201,22 @@ static int uapi_spawn(
 	const int *fd_fds, unsigned fd_fds_len)
 {
 	assert(!L4_IsNilThread(vm_tid));
-	struct program_image *img = NULL;
-	struct process *p = NULL;
 
 	FILE *file = fopen(filename, "rb");
 	if(file == NULL) return -ENOENT;
 	pid_t caller = pidof_NP(muidl_get_sender());
 	/* TODO: fstat() it to check execute permission */
 
-	/* FIXME: use binfmt_switch() */
-	int n = read_elf(&img, file);
+	struct program_image *img;
+	char *args = (char *)argbuf;
+	int n = binfmt_switch(&args, &img, &file);
 	if(n < 0) {
+		if(args != argbuf) free(args);
 		fclose(file);
 		return n;
 	}
 
-	p = alloc_process();
+	struct process *p = alloc_process();
 	if(p == NULL) { n = -ENOMEM; goto fail; }
 	pid_t newpid = ra_ptr2id(ra_process, p);
 	assert(newpid > 0 && newpid <= SNEKS_MAX_PID);
@@ -1119,20 +1244,32 @@ static int uapi_spawn(
 	n = __vm_fork(vm_tid, 0, newpid);
 	if(n != 0) goto fail;
 
-	/* load process image, configure address space, upload launch data, and
-	 * let teh bodies hit the floor
+	/* load process image, configure address space, unpack and upload startup
+	 * stack contents, and hit the go button
 	 */
 	n = load_program(p, img, file);
-	if(n == 0) n = configure(p, img);
-	uintptr_t argpos = img->hi;
-	if(n == 0) n = upload_argbuf(p, img, argbuf);
-	if(n == 0) n = upload_argbuf(p, img, envbuf);
+	uintptr_t sp;
+	if(n == 0) n = configure(&sp, p, img);
 	if(n == 0) {
-		n = upload_fdlist(p, img, fd_servs, fd_servs_len,
-			fd_cookies, fd_cookies_len, fd_fds, fd_fds_len);
+		uint8_t rand_bytes[16];
+		generate_u(rand_bytes, sizeof rand_bytes);
+		const char *execfn = strrchr(filename, '/');
+		if(execfn != NULL) execfn++; else execfn = filename;
+		n = upload_startup_stack(&sp, p, args, (char *)envbuf,
+#define V(n, v) (size_t)(n), (size_t)(v)
+			V(AT_UID, p->real_uid), V(AT_EUID, p->eff_uid),
+			V(AT_GID, p->real_uid), V(AT_EGID, p->eff_uid),	/* FIXME: get gids instead */
+			V(AT_RANDOM, rand_bytes), V(AT_EXECFN, execfn),
+			/* TODO: cache block sizes, cache shapes, sysinfo, sysinfo_ehdr */
+			V(AT_NULL, 0));
+#undef V
+		int n_fds = min(min(fd_fds_len, fd_cookies_len), fd_servs_len);
+		if(n == 0 && n_fds > 0) {
+			n = upload_fdlist(p, sp, fd_servs, fd_cookies, fd_fds, n_fds);
+		}
 	}
 	fclose(file);
-	if(n == 0) n = launch_process(p, img, argpos);
+	if(n == 0) n = launch_process(p, img, sp);
 	if(n < 0) goto fail;
 
 	free(img);
@@ -1213,21 +1350,34 @@ static int uapi_exec(
 		goto fail;
 	}
 
-	/* load process image, configure address space, upload launch data, and
-	 * let teh bodies hit the floor
-	 */
+	/* as in spawn, but also notify about the exec */
 	n = load_program(p, img, file);
-	if(n == 0) n = configure(p, img);
-	uintptr_t argpos = img->hi;
-	if(n == 0) n = upload_argbuf(p, img, args);
-	if(n == 0) n = upload_argbuf(p, img, envbuf);
+	uintptr_t sp;
+	if(n == 0) n = configure(&sp, p, img);
 	if(n == 0) {
-		n = upload_fdlist(p, img, fd_servs, fd_servs_len,
-			fd_cookies, fd_cookies_len, fd_fds, fd_fds_len);
+		uint8_t rand_bytes[16];
+		generate_u(rand_bytes, sizeof rand_bytes);
+		char execfn[strchrnul(argbuf, RECSEP) - argbuf + 1];
+		memcpy(execfn, argbuf, sizeof execfn - 1);
+		execfn[sizeof execfn - 1] = '\0';
+		char *slash = strrchr(execfn, '/');
+		if(slash == NULL) slash = execfn; else slash++;
+		n = upload_startup_stack(&sp, p, args, (char *)envbuf,
+#define V(n, v) (size_t)(n), (size_t)(v)
+			V(AT_UID, p->real_uid), V(AT_EUID, p->eff_uid),
+			V(AT_GID, p->real_uid), V(AT_EGID, p->eff_uid),	/* FIXME: get gids instead */
+			V(AT_RANDOM, rand_bytes), V(AT_EXECFN, slash),
+			/* TODO: cache block sizes, cache shapes, sysinfo, sysinfo_ehdr */
+			V(AT_NULL, 0));
+#undef V
+		int n_fds = min(min(fd_fds_len, fd_cookies_len), fd_servs_len);
+		if(n == 0 && n_fds > 0) {
+			n = upload_fdlist(p, sp, fd_servs, fd_cookies, fd_fds, n_fds);
+		}
 	}
 	fclose(file);
 	if(n == 0) n = notify_exec(caller);
-	if(n == 0) n = launch_process(p, img, argpos);
+	if(n == 0) n = launch_process(p, img, sp);
 	if(n < 0) goto fail;
 
 	if(args != argbuf) free(args);
@@ -1402,6 +1552,7 @@ static int uapi_fork(L4_Word_t *tid_raw_p, L4_Word_t sp, L4_Word_t ip)
 	dst->dfl_set = src->dfl_set;
 	dst->mask_set = src->mask_set;
 	dst->pending_set = 0;
+	memcpy(dst->limits, src->limits, sizeof src->limits);
 	bool ok = htable_add(&pid_to_child_hash, int_hash(pid), dst);
 	if(!ok) {
 		/* FIXME: cleanup */
@@ -1527,11 +1678,30 @@ static int uapi_setresugid(
 }
 
 
+/* TODO: this doesn't sanity check any of the values at all. */
 static int uapi_prlimit(pid_t pid, int resource,
 	const struct sneks_proc_rlimit *new_limit,
 	struct sneks_proc_rlimit *old_limit_p)
 {
-	return -ENOSYS;
+	const bool write = !(resource & 0x80000000);
+	resource &= ~0x80000000;
+
+	/* TODO: use privilege checking to enable @pid != 0 for uid=root */
+	if(pid != 0) return -EPERM;
+	struct process *p = get_process(pidof_NP(muidl_get_sender()));
+	if(p == NULL) return -ESRCH;
+
+	if(resource >= ARRAY_SIZE(p->limits)) return -EINVAL;
+	old_limit_p->rlim_cur = p->limits[resource].rlim_cur;
+	old_limit_p->rlim_max = p->limits[resource].rlim_max;
+
+	if(write && new_limit->rlim_cur > new_limit->rlim_max) return -EINVAL;
+	if(write) {
+		p->limits[resource].rlim_cur = new_limit->rlim_cur;
+		p->limits[resource].rlim_max = new_limit->rlim_max;
+	}
+
+	return 0;
 }
 
 

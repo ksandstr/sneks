@@ -27,10 +27,6 @@ START_TEST(getauxval_basic)
 {
 	plan_tests(3);
 
-#ifdef __sneks__
-	todo_start("missing");
-#endif
-
 	/* a definitely missing key should return 0 and set ENOENT. */
 	errno = 0;
 	ok1(getauxval(696969) == 0 && errno == ENOENT);
@@ -70,10 +66,6 @@ START_TEST(uids)
 {
 	plan_tests(4);
 
-#ifdef __sneks__
-	todo_start("unfinished");
-#endif
-
 	/* the uid/euid/gid/egid values should be present or absent as a group. */
 	iff_ok1(auxp(AT_UID), auxp(AT_GID) && auxp(AT_EUID) && auxp(AT_EGID));
 	iff_ok1(!auxp(AT_UID), !auxp(AT_GID) && !auxp(AT_EUID) && !auxp(AT_EGID));
@@ -105,10 +97,6 @@ START_TEST(random)
 	}
 
 	plan_tests(5);
-
-#ifdef __sneks__
-	todo_start("unfinished");
-#endif
 
 	const uint8_t *rndptr = (void *)getauxval(AT_RANDOM);
 	ok1(rndptr != NULL);
@@ -157,10 +145,6 @@ DECLARE_TEST("process:auxv", random);
 START_TEST(execfn)
 {
 	plan_tests(5);
-
-#ifdef __sneks__
-	todo_start("missing");
-#endif
 
 	const char *pathspec = TESTDIR "/user/test/tools/auxv_string_printer";
 	char execfn_str[16];

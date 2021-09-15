@@ -3,7 +3,6 @@
 #define _SNEKS_MM_H
 
 #include <stdbool.h>
-#include <string.h>
 #include <ccan/minmax/minmax.h>
 #include <l4/types.h>
 #include <sneks/bitops.h>

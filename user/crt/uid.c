@@ -6,7 +6,9 @@
 #include <errno.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <sys/auxv.h>
 
+#include <sneks/elf.h>
 #include <sneks/sysinfo.h>
 #include <sneks/api/proc-defs.h>
 
@@ -37,16 +39,14 @@ static int reload_cc(void) {
 }
 
 
-void __init_crt_cached_creds(void)
+void __init_crt_cached_creds(const size_t *flat_auxv)
 {
-	int n = reload_cc();
-	if(n != 0) {
-		/* CRT initialization likely shouldn't abort a process, but if Proc
-		 * isn't responding the system has already made a fucky wucky.
-		 */
-		fprintf(stderr, "%s: Proc::getresuid failed, n=%d\n", __func__, n);
-		abort();
-	}
+	cc.u_real = cc.u_saved = flat_auxv[AT_UID];
+	cc.u_eff = flat_auxv[AT_EUID];
+#if 0
+	cc.g_real = cc.g_saved = flat_auxv[AT_GID];
+	cc.g_eff = flag_auxv[AT_EGID];
+#endif
 }
 
 

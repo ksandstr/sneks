@@ -2,6 +2,7 @@
 #ifndef _SNEKS_PROCESS_H
 #define _SNEKS_PROCESS_H
 
+#include <stddef.h>
 #include <l4/types.h>
 
 
@@ -47,31 +48,19 @@
 #define MPL_EXIT 2
 
 
-/* for passing file descriptors through spawn and exec: the first fdlist
- * item's address is given in the startup routine's stack pointer, or 0 if
- * there are none. in any given fd list, ->fd appears in descending order, so
- * that the extent of the file descriptor table can be determined by reading
- * the first fdlist item; and no ->fd may appear twice. the list is terminated
- * by an item where ->next == 0.
- *
- * this should be defined in IDL so that Proc::spawn could accept a sequence
- * thereof, but since LLVM is a bit fucky wrt sizeof on struct types (i can't
- * pull a targetref from anywhere!), it's here instead.
+/* structure at the front of the process startup stack at startup. see
+ * usr/crt/posix.c for details. (TODO: document those details here. also this
+ * should be in IDL but isn't because LLVM.)
  */
-struct sneks_fdlist
+struct sneks_startup_fd
 {
-	unsigned short next; /* # of bytes from start to next item, or 0 to end */
-	unsigned short fd;
-	L4_ThreadId_t serv;
-	L4_Word_t cookie;	/* TODO: change this to Sneks::IO::handle */
+	size_t fd_flags;	/* fd in 15..0, others FF_* */
+	size_t serv;		/* raw L4_ThreadId_t */
+	size_t handle;
 } __attribute__((packed));
 
 
-static inline struct sneks_fdlist *sneks_fdlist_next(
-	struct sneks_fdlist *cur)
-{
-	return (void *)cur + cur->next;
-}
+#define FF_CWD (1 << 16)	/* this descriptor is __cwd_fd */
 
 
 extern unsigned pidof_NP(L4_ThreadId_t tid);

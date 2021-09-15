@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <threads.h>
+#include <sys/resource.h>
 #include <ccan/list/list.h>
 #include <ccan/bitmap/bitmap.h>
 #include <ccan/darray/darray.h>
@@ -63,6 +64,7 @@ struct process
 
 	/* rarely used things later down */
 	struct list_head dead_list;	/* zombie children via ->dead_link */
+	struct rlimit limits[RLIMIT_STACK + 1];	/* TODO: support the rest */
 };
 
 

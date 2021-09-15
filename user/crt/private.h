@@ -33,6 +33,15 @@ struct resolve_out {
 	int ifmt;
 };
 
+typedef struct {
+	int a_type;
+	union {
+		size_t a_val;
+		void *a_ptr;
+		void (*a_fnc)();
+	};
+} auxv_t;
+
 
 struct __sysinfo;
 
@@ -59,8 +68,7 @@ extern fd_map_t fd_map;
 extern int __cwd_fd;
 
 
-struct sneks_fdlist;
-extern void __file_init(struct sneks_fdlist *fdlist);
+extern void __file_init(const size_t *pp);
 
 
 /* NULL when @fd isn't valid. */
@@ -108,7 +116,7 @@ extern void __crt_thread_join(L4_ThreadId_t tid);
 
 
 /* from uid.c */
-extern void __init_crt_cached_creds(void);
+extern void __init_crt_cached_creds(const size_t *flat_auxv);
 
 
 /* from setjmp-32.S */

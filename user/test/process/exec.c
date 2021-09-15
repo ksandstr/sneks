@@ -366,10 +366,6 @@ START_LOOP_TEST(program_name, iter, 0, 1)
 	diag("dir=`%s', prg=`%s'", dir, prg);
 	if(!ok(chdir(dir) == 0, "chdir")) diag("errno=%d", errno);
 
-#ifdef __sneks__
-	todo_start("not implemented");
-#endif
-
 	int cfd = -1;
 	pid_t child = pipecmd(NULL, &cfd, &cfd, prg, NULL);
 	skip_start(!ok(child > 0, "pipecmd"), 7, "no child (errno=%d)", errno) {

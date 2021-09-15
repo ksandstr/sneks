@@ -84,7 +84,6 @@ START_LOOP_TEST(stack_location, iter, 0, 1)
 		diag("&_foo=%#lx", (unsigned long)a_foo);
 		diag("&_start=%#lx", (unsigned long)a_start);
 		diag("botsize=%#lx", (unsigned long)botsize);
-		todo_start("unimplemented");
 		skip_start(!ok(a_foo > 0 && a_start > 0 && botsize > 0, "have values"), 2, "no values") {
 			imply_ok1(botsize < stksize, a_foo > a_start);
 			imply_ok1(a_foo < a_start, botsize >= stksize);

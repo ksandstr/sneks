@@ -13,6 +13,7 @@
 #include <ccan/likely/likely.h>
 #include <ccan/intmap/intmap.h>
 
+#include <sneks/mm.h>
 #include <sneks/process.h>
 #include <sneks/api/io-defs.h>
 #include <sneks/api/file-defs.h>
@@ -140,36 +141,35 @@ int __create_fd(int fd, L4_ThreadId_t server, intptr_t handle, int flags)
 }
 
 
-/* this isn't as much cold as init-only. */
-COLD void __file_init(struct sneks_fdlist *fdlist)
+COLD void __file_init(const size_t *pp)
 {
 	sintmap_init(&fd_map);
 	assert(invariants());
 
-	int n = 0;
-	if(fdlist != NULL && fdlist->next != 0) {
-		int prev = fdlist->fd;
-		do {
-			if(fdlist->fd > prev) abort();	/* invalid fdlist */
-			prev = fdlist->fd;
-			/* NOTE: flags is always 0 since FD_CLOEXEC doesn't carry through
-			 * exec for obvious reasons and cannot be set for spawn.
-			 */
-			n = __create_fd(fdlist->fd, fdlist->serv, fdlist->cookie, 0);
-			fdlist = sneks_fdlist_next(fdlist);
-		} while(n >= 0 && fdlist->next != 0);
+	int n;
+	const size_t lim_per_page = (PAGE_SIZE - 4) / sizeof(struct sneks_startup_fd);
+	for(;;) {
+		const struct sneks_startup_fd *fds = (const void *)(pp + 1);
+		assert(*pp <= lim_per_page);
+		for(size_t i=0, n_fds = *pp; i < n_fds; i++) {
+			n = __create_fd(fds[i].fd_flags & 0xffff,
+				(L4_ThreadId_t){ .raw = fds[i].serv }, fds[i].handle, 0);
+			if(n < 0) goto fail;
+			if(fds[i].fd_flags & FF_CWD) {
+				assert(__cwd_fd == -1);
+				__cwd_fd = n;
+			}
+		}
+		if(*pp < lim_per_page) break;
+		pp = (void *)pp - PAGE_SIZE;
 	}
 
-#ifdef __SNEKS__
-	stdin = fdopen(0, "r");
-	stdout = fdopen(1, "w");
-	stderr = fdopen(2, "w");
-#endif
+	assert(invariants());
+	return;
 
-	if(n < 0) {
-		fprintf(stderr, "%s: __create_fd() failed, n=%d\n", __func__, n);
-		abort();
-	}
+fail:
+	fprintf(stderr, "%s: __create_fd() failed, n=%d\n", __func__, n);
+	abort();
 }
 
 

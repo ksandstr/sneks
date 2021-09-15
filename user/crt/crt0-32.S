@@ -1,21 +1,36 @@
 	.text
+	.weak _DYNAMIC
+	.hidden _DYNAMIC
+
 	.global _start
-
-	.align 16
 _start:
-	movl %esp, %ebx	# capture argpos
-	movl $__crt0_stktop - 128, %esp	# don't stomp <struct thrd>
+	popl %ecx	# stkwant
 	xorl %ebp, %ebp # stack frame list sentinel
-	movl %ebx, (%esp)
-	call __crt1_entry
-	movl %eax, (%esp)
-	call exit
-	int $3
-
-# two pages' worth is enough for crt1.c to set up us the heap and switch to a
-# malloc'd stack. one page would likely do.
-	.global __crt0_stktop
-	.bss
-	.align 8192
-	.space 8192
-__crt0_stktop:
+	movl %edx, %esi
+	movl %esp, %edi	# p
+	andl $-16, %esp
+	push %edi	# trash for alignment
+	push %edi
+	# GOT address for relocable binaries
+	call 1f
+1:	addl $_DYNAMIC-1b, (%esp)
+	movl (%esp), %ebx
+	# POSIX layer initialization
+	push %ecx
+	push %edi
+	call __sneks_posix_init
+	# switch to designated stack, reinitialize stack frame, enter crt.
+	movl %eax, %esp
+	andl $-16, %esp
+	push %edi
+	push %edi
+	push %ebx
+	# register startup %edx w/ atexit unless null
+	testl %esi, %esi
+	jz 2f
+	push %esi
+	call atexit
+	addl $4, %esp
+2:	push %edi
+	call _start_c
+	hlt

@@ -40,24 +40,26 @@ typedef darray(char) chrbuf;
 extern char **environ;
 
 
-/* TODO: this duplicates p_to_argbuf() in process.c and somewhere in sys/crt.
- * combine the three somewhere.
- *
- * TODO: catch ENOMEM from darray.
- */
-static int pack_argbuf(chrbuf *buf, char *const strp[], const char *extra)
+/* TODO: duplicates p_to_argbuf() in sys/crt/misc.c . this one is better. */
+static char *pack_argbuf(char *const strp[])
 {
-	for(int i=0; strp != NULL && strp[i] != NULL; i++) {
-		darray_append_string(*buf, strp[i]);
-		darray_append(*buf, 0x1e);	/* ASCII Record Separator */
+	assert(strp != NULL);
+	size_t alloc = 512, count = 0;
+	char *buf = malloc(alloc);
+	if(buf == NULL) return NULL;
+	for(int i=0; strp[i] != NULL; i++) {
+		int n;
+		while(n = strscpy(buf + count, strp[i], alloc - count), n < 0) {
+			alloc *= 2;
+			char *nb = realloc(buf, alloc);
+			if(nb == NULL) { free(buf); return NULL; }
+			buf = nb;
+		}
+		count += n;
+		buf[count++] = 0x1e;	/* ASCII Record Separator */
 	}
-	if(extra == NULL && buf->size > 0) {
-		buf->item[buf->size - 1] = '\0';
-	} else {
-		if(extra != NULL) darray_append_string(*buf, extra);
-		darray_append(*buf, '\0');
-	}
-	return 0;
+	buf[count - 1] = '\0';
+	return buf;
 }
 
 
@@ -81,7 +83,7 @@ static bool collect_exec_fds(sintmap_index_t fd,
 	size_t i = bufs->size++;
 	bufs->servers[i] = bits->server.raw;
 	bufs->handles[i] = bits->handle;
-	bufs->fds[i] = fd;
+	bufs->fds[i] = fd | (fd == __cwd_fd ? FF_CWD : 0);
 
 	return true;
 }
@@ -90,50 +92,36 @@ static bool collect_exec_fds(sintmap_index_t fd,
 /* the meat & potatoes */
 int fexecve(int fd, char *const argv[], char *const envp[])
 {
+	int n;
+
 	struct fd_bits *bits = __fdbits(fd);
 	if(bits == NULL) {
 		errno = EBADF;
 		return -1;
 	}
 
-	int n;
-	struct exec_fds efs = { /* zeroes, nulls, bad skulls */ };
-	if(!sintmap_iterate(&fd_map, &collect_exec_fds, &efs)) {
-		n = -ENOMEM;
-		goto end;
-	}
+	char *argbuf = NULL, *envbuf = NULL;
+	argbuf = pack_argbuf(argv);
+	if(argbuf == NULL) goto Enomem;
+	envbuf = pack_argbuf(envp);
+	if(envbuf == NULL) goto Enomem;
+	struct exec_fds efs = { /* blanks */ };
+	if(!sintmap_iterate(&fd_map, &collect_exec_fds, &efs)) goto Enomem;
 
 	int proch;
 	n = __io_dup_to(bits->server, &proch, bits->handle, pidof_NP(__the_sysinfo->api.proc));
-	if(n < 0) goto end;
-
-	chrbuf args = darray_new(), envs = darray_new();
-	n = pack_argbuf(&args, argv, NULL);
 	if(n == 0) {
-		char cwd_handle[80];
-		struct fd_bits *cwd_bits = __fdbits(__cwd_fd);
-		/* these can be NULL if userspace wigs out and closes __cwd_fd, which
-		 * is fucked up but shouldn't segfault the next call to fexecve().
-		 */
-		if(cwd_bits != NULL) {
-			snprintf(cwd_handle, sizeof cwd_handle, "__CWD_HANDLE=%#lx:%#lx,%#x",
-				L4_ThreadNo(cwd_bits->server), L4_Version(cwd_bits->server),
-				(unsigned)cwd_bits->handle);
-		}
-		n = pack_argbuf(&envs, envp, __cwd_fd > 0 ? cwd_handle : NULL);
-	}
-	if(n == 0) {
-		n = __proc_exec(__the_sysinfo->api.proc, bits->server.raw, proch,
-			args.item, envs.item, efs.servers, efs.size,
-			efs.handles, efs.size, efs.fds, efs.size);
+		n = __proc_exec(__the_sysinfo->api.proc, bits->server.raw, proch, argbuf, envbuf,
+			efs.servers, efs.size, efs.handles, efs.size, efs.fds, efs.size);
 		__io_close(bits->server, proch);
 	}
-	darray_free(args);
-	darray_free(envs);
 
 end:
+	free(argbuf); free(envbuf);
 	free(efs.servers); free(efs.handles); free(efs.fds);
 	return NTOERR(n);
+
+Enomem: n = -ENOMEM; goto end;
 }
 
 
