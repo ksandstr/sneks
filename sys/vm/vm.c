@@ -1804,16 +1804,15 @@ static int vm_configure(
 		/* TODO: should be "illegal state" */
 		return -EINVAL;
 	}
-	if(L4_Address(kip) != L4_Address(utcb) + L4_Size(utcb)) return -EINVAL;
-	/* FIXME: check for kip, utcb overlap with maps, pop errors if they do. */
+	L4_Fpage_t si = L4_FpageLog2(L4_Address(kip) + L4_Size(kip), PAGE_BITS);
+	if(fpage_overlap(kip, utcb) || fpage_overlap(si, utcb)) return -EINVAL;
 
 	sp->kip_area = kip;
 	sp->utcb_area = utcb;
-	sp->sysinfo_area = L4_FpageLog2(
-		L4_Address(kip) + L4_Size(kip), PAGE_BITS);
+	sp->sysinfo_area = si;
 
 	assert(invariants());
-	*last_resv_p = L4_Address(sp->sysinfo_area) + L4_Size(sp->sysinfo_area) - 1;
+	*last_resv_p = max(L4_Address(si) + L4_Size(si), L4_Address(utcb) + L4_Size(utcb)) - 1;
 	return 0;
 }
 
