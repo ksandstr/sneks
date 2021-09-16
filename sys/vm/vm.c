@@ -1,4 +1,3 @@
-
 /* systemspace POSIX-like virtual memory server.
  *
  * note that this is currently a single-threaded implementation, with some
@@ -213,6 +212,7 @@ struct lazy_mmap
 	L4_ThreadId_t fd_serv;
 	uint64_t ino;
 	size_t offset;
+	unsigned short tailsz; /* clear PAGE_SIZE-tailsz bytes at end of last page */
 };
 
 
@@ -444,6 +444,13 @@ static bool all_space_invariants(INVCTX_ARG,
 			inv_ok((vaddr >= sp->brk_lo && vaddr < sp->brk_hi)
 					|| find_lazy_mmap(sp, vaddr) != NULL,
 				"vp->vaddr within brk range or lazy_mmap");
+		}
+
+		RB_FOREACH(rb_iter, &sp->maps) {
+			struct lazy_mmap *mm = rb_entry(rb_iter, struct lazy_mmap, rb);
+			inv_push("lazy_mmap addr=%#x length=%#x", mm->addr, mm->length);
+			inv_ok1(mm->tailsz <= PAGE_SIZE);
+			inv_pop();
 		}
 
 		inv_log("kip_area=%#lx:%#lx, utcb_area=%#lx:%#lx, sysinfo_area=%#lx:%#lx",
@@ -1090,7 +1097,9 @@ static void munmap_space(struct vm_space *sp, L4_Word_t addr, size_t size)
 			*tail = *cur;	/* TODO: duplicate fds? */
 			tail->addr = addr + size;
 			tail->length = cur->length - (tail->addr - cur->addr);
+			tail->tailsz = cur->tailsz;
 			cur->length = addr - cur->addr;
+			cur->tailsz = PAGE_SIZE;
 			struct lazy_mmap *old = insert_lazy_mmap(sp, tail);
 			assert(old == NULL);
 			if(IS_ANON_MMAP(cur)) {
@@ -1102,6 +1111,7 @@ static void munmap_space(struct vm_space *sp, L4_Word_t addr, size_t size)
 			/* overlap on the left. shorten existing map. */
 			assert(addr < cur->addr + cur->length);
 			cur->length = addr - cur->addr;
+			cur->tailsz = PAGE_SIZE;
 			if(IS_ANON_MMAP(cur)) {
 				cut_anon_mmap(cur, hash, cur->addr,
 					cur->addr + cur->length - 1);
@@ -1240,10 +1250,10 @@ static int vm_mmap(
 	*mm = (struct lazy_mmap){
 		.flags = prot_to_l4_rights(prot) << 16 | (flags & ~MAP_FIXED),
 		.fd_serv.raw = fd_serv, .ino = fd, .offset = offset >> PAGE_BITS,
+		.tailsz = length % PAGE_SIZE,
 	};
 	int eck = e_begin();
-	n = reserve_mmap(mm, sp, *addr_ptr, (length + PAGE_SIZE - 1) & ~PAGE_MASK,
-		!!(flags & MAP_FIXED));
+	n = reserve_mmap(mm, sp, *addr_ptr, PAGE_CEIL(length), !!(flags & MAP_FIXED));
 	e_end(eck);
 	if(n < 0) {
 		free(mm);
@@ -2037,6 +2047,7 @@ static int pf_mmap_shared(
 #endif
 		}
 		if(n_bytes < PAGE_SIZE) {
+			/* file tail case */
 			memset(page + n_bytes, '\0', PAGE_SIZE - n_bytes);
 		}
 
@@ -2050,7 +2061,6 @@ static int pf_mmap_shared(
 		link->offset = mm->offset + bump;
 		int n = push_cached_page(&cached, top, link);
 		if(n == 0) {
-			*map_page_p = L4_FpageLog2((L4_Word_t)page, PAGE_BITS);
 			TRACE_FAULT("vm:%s:pc miss on %x:%lx:%x, vp'=%p, phys=%p\n", __func__,
 				pidof_NP(mm->fd_serv), (unsigned long)mm->ino,
 				mm->offset + bump, vp, pl2pp(link));
@@ -2058,14 +2068,37 @@ static int pf_mmap_shared(
 			assert(n == -EEXIST);
 			push_page(&page_free_list, link);
 			assert(cached != NULL);
-			TRACE_FAULT("vm:%s:pc false miss on %x:%lx:%x\n", __func__,
+			TRACE_FAULT("vm:%s:pc near-miss on %x:%lx:%x\n", __func__,
 				pidof_NP(mm->fd_serv), (unsigned long)mm->ino,
 				mm->offset + bump);
 		}
 		e_free(link);
+	} else {
+		TRACE_FAULT("vm:%s:pc hit on %x:%lx:%x\n", __func__,
+			pidof_NP(mm->fd_serv), (unsigned long)mm->ino,
+			mm->offset + bump);
 	}
-	if(cached != NULL) {
-		/* share. possibly from an abortive cache insert. */
+	assert(cached != NULL);
+
+	if((faddr & ~PAGE_MASK) == mm->addr + mm->length - PAGE_SIZE && mm->tailsz < PAGE_SIZE) {
+		/* map tail case: mapping ends before file content. we'll allocate a
+		 * page for a copy, grab mm->tailsz bytes, and zero the rest.
+		 */
+		TRACE_FAULT("vm:%s:tail case (->tailsz=%u)\n", __func__, mm->tailsz);
+		struct pl *link = get_free_pl();
+		*map_page_p = L4_FpageLog2(link->page_num << PAGE_BITS, PAGE_BITS);
+		uint8_t *mem = (uint8_t *)(link->page_num << PAGE_BITS);
+		memcpy(mem, (uint8_t *)(cached->page_num << PAGE_BITS), mm->tailsz);
+		memset(mem + mm->tailsz, '\0', PAGE_SIZE - mm->tailsz);
+		vp->status = link->page_num;
+		vp->vaddr |= VPF_ANON;
+		atomic_store_explicit(&get_pp(vp->status)->owner, vp, memory_order_relaxed);
+		push_page(&page_active_list, link);
+		e_free(link);
+		assert(!VP_IS_SHARED(vp));
+		assert(!VP_IS_COW(vp));
+	} else {
+		/* share directly. */
 		/* FIXME: overwritten in caller, required by hash_vp_by_phys() i.e.
 		 * add_share().
 		 */
@@ -2073,12 +2106,9 @@ static int pf_mmap_shared(
 		int n = add_share(cached->page_num, vp);
 		if(n < 0) return n;
 		*map_page_p = L4_FpageLog2(cached->page_num << PAGE_BITS, PAGE_BITS);
-		TRACE_FAULT("vm:%s:pc hit on %x:%lx:%x\n", __func__,
-			pidof_NP(mm->fd_serv), (unsigned long)mm->ino,
-			mm->offset + bump);
+		vp->vaddr |= VPF_SHARED;
 	}
 
-	vp->vaddr |= VPF_SHARED;
 	return 0;
 }
 
@@ -2104,8 +2134,15 @@ static int pf_mmap_private(
 	struct pl *link = get_free_pl();
 	*map_page_p = L4_FpageLog2((uintptr_t)link->page_num << PAGE_BITS,
 		PAGE_BITS);
-	memcpy((void *)L4_Address(*map_page_p),
-		(void *)((uintptr_t)cached->page_num << PAGE_BITS), PAGE_SIZE);
+	void *page_mem = (void *)L4_Address(*map_page_p),
+		*cached_mem = (void *)(cached->page_num << PAGE_BITS);
+	if((faddr & ~PAGE_MASK) == mm->addr + mm->length - PAGE_SIZE && mm->tailsz < PAGE_SIZE) {
+		/* map tail case; copy only mm->tailsz bytes, clear the rest. */
+		memcpy(page_mem, cached_mem, mm->tailsz);
+		memset(page_mem + mm->tailsz, '\0', PAGE_SIZE - mm->tailsz);
+	} else {
+		memcpy(page_mem, cached_mem, PAGE_SIZE);
+	}
 	atomic_store_explicit(&pl2pp(link)->owner, vp, memory_order_relaxed);
 	push_page(&page_active_list, link);
 	e_free(link);
@@ -2301,7 +2338,6 @@ static void vm_pf(L4_Word_t faddr, L4_Word_t fip, L4_MapItem_t *map_out)
 				vp->vaddr &= ~L4_Writable;
 			}
 		}
-		assert(VP_IS_SHARED(vp));
 	} else if(mm->flags & MAP_ANONYMOUS) {
 		TRACE_FAULT("  mmap/anon\n");
 		struct pl *link;
