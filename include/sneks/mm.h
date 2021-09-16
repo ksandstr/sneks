@@ -15,6 +15,8 @@
 #define PAGE_MASK ((1u << PAGE_BITS) - 1)
 #define PAGE_SIZE (PAGE_MASK + 1)
 
+#define PAGE_CEIL(x) (((x) + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1))
+
 
 
 /* memory attributes for Sysmem::alter_flags */
