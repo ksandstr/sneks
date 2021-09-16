@@ -700,6 +700,7 @@ static int read_elf(struct program_image **ret_p, FILE *file)
 
 		for(int i=0; i < n_eps; i++) {
 			const Elf32_Phdr *ep = &epbuf[i];
+			if(ep->p_type != PT_LOAD) continue;
 			if(ep->p_vaddr & PAGE_MASK) goto Enoexec;
 			int tailsz = (ep->p_memsz + PAGE_MASK) & ~PAGE_MASK;
 			if(ep->p_filesz > 0) {
@@ -840,14 +841,14 @@ static int load_program(struct process *p, struct program_image *img, FILE *file
 			n = __io_dup_to(fserv, &vmh, ffd, vm_pid);
 			if(n != 0) goto fail;
 			assert(vmh > 0);
+			n = __vm_mmap(vm_tid, destpid, &(L4_Word_t){ seg->virt_addr },
+				seg->filesz, seg->prot, seg->flags, fserv.raw, vmh, seg->fileoff);
+			if(n != 0) __io_close(fserv, vmh);
+		} else {
+			n = __vm_mmap(vm_tid, destpid, &(L4_Word_t){ seg->virt_addr },
+				seg->memsz, seg->prot, seg->flags, 0, 0, 0);
 		}
-		n = __vm_mmap(vm_tid, destpid,
-			&(L4_Word_t) { seg->virt_addr }, seg->memsz, seg->prot, seg->flags,
-			vmh > 0 ? fserv.raw : L4_nilthread.raw, vmh, seg->fileoff);
-		if(n != 0) {
-			if(vmh > 0) __io_close(fserv, vmh);
-			goto fail;
-		}
+		if(n != 0) goto fail;
 	}
 
 	return 0;
