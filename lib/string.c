@@ -358,7 +358,13 @@ char *strncpy(char *dest, const char *src, size_t n)
 }
 
 
-char *strchr(const char *s, int c)
+char *strchr(const char *s, int c) {
+	char *ret = strchrnul(s, c);
+	return *ret == '\0' ? NULL : ret;
+}
+
+
+char *strchrnul(const char *s, int c)
 {
 	if(c == '\0') return (char *)s + strlen(s);
 
@@ -370,17 +376,15 @@ char *strchr(const char *s, int c)
 			unsigned long x = LE32_TO_CPU(*(unsigned long *)&s[pos]),
 				found = byte_mask(x, c), zero = zero_mask(x);
 			assert((found | zero) == 0 || found != zero);
-			if(found != 0 && (zero == 0 || ffsl(found) < ffsl(zero))) {
-				size_t len = pos + ffsl(found) / 8 - 1;
-				assert(s[len] == c);
+			if(found | zero) {
+				size_t len = pos + ffsl(found | zero) / 8 - 1;
+				assert(s[len] == c || s[len] == '\0');
 				return (char *)&s[len];
 			}
-			if(zero != 0) return NULL;
 		}
 
 		for(int tail = bytes % sizeof(long); tail > 0; tail--, pos++) {
-			if(s[pos] == '\0') return NULL;
-			if(s[pos] == c) return (char *)s + pos;
+			if(s[pos] == c || s[pos] == '\0') return (char *)s + pos;
 		}
 	}
 }

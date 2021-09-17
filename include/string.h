@@ -63,6 +63,8 @@ extern size_t strnlen(const char *str, size_t n)
 
 extern char *strchr(const char *s, int c)
 	__attribute__((__pure__));
+extern char *strchrnul(const char *s, int c)
+	__attribute__((__pure__));
 extern char *strrchr(const char *s, int c)
 	__attribute__((__pure__));
 extern char *strstr(const char *haystack, const char *needle)
