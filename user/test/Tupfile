@@ -9,7 +9,9 @@ initrd=../../.initrd-staging
 target_initrd=/initrd
 
 : foreach *.c |> !cc |> %B.o {testsuite}
-: &(ccandir)/ccan/talloc/talloc.c |> !cc |> ccan-talloc.o {testsuite}
+: &(ccandir)/ccan/talloc/talloc.c |> !cc |> ccan-%B.o {testsuite}
+: &(ccandir)/ccan/pipecmd/pipecmd.c |> !cc |> ccan-%B.o {testsuite}
+: &(ccandir)/ccan/noerr/noerr.c |> !cc |> ccan-%B.o {testsuite}
 : foreach &(ccandir)/ccan/opt/*.c |> !cc |> ccan-opt-%g.o {testsuite}
 : ccan-opt-*.o |> !ar |> ccan-opt.a {testsuite}
 
@@ -54,6 +56,8 @@ CFLAGS+=-Wno-frame-address -DTESTDIR="\"$(testdir)\""
 : &(ccandir)/ccan/talloc/talloc.c |> !cc |> ccan-talloc.host.o {hostsuite}
 : &(ccandir)/ccan/htable/htable.c |> !cc |> ccan-htable.host.o {hostsuite}
 : &(ccandir)/ccan/autodata/autodata.c |> !cc |> ccan-autodata.host.o {hostsuite}
+: &(ccandir)/ccan/pipecmd/pipecmd.c |> !cc |> ccan-%B.host.o {hostsuite}
+: &(ccandir)/ccan/noerr/noerr.c |> !cc |> ccan-%B.host.o {hostsuite}
 : foreach &(ccandir)/ccan/opt/*.c |> !cc |> ccan-opt-%g.host.o
 : ccan-opt-*.host.o |> !ar |> ccan-opt.host.a {hostsuite}
 : &(libdir)/tap.c |> !cc |> %B.host.o {hostsuite}
