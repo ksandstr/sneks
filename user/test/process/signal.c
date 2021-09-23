@@ -391,7 +391,7 @@ START_LOOP_TEST(kill_permissions, iter, 0, 127)
 		int got_before = int_got;
 		n = sigprocmask(SIG_SETMASK, &oldset, NULL);
 		fail_unless(n == 0);
-		usleep(5 * 1000);
+		usleep(15 * 1000);	/* A_SHORT_NAP and a half */
 		int got_after = int_got;
 		const bool signaled = got_before < got_after;
 		imply_ok1(!signaled, !from_root);
@@ -402,7 +402,7 @@ START_LOOP_TEST(kill_permissions, iter, 0, 127)
 			change_eff ? 1111 : 1000, change_saved ? 1111 : 1000);
 		fail_unless(n == 0);
 	}
-	usleep(2 * 1000);
+	usleep(10 * 1000);	/* A_SHORT_NAP circa 2021 */
 	n = kill(receiver, SIGINT);
 	if(!ok1(n == 0 || (n < 0 && errno == EPERM))) {
 		diag("errno=%d", errno);
