@@ -1149,6 +1149,7 @@ static int reserve_mmap(
 {
 	assert((length & PAGE_MASK) == 0);
 	assert((address & PAGE_MASK) == 0);
+	assert(e_inside());	/* for munmap_space() */
 
 	/* NOTE: instead of checking these for every mmap, we could allow
 	 * lazy_mmaps over sip, kip, and utcb but render them ineffective in
@@ -1796,10 +1797,12 @@ static int vm_upload_page(
 	*mm = (struct lazy_mmap){
 		.flags = VP_RIGHTS(v) << 16 | (flags & ~MAP_FIXED),
 	};
+	int eck = e_begin();
 	int n = reserve_mmap(mm, sp, addr, PAGE_SIZE, true);
 	if(n < 0) {
 		free(v);
 		free(mm);
+		e_end(eck);
 		return n;
 	}
 	assert(mm->addr == addr && mm->length == PAGE_SIZE);
@@ -1815,7 +1818,6 @@ static int vm_upload_page(
 	}
 
 	/* allocate fresh new anonymous memory for this. */
-	int eck = e_begin();
 	struct pl *link = get_free_pl();
 	uint8_t *mem = (uint8_t *)(link->page_num << PAGE_BITS);
 	memcpy(mem, data, data_len);
