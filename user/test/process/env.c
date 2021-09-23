@@ -130,8 +130,6 @@ START_TEST(forbidden_zone)
 		subtest_end();
 	}
 
-	todo_start("expected to fail");
-
 	const size_t page_size = sysconf(_SC_PAGE_SIZE);
 	high = (high + page_size - 1) & ~(page_size - 1);
 	size_t low = 0;

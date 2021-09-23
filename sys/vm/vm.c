@@ -1811,6 +1811,22 @@ static int vm_configure(
 	sp->utcb_area = utcb;
 	sp->sysinfo_area = si;
 
+	/* anonymous memory between 0x10000 and min(kip.start, utcb.start,
+	 * si.start), exclusive.
+	 */
+	uintptr_t resv_low = min(L4_Address(sp->kip_area),
+		min(L4_Address(sp->utcb_area), L4_Address(sp->sysinfo_area)));
+	if(resv_low <= 0x10000) return -EINVAL;
+	struct lazy_mmap *lowmem = malloc(sizeof *lowmem);
+	if(lowmem == NULL) return -ENOMEM;
+	*lowmem = (struct lazy_mmap){
+		.flags = L4_FullyAccessible << 16 | MAP_PRIVATE | MAP_ANONYMOUS,
+	};
+	int eck = e_begin();
+	int n = reserve_mmap(lowmem, sp, 0x10000, resv_low - 0x10000, true);
+	e_end(eck);
+	if(n < 0) { free(lowmem); return n; }
+
 	assert(invariants());
 	*last_resv_p = max(L4_Address(si) + L4_Size(si), L4_Address(utcb) + L4_Size(utcb)) - 1;
 	return 0;
