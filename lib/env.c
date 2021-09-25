@@ -1,4 +1,3 @@
-
 /* ISO C11 getenv(), setenv(), unsetenv(), environ.
  *
  * this topic is laden with historical fuckery, so we try to muddle through as
@@ -6,7 +5,6 @@
  * statically-allocated environment values in "environ", and not leaking
  * memory.
  */
-
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -34,6 +32,7 @@ static size_t hash_envstr(const void *, void *);
 char **environ = NULL;
 
 static char **cached_environ = NULL;
+static bool our_environ = false;
 static struct htable env_ht = HTABLE_INITIALIZER(env_ht, &hash_envstr, NULL);
 
 
@@ -157,19 +156,25 @@ int setenv(const char *name, const char *value, int overwrite)
 		.keylen = namelen, .str = malloc(namelen + vlen + 2),
 		.hash = hash, .ours = true,
 	};
-	if(ent->str == NULL || !htable_add(&env_ht, hash, ent)) goto Enomem;
+	if(ent->str == NULL) goto Enomem;
 	memcpy(ent->str, name, namelen);
 	ent->str[namelen] = '=';
 	memcpy(ent->str + namelen + 1, value, vlen);
 	ent->str[namelen + 1 + vlen] = '\0';
+	if(ent->str == NULL || !htable_add(&env_ht, hash, ent)) goto Enomem;
 
 	/* insert into environ */
 	int env_len = 0;
 	while(environ != NULL && environ[env_len] != NULL) env_len++;
-	char **new_env = realloc(environ, (env_len + 2) * sizeof *environ);
+	size_t nesiz = (env_len + 2) * sizeof *environ;
+	char **new_env = realloc(our_environ ? environ : NULL, nesiz);
 	if(new_env == NULL) {
 		htable_del(&env_ht, hash, ent);
 		goto Enomem;
+	}
+	if(!our_environ) {
+		memcpy(new_env, environ, env_len * sizeof *environ);
+		our_environ = true;
 	}
 	new_env[env_len++] = ent->str;
 	new_env[env_len] = NULL;
@@ -276,11 +281,16 @@ int putenv(char *string)
 	} else {
 		int env_len = 0;
 		while(environ != NULL && environ[env_len] != NULL) env_len++;
-		char **new_env = realloc(environ, (env_len + 2) * sizeof *new_env);
+		char **new_env = realloc(our_environ ? environ : NULL,
+			(env_len + 2) * sizeof *new_env);
 		if(new_env == NULL) {
 			htable_del(&env_ht, hash, ent);
 			free(ent);
 			goto Enomem;
+		}
+		if(!our_environ) {
+			memcpy(new_env, environ, env_len * sizeof *environ);
+			our_environ = true;
 		}
 		cached_environ = environ = new_env;
 		environ[env_len++] = ent->str;
@@ -306,7 +316,7 @@ int clearenv(void)
 		htable_clear(&env_ht);
 	}
 	assert(htable_count(&env_ht) == 0);
-	free(environ);
+	if(our_environ) free(environ);
 	cached_environ = environ = NULL;
 	return 0;
 }
