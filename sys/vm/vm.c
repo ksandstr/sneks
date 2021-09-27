@@ -98,9 +98,6 @@ typedef darray(struct pl *) plbuf;
 #define PL_IS_PRIVATE(pl) ((pl)->fsid_ino == 0)
 #define PL_IS_ANON(pl) (PL_FSID((pl)) == anon_fsid)
 
-/* definition of the brk bloom filter in <struct vm_space>. */
-#define BRK_BLOOM_WORDS (64 / sizeof(L4_Word_t))	/* one cacheline. */
-
 #define IS_ANON_MMAP(mm) (((mm)->flags & MAP_ANONYMOUS) && ((mm)->flags & MAP_SHARED))
 
 
@@ -175,7 +172,6 @@ struct vp {
  */
 struct vm_space
 {
-	L4_Word_t brk_bloom[BRK_BLOOM_WORDS];
 	L4_Fpage_t kip_area, utcb_area, sysinfo_area;
 	struct htable pages;	/* <struct vp *> with hash_vp_by_vaddr() */
 	struct rb_root maps;	/* lazy_mmap per range of addr and length */
@@ -1718,7 +1714,6 @@ static int vm_fork(pid_t srcpid, pid_t destpid)
 		dest->utcb_area = L4_Nilpage;
 		dest->brk_lo = 0; dest->brk_hi = 0;
 		dest->mmap_bot = user_addr_max;
-		memset(dest->brk_bloom, 0, sizeof dest->brk_bloom);
 	} else {
 		/* fork from @src. */
 		dest->kip_area = src->kip_area;
@@ -1733,7 +1728,6 @@ static int vm_fork(pid_t srcpid, pid_t destpid)
 			/* FIXME: cleanup */
 			return n;
 		}
-		memcpy(dest->brk_bloom, src->brk_bloom, sizeof dest->brk_bloom);
 	}
 
 	assert(invariants());
@@ -2164,16 +2158,6 @@ static int pf_mmap_private(
 }
 
 
-static void get_brk_bloom_key(int k[static 3], size_t hash)
-{
-	const int bits = size_to_shift(BRK_BLOOM_WORDS * sizeof(L4_Word_t) * 8),
-		mask = (1 << bits) - 1;
-	assert(bits <= sizeof(L4_Word_t) * 8 / 3);
-	for(int i=0; i < 3; i++, hash >>= bits) k[i] = hash & mask;
-	/* TODO: cook into distinct values */
-}
-
-
 /* brk fastpath. always generates private anonymous memory. returns -1 when
  * @faddr_page isn't in the brk range, 1 when it is and an old page should be
  * remapped, and 0 when a new page was allocated and *@map_page filled in.
@@ -2187,21 +2171,9 @@ static int brk_fastpath(
 {
 	if(faddr_page < sp->brk_lo || faddr_page >= sp->brk_hi) return -1;
 
-	const int word_bits = size_to_shift(sizeof(L4_Word_t) * 8),
-		word_mask = (1u << word_bits) - 1;
-	int k[3]; get_brk_bloom_key(k, hash);
-	int hits = 0;
-	for(int i=0; i < 3; i++) {
-		int limb = k[i] >> word_bits;
-		L4_Word_t bit = 1ul << (k[i] & word_mask);
-		assert(limb < ARRAY_SIZE(sp->brk_bloom));
-		hits += (sp->brk_bloom[limb] & bit) ? 1 : 0;
-	}
-	if(hits == 3) {
-		/* might already be there. see if it is. */
-		*old_p = htable_get(&sp->pages, hash, &cmp_vp_to_vaddr, &faddr_page);
-		if(*old_p != NULL) return 1;
-	}
+	/* might already be there. see if it is. */
+	*old_p = htable_get(&sp->pages, hash, &cmp_vp_to_vaddr, &faddr_page);
+	if(*old_p != NULL) return 1;
 
 	/* create new memory. */
 	struct pl *link = get_free_pl();
@@ -2225,13 +2197,6 @@ static int brk_fastpath(
 	atomic_store_explicit(&pl2pp(link)->owner, vp, memory_order_relaxed);
 	push_page(&page_active_list, link);
 	e_free(link);
-
-	if(hits < 3) {
-		/* add to the bloom filter. */
-		for(int i=0; i < 3; i++) {
-			sp->brk_bloom[k[i] >> word_bits] |= 1ul << (k[i] & word_mask);
-		}
-	}
 
 	*map_page = L4_FpageLog2((L4_Word_t)page, PAGE_BITS);
 	L4_Set_Rights(map_page, VP_RIGHTS(vp));
