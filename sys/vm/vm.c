@@ -1516,6 +1516,8 @@ static int vm_munmap(L4_Word_t addr, L4_Word_t size)
 {
 	int sender_pid = pidof_NP(muidl_get_sender());
 	if(sender_pid == 0 || sender_pid > SNEKS_MAX_PID) return -EINVAL;
+	addr &= ~PAGE_MASK;
+	size = PAGE_CEIL(size);
 	if(!VALID_ADDR_SIZE(addr, size)) return -EINVAL;
 	struct vm_space *sp = ra_id2ptr(vm_space_ra, sender_pid);
 	if(sp->kip_area.raw == 0) return -EINVAL;

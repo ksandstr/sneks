@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <dirent.h>
+#include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <ccan/opt/opt.h>
