@@ -175,6 +175,7 @@ struct vm_space
 	L4_Fpage_t kip_area, utcb_area, sysinfo_area;
 	struct htable pages;	/* <struct vp *> with hash_vp_by_vaddr() */
 	struct rb_root maps;	/* lazy_mmap per range of addr and length */
+	struct lazy_mmap *last_mmap;
 	struct rb_root as_free;	/* as_free per non-overlapping ->fp */
 	uintptr_t brk;
 	L4_Word_t mmap_bot;		/* bottom of as_free range */
@@ -246,6 +247,7 @@ static void remove_active_pls(struct pl **pls, int n_pls);
 static struct lazy_mmap *find_lazy_mmap(struct vm_space *sp, uintptr_t addr);
 static void free_page(struct pl *link0, plbuf *plbuf);
 
+
 static size_t pp_first, pp_total;
 static struct rangealloc *pp_ra, *vm_space_ra;
 static L4_Word_t user_addr_max;
@@ -276,6 +278,9 @@ static uint32_t pc_salt[4];	/* init-once salt for hash_cached_page() */
 static struct nbsl *pc_buckets = NULL;
 static unsigned char n_pc_buckets_log2;
 #define n_pc_buckets (1u << n_pc_buckets_log2)
+
+/* no-match for vm_space.last_mmap. */
+static struct lazy_mmap no_last_mmap = { };
 
 
 /* vaddr & ~PAGE_MASK into sp->pages. */
@@ -868,12 +873,21 @@ static struct lazy_mmap *insert_lazy_mmap(
 
 static struct lazy_mmap *find_lazy_mmap(struct vm_space *sp, uintptr_t addr)
 {
+	if(sp->last_mmap->addr <= addr
+		&& addr - sp->last_mmap->addr < sp->last_mmap->length)
+	{
+		return sp->last_mmap;
+	}
+
 	struct rb_node *n = sp->maps.rb_node;
 	while(n != NULL) {
 		struct lazy_mmap *cand = rb_entry(n, struct lazy_mmap, rb);
 		if(addr < cand->addr) n = n->rb_left;
 		else if(addr >= cand->addr + cand->length) n = n->rb_right;
-		else return cand;
+		else {
+			sp->last_mmap = cand;
+			return cand;
+		}
 	}
 	return NULL;
 }
@@ -1108,6 +1122,7 @@ static void munmap_space(struct vm_space *sp, L4_Word_t addr, size_t size)
 				}
 			}
 			__rb_erase(&cur->rb, &sp->maps);
+			if(sp->last_mmap == cur) sp->last_mmap = &no_last_mmap;
 			e_free(cur);
 			continue;
 		} else if(cur->addr < addr && cur->addr + cur->length > addr + size) {
@@ -1426,6 +1441,7 @@ static int vm_erase(pid_t target_pid)
 		e_free(mm);
 	}
 
+	sp->last_mmap = &no_last_mmap;
 	sp->kip_area = sp->utcb_area = sp->sysinfo_area = L4_Nilpage;
 	ra_free(vm_space_ra, sp);
 	e_end(eck);
@@ -1753,6 +1769,7 @@ static int vm_fork(pid_t srcpid, pid_t destpid)
 	htable_init(&dest->pages, &hash_vp_by_vaddr, NULL);
 	dest->maps = RB_ROOT;
 	dest->as_free = RB_ROOT;
+	dest->last_mmap = &no_last_mmap;
 	if(src == NULL) {
 		/* creates an unconfigured address space as for spawn. caller should
 		 * use VM::configure() to set it up before causing page faults.
