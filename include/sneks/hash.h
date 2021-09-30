@@ -1,4 +1,3 @@
-
 /* exports from lib/hash.c */
 
 #ifndef __SNEKS_HASH_H__
@@ -18,5 +17,25 @@ extern uint32_t hash32shiftmult(uint32_t key);
 extern uint32_t int64_hash(uint64_t key);
 extern uint32_t bob96bitmix(uint32_t a, uint32_t b, uint32_t c);
 
+
+#ifdef CCAN_HTABLE_H
+
+/* htable_get(), but deletes the value before returning it. */
+static inline void *htable_pop(struct htable *ht,
+	size_t hash, bool (*cmpfn)(const void *, void *), void *key)
+{
+	struct htable_iter it;
+	for(void *cand = htable_firstval(ht, &it, hash);
+		cand != NULL; cand = htable_nextval(ht, &it, hash))
+	{
+		if((*cmpfn)(cand, key)) {
+			htable_delval(ht, &it);
+			return cand;
+		}
+	}
+	return NULL;
+}
+
+#endif
 
 #endif

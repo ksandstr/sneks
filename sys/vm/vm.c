@@ -1019,14 +1019,8 @@ static void remove_vp_range(struct vm_space *sp, size_t addr, size_t size)
 	int n_fps = 0;
 	plbuf pls = darray_new();
 	for(size_t pos = addr; pos < addr + size; pos += PAGE_SIZE) {
-		size_t hash = int_hash(pos);
-		/* WIBNI there were a htable_get() that returned a copy of the
-		 * iterator that a subsequent htable_del() needn't iterate again?
-		 */
-		struct vp *v = htable_get(&sp->pages, hash, &cmp_vp_to_vaddr, &pos);
+		struct vp *v = htable_pop(&sp->pages, int_hash(pos), &cmp_vp_to_vaddr, &pos);
 		if(v == NULL) continue;
-		htable_del(&sp->pages, hash, v);
-		assert(htable_get(&sp->pages, hash, &cmp_vp_to_vaddr, &pos) == NULL);
 
 		assert(~v->status & 0x80000000);
 		L4_Fpage_t fp = L4_FpageLog2(v->status << PAGE_BITS, PAGE_BITS);
@@ -1868,9 +1862,8 @@ static int vm_upload_page(
 	assert(~mm->flags & MAP_FIXED);
 
 	size_t hash = int_hash(addr);
-	struct vp *old = htable_get(&sp->pages, hash, &cmp_vp_to_vaddr, &addr);
+	struct vp *old = htable_pop(&sp->pages, hash, &cmp_vp_to_vaddr, &addr);
 	if(old != NULL) {
-		htable_del(&sp->pages, hash, old);
 		plbuf pls = darray_new();
 		remove_vp(old, &pls);
 		flush_plbuf(&pls);
