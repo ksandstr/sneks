@@ -56,8 +56,8 @@ typedef darray(int) handles;
 typedef int (*handle_ctor_fn)(handles *dst, bool send_only);
 
 
-static char *testfile_path = TESTDIR "user/test/io/reg/testfile";
-static char *testdir_path = TESTDIR "user/test";
+static char *testfile_path = TESTDIR "/user/test/io/reg/testfile";
+static char *testdir_path = TESTDIR "/user/test";
 
 
 static int cmp_int(const void *, const void *);

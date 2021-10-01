@@ -1,0 +1,80 @@
+include_rules
+
+# if there's a prettier way to do this in tup, i've not heard of it yet. in any
+# case, here we build testsuite for sneks.
+
+CFLAGS+=-DTESTDIR="\"/\""
+
+initrd=../../.initrd-staging
+target_initrd=/initrd
+
+: foreach *.c |> !cc |> %B.o {testsuite}
+: &(ccandir)/ccan/talloc/talloc.c |> !cc |> ccan-talloc.o {testsuite}
+: foreach &(ccandir)/ccan/opt/*.c |> !cc |> ccan-opt-%g.o {testsuite}
+: ccan-opt-*.o |> !ar |> ccan-opt.a {testsuite}
+
+# TODO: i'd love to just use the script. sadly tup breaks. instead we have one
+# line per test group.
+#preload cstd io self process path
+#run ./gen-test-rules.pl
+
+: foreach io/*.c |> !cc |> io/%B.o {tests}
+: foreach cstd/*.c |> !cc |> cstd/%B.o {tests}
+: foreach self/*.c |> !cc |> self/%B.o {tests}
+: foreach process/*.c |> !cc |> process/%B.o {tests}
+: foreach path/*.c |> !cc |> path/%B.o {tests}
+
+: {testsuite} {tests} |> !user-ld |> testsuite
+: testsuite |> !install |> $(initrd)/user/testsuite ../<initrd>
+
+: foreach tools/*.c |> !cc |> tools/%B.o
+: foreach tools/*.o |> !user-ld |> tools/%B {tools}
+: foreach {tools} |> !install |> $(initrd)/user/test/tools/%B ../<initrd>
+: foreach scripts/* |> !install |> $(initrd)/user/test/scripts/%B ../<initrd>
+run ./gen-initrd-bits.sh $(initrd) $(target_initrd) "../<initrd>"
+
+
+# and here we do the same for hostsuite, sort of; instead of an initrd staging
+# area we install to a local hostsuite staging point.
+
+initrd=.hostsuite-staging
+target_initrd=$(TUP_CWD)/$(initrd)
+testdir=`realpath $(target_initrd) | sed -e 's/^.*\/@tupjob-[0-9]\+//'`
+
+CFLAGS=-O2 -Wall -march=native -std=gnu11 -pipe -m32 -D_GNU_SOURCE
+CFLAGS+=-Wno-frame-address -DTESTDIR="\"$(testdir)\""
+#CFLAGS+=-DDEBUG_ME_HARDER
+#CFLAGS+=-DCCAN_LIST_DEBUG
+
+&incdir=$(TUP_CWD)/hostinclude
+&incdir+=../../ext/ccan
+&incdir+=../../ext/lfht
+
+: foreach *.c ^optcompat.c |> !cc |> %B.host.o {hostsuite}
+: &(ccandir)/ccan/talloc/talloc.c |> !cc |> ccan-talloc.host.o {hostsuite}
+: &(ccandir)/ccan/htable/htable.c |> !cc |> ccan-htable.host.o {hostsuite}
+: &(ccandir)/ccan/autodata/autodata.c |> !cc |> ccan-autodata.host.o {hostsuite}
+: foreach &(ccandir)/ccan/opt/*.c |> !cc |> ccan-opt-%g.host.o
+: ccan-opt-*.host.o |> !ar |> ccan-opt.host.a {hostsuite}
+: &(libdir)/tap.c |> !cc |> %B.host.o {hostsuite}
+: &(libdir)/strscpy.c |> !cc |> %B.host.o {hostsuite}
+
+# TODO: same note about scripting, but here it's for hostsuite
+#preload cstd io self process path
+#run ./gen-test-rules.pl
+
+: foreach io/*.c |> !cc |> io/%B.host.o {hosttests}
+: foreach cstd/*.c |> !cc |> cstd/%B.host.o {hosttests}
+: foreach self/*.c |> !cc |> self/%B.host.o {hosttests}
+: foreach process/*.c |> !cc |> process/%B.host.o {hosttests}
+: foreach path/*.c |> !cc |> path/%B.host.o {hosttests}
+
+!host-ld = |> ^o LD %o^ $(CC) -o %o %f $(CFLAGS) |>
+: foreach tools/*.c |> !cc |> tools/%B.host.o {hosttoolobj}
+: foreach {hosttoolobj} |> !host-ld |> tools/%B {hosttools}
+: foreach {hosttools} |> !install |> $(initrd)/user/test/tools/%B <hoststaging>
+: foreach scripts/* |> !install |> $(initrd)/user/test/scripts/%B <hoststaging>
+run ./gen-initrd-bits.sh $(initrd) $(testdir) "<hoststaging>"
+
+: {hostsuite} {hosttests} | <hoststaging> |> !host-ld |> hostsuite
+# we don't install that one anywhere.

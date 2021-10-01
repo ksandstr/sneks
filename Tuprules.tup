@@ -1,0 +1,92 @@
+# dependencies referenced by commit, yay
+&ccandir=ext/ccan
+&lfhtdir=ext/lfht
+&muidldir=ext/muidl
+&mungdir=ext/mung
+
+# TODO: add "import" to these two when Devuan ceres gets an up-to-date tup.
+CC=ccache gcc
+LD=ld.gold
+&muidl=ext/muidl/muidl
+
+# other paths
+&libdir=lib
+&idldir=idl
+&includedir=include
+&userdir=user
+&sysdir=sys
+&rootdir=root
+
+# things for subordinate Tupfiles to augment as they need
+&incdir=include
+# (TODO: become independent of the mung includes)
+&incdir+=ext/mung/include
+&incdir+=ext/muidl/include
+&incdir+=ext/lfht
+&incdir+=ext/ccan
+
+&idl_incdir=ext/muidl/share/idl
+&idl_incdir+=ext/mung/idl
+&idl_incdir+=idl
+
+# (note the difference in semantics between &incdir and &libdir.)
+&libpath=ext/mung/user/lib/l4
+
+# script-like tools
+&foreach=scripts/foreach.pl
+
+ifneq (@(DEBUG),y)
+DEBUG_FLAGS += -DNDEBUG
+else
+#DEBUG_FLAGS += -DDEBUG_ME_HARDER
+#DEBUG_FLAGS += -D_L4_DEBUG_ME_HARDER
+#DEBUG_FLAGS += -DCCAN_LIST_DEBUG
+endif
+
+ifeq (@(SELFTEST),y)
+BUILD_FLAGS+=-DBUILD_SELFTEST=1
+endif
+
+MUIDLFLAGS=$(DEBUG_FLAGS) $(BUILD_FLAGS)
+
+CFLAGS=-O2 -Wall -march=native -std=gnu11 -pipe -D_GNU_SOURCE
+CFLAGS+=-m32 -mno-avx -mno-sse2 -ffunction-sections
+CFLAGS+=-fno-pic -fuse-ld=gold -fno-builtin -nostdlib -ffreestanding
+CFLAGS+=-Wno-frame-address
+CFLAGS+=$(BUILD_FLAGS)
+
+LDFLAGS=-L /usr/lib32 -L /usr/lib/i386-linux-gnu --gc-sections
+LIBS=-ll4 -lm `gcc $(CFLAGS) -print-libgcc-file-name`
+
+&USER_LDSCRIPT=user/crt/static.ld
+USER_LDFLAGS=-e_start -nostdlib
+USER_LIBS=-lsneks-user-crt -lsneks
+
+&SYS_LDSCRIPT=sys/crt/systask.ld
+SYS_LDFLAGS=-e_start -nostdlib
+SYS_LIBS=-lsneks-systask -lsneks-sysidl -lsneks
+
+!cc = | &(libdir)/<apidefs> &(libdir)/<sysdefs> |> ^o CC %o^ $(CC) `&(foreach) '-I+' &(incdir)` $(CFLAGS) $(CFLAGS_%b) -c %f -o %o |>
+!as = |> ^o AS %o^ $(CC) -DIN_ASM_SOURCE `&(foreach) '-I+' &(incdir)` $(CFLAGS) -c %f -o %o |>
+!ar = |> ^o AR %o^ ar scr %o %f |>
+!user-ld = | &(USER_LDSCRIPT) &(libdir)/libsneks.a &(userdir)/crt/*.a \
+	|> ^o LD %o^ $(LD) $(LDFLAGS) $(USER_LDFLAGS) -L &(userdir)/crt `&(foreach) '-L+' &(libpath)` -static -o %o -T &(USER_LDSCRIPT) %f -\( $(USER_LIBS) $(LIBS) -\) |>
+!sys-ld = | &(SYS_LDSCRIPT) &(libdir)/libsneks.a &(sysdir)/crt/*.a \
+	|> ^o LD %o^ $(LD) $(LDFLAGS) $(SYS_LDFLAGS) -L &(sysdir)/crt `&(foreach) '-L+' &(libpath)` -static -o %o -T &(SYS_LDSCRIPT) %f -\( $(SYS_LIBS) $(LIBS) -\) |>
+
+# add ^t to these when Devuan's tup gets one
+!idlclient = |> ^ IDL %b <client>^ &(muidl) `&(foreach) '-I +' &(idl_incdir)` $(MUIDLFLAGS) --client --common --defs %f |> %B-client.s %B-common.s %B-defs.h
+!idlimpl = |> ^ IDL %b <impl>^ &(muidl) `&(foreach) '-I +' &(idl_incdir)` $(MUIDLFLAGS) --service --common --defs %f |> %B-service.s %B-common.s %B-defs.h
+
+# putting things on the initrd. systasks under &(initrd)/$(mods), userspace in
+# plain &(initrd). add every !install or !install644 product to user/<initrd>
+# or sys/<initrd>. for absolute symlinks, prefix with $(target_initrd).
+&initrd = .initrd-staging
+mods = lib/sneks-0.0p0
+target_initrd = /initrd
+!install = |> ^ INSTALL %o^ install -D %f %o |>
+# i.e. u=rw,og=r
+!install644 = |> ^ INSTALL %o^ install --mode=644 -D %f %o |>
+
+# tags for convenience. vim users would set tags=**/tags .
+: *.c *.h *.pl *.pm |> ^ TAGS^ ctags %f |> tags

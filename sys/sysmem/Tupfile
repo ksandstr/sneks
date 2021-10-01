@@ -1,0 +1,13 @@
+include_rules
+
+CFLAGS+=-D__KERNEL__
+
+: foreach *-impl.idl |> !idlimpl |>
+: foreach *.c | sysmem-impl-defs.h |> !cc |> %g.o
+: foreach *.s |> !as |> %g.o
+: foreach *-32.S |> !as |> %g.o
+
+# not using !sys-ld because sysmem doesn't link the systask runtime.
+: *.o | sysmem.ld &(libdir)/*.a &(sysdir)/crt/*idl*.a \
+	|> ^ LD %o^ $(LD) $(LDFLAGS) -static -o %o -T sysmem.ld %f `&(foreach) '-L+' &(libpath)` -\( $(LIBS) -lsneks -\) \
+	|> sysmem

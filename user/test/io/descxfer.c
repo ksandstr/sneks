@@ -50,7 +50,7 @@ START_LOOP_TEST(transfer_ownership, iter, 0, 7)
 		skip(1, "use_pipe=%s", btos(use_pipe));
 	} else {
 		skip(1, "use_pipe=%s", btos(use_pipe));
-		fds[0] = open(TESTDIR "user/test/io/reg/testfile", O_RDONLY);
+		fds[0] = open(TESTDIR "/user/test/io/reg/testfile", O_RDONLY);
 		if(!ok(fds[0] >= 0, "open(2)")) diag("errno=%d", errno);
 		fds[1] = -1;
 	}

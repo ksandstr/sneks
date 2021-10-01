@@ -1,0 +1,6 @@
+# under -O3, GCC may produce SSE instructions in a runtime that doesn't align
+# the stack properly. FIXME: repair that, then remove -mstackrealign.
+CFLAGS+=-U__KERNEL__ -D__sneks__=1 -D__l4x2__=1 -mstackrealign
+
+&libpath+=../lib
+&libpath+=crt

@@ -1,0 +1,11 @@
+include_rules
+
+libpath+=../io
+SYS_LIBS+=-lsneks-io
+
+: foreach *-impl.idl |> !idlimpl |>
+: foreach *.c | squashfs-impl-defs.h |> !cc |> %g.o
+: foreach &(ccandir)/ccan/opt/*.c |> !cc |> ccan-opt-%g.o
+: ccan-opt-*.o |> !ar |> ccan-opt.a
+: foreach *.s |> !as |> %g.o
+: *.o *.a | &(sysdir)/io/*.a |> !sys-ld |> fs.squashfs

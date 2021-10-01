@@ -341,6 +341,7 @@ static L4_BootRec_t *find_boot_module(
 		}
 
 		char *cmdline = L4_Module_Cmdline(rec);
+		if(cmdline[0] == '.' && cmdline[1] == '/') cmdline += 2;
 		const char *slash = strrchr(cmdline, '/'),
 			*space = strchr(cmdline, ' ');
 		if(slash != NULL && memcmp(slash + 1, name, name_len) == 0) {

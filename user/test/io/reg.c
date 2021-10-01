@@ -12,7 +12,7 @@
 #include <sneks/test.h>
 
 
-static char testfile_path[] = TESTDIR "user/test/io/reg/testfile";
+static char testfile_path[] = TESTDIR "/user/test/io/reg/testfile";
 static char expected_testfile_data[] = "0123456789abcdef";
 
 
@@ -41,6 +41,7 @@ DECLARE_TEST("io:reg", open_test_file);
 START_TEST(rewind_test_file)
 {
 	plan_tests(9);
+	diag("testfile_path=`%s'", testfile_path);
 
 	int fd = open(testfile_path, O_RDONLY);
 	skip_start(!ok(fd > 0, "open(2)"), 8, "no file (errno=%d)", errno) {

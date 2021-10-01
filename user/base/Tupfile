@@ -1,0 +1,14 @@
+include_rules
+
+: foreach *.c |> !cc |> %g.o
+: foreach &(ccandir)/ccan/opt/*.c |> !cc |> ccan-opt-%g.o
+: ccan-opt-*.o |> !ar |> ccan-opt.a
+: etc/inittab |> ^o OBJCOPY %o^ objcopy -I binary -O elf32-i386 -B i386 %f %o |> inittab.o
+
+: init.o inittab.o optcompat.o ccan-opt.a |> !user-ld |> init
+: sh.o |> !user-ld |> sh
+
+initrd=../../.initrd-staging
+: init |> !install |> $(initrd)/sbin/init ../<initrd>
+: etc/inittab |> !install644 |> $(initrd)/etc/inittab ../<initrd>
+: sh |> !install |> $(initrd)/bin/sh ../<initrd>

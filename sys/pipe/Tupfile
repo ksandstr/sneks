@@ -1,0 +1,11 @@
+include_rules
+
+&libpath+=../chrdev
+SYS_LIBS+=-lsneks-chrdev
+
+initrd=../../.initrd-staging
+
+: foreach *.c |> !cc |> %g.o
+: &(ccandir)/ccan/membuf/membuf.c |> !cc |> ccan-membuf.o
+: *.o | &(sysdir)/chrdev/*.a |> !sys-ld |> pipeserv
+: pipeserv |> !install |> $(initrd)/$(mods)/pipeserv ../<initrd>

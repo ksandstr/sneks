@@ -5,6 +5,7 @@ initrd.img
 # detritus
 .*.sw[opn]
 .sw[opn]
+.tup
 *~
 *.o
 .deps
@@ -15,3 +16,5 @@ initrd.img
 *.d
 ccan-*.[oa]
 core
+.initrd-staging/*
+!.initrd-staging/.keep-alive

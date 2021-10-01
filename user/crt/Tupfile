@@ -1,0 +1,16 @@
+include_rules
+
+# userspace CRT compiles as though it were systemside code. and it sort of is.
+CFLAGS += -D__SNEKS__=1
+
+# flipping CCAN intmap insists on setting errno willy nilly, and it flapping
+# shouldn't. flip this spot, man, flip it to heck. goddamn friendly piece of
+# ripened snot from stan's peehole. funk!
+CFLAGS_intmap.c += -Derrno="*(& (int){ 0 })" -DCCAN_INTMAP_WAS_BORN_TOO_EARLY_NOT_TO_BE_A_PIECE_OF_FRIENDLY_SNOT=1
+
+: foreach *.c |> !cc |> %g.o
+: foreach *-32.S |> !as |> %g.o
+: foreach &(libdir)/*-client.o &(libdir)/*-common.o |> |>
+: &(ccandir)/ccan/intmap/intmap.c |> !cc |> ccan-intmap.o
+
+: *.o |> !ar |> libsneks-user-crt.a

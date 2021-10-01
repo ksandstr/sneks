@@ -1,0 +1,20 @@
+include_rules
+
+CFLAGS+=-D__KERNEL__
+
+: foreach *.c |> !cc |> %g.o
+: foreach &(ccandir)/ccan/opt/*.c |> !cc |> ccan-opt-%g.o
+: ccan-opt-*.o |> !ar |> ccan-opt.a
+: &(ccandir)/ccan/talloc/talloc.c |> !cc |> ccan-talloc.o
+
+: foreach &(rootdir)/t/*.c |> !cc |> %f.o {systests}
+preload &(sysdir)
+run ./scan-systests.pl &(sysdir)
+
+: systest.o harness.o ccan-*.[oa] {systests} |> !sys-ld |> systest
+
+initrd=../../.initrd-staging
+: spawn-partner.o |> !user-ld |> initrd_spawn_partner
+: systask-partner.o |> !sys-ld |> initrd_systask_partner
+: foreach initrd_*_partner |> !install |> $(initrd)/systest/sys/test/%f ../<initrd>
+: |> echo 'hello, world' >%o |> $(initrd)/systest/sys/test/hello.txt ../<initrd>

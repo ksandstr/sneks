@@ -1,0 +1,9 @@
+include_rules
+
+libpath+=../chrdev
+SYS_LIBS+=-lsneks-chrdev
+
+initrd=../../.initrd-staging
+: foreach *.c |> !cc |> %g.o
+: *.o | &(sysdir)/chrdev/*.a |> !sys-ld |> nullserv
+: nullserv |> !install |> $(initrd)/$(mods)/nullserv ../<initrd>

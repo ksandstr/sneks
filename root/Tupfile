@@ -1,0 +1,24 @@
+include_rules
+
+# under -O3, GCC may produce SSE instructions in a runtime that doesn't align
+# the stack properly. FIXME: repair that, then remove -mstackrealign.
+CFLAGS += -D__SNEKS__=1 -mstackrealign
+
+&libpath+=../lib
+&libpath+=../sys/crt
+
+run ./gen-mung-imports.sh rangealloc slab
+: foreach *-impl.idl |> !idlimpl |>
+: foreach *.c | root-impl-defs.h |> !cc |> %g.o
+: foreach *-32.S |> !as |> %g.o
+: foreach *.s |> !as |> %g.o
+run ./gen-ccan-crypto-imports.sh xtea
+
+# doesn't use !sys-ld because root doesn't link the systask runtime.
+: *.o | root.ld &(libdir)/*.a &(sysdir)/crt/*idl*.a \
+	|> ^ LD %o^ $(LD) $(LDFLAGS) -static -o %o -T root.ld %f `&(foreach) '-L+' &(libpath)` -\( $(LIBS) -lsneks -lsneks-sysidl -\) \
+	|> root
+
+initrd=../.initrd-staging
+: device-nodes.txt |> !install644 |> $(initrd)/dev/.device-nodes ../sys/<initrd>
+: |> echo 'hello, root:fsio test' >%o |> $(initrd)/systest/root/fsiohello.txt ../sys/<initrd>

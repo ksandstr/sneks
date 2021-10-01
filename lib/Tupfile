@@ -1,0 +1,18 @@
+include_rules
+
+CFLAGS += -D__SNEKS__=1
+
+run ./gen-ccan-rules.sh hash autodata likely htable list str bitmap siphash
+run ./gen-lfht-rules.sh epoch nbsl percpu
+
+: foreach *.c |> !cc |> %g.o {lib_objs}
+: &(muidldir)/share/stritem_support.c |> !cc |> %B.o {lib_objs}
+: foreach *-32.S |> !as |> %g.o {lib_objs}
+
+# for now, API client-sides are included in libsneks.a . we'll also generate
+# <sneks/api/*-defs.h> for everyone.
+: foreach &(idldir)/api/*.idl |> !idlclient |>
+: foreach *-defs.h |> ^ CP %f^ cp %f %o |> ../include/sneks/api/%f <apidefs>
+: foreach *-client.s *-common.s |> !as |> %B.o {idl_objs}
+
+: {lib_objs} {idl_objs} |> !ar |> libsneks.a

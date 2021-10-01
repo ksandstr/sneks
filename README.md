@@ -27,8 +27,8 @@ that's weaker but compatible.
 Goals
 -----
 
-It's intended that eventually various advantages of IPC architecture (as
-dictated by use of a microkernel) will be put to use towards latency
+It's intended that eventually various upsides of IPC architecture, as
+dictated by use of a microkernel, will be put to use towards latency
 minimization, compartmentalization of poorly-behaved software ("the JavaScript
 question"), and bold new approaches to distributed and concurrent data access.
 
@@ -56,10 +56,14 @@ How?
 
 Beats me, it's way under development. Check this section out again once
 virtual memory, I/O, filesystems, block device access, and so forth have been
-added. The Makefiles etc. are customizable but the source tree has inobvious
-dependencies to various bits from a mix of Devuan's \`jessie' and \`ascii'
-releases, so any actual use of the source tree may be challenging for the time
-being.
+added, so that the system is good for something besides running its own test
+suite. The Tupfiles etc. are customizable but the source tree has inobvious
+dependencies to various bits from a mix of Devuan's releases since \`jessie'
+so any actual use of the source tree may be challenging for the time being.
+
+There are some toplevel scripts that knowledgeable people can make use of. In
+particular `bootstrap.sh` will access the network to download submodule
+dependencies.
 
 
 ### What's your target audience? ###

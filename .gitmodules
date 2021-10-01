@@ -1,0 +1,12 @@
+[submodule "ext/lfht"]
+	path = ext/lfht
+	url = ../lfht.git
+[submodule "ext/ccan"]
+	path = ext/ccan
+	url = git://git.ozlabs.org/~ccan/ccan
+[submodule "ext/mung"]
+	path = ext/mung
+	url = ../mung.git
+[submodule "ext/muidl"]
+	path = ext/muidl
+	url = ../muidl.git

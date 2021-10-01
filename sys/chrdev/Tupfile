@@ -1,0 +1,6 @@
+include_rules
+
+: foreach *-impl.idl |> !idlimpl |>
+: foreach *.c | chrdev-impl-defs.h |> !cc |> %g.o
+: foreach *.s |> !as |> %g.o
+: *.o &(sysdir)/io/libsneks-io.a |> ^ AR %o^ ar crsT %o %f |> libsneks-chrdev.a

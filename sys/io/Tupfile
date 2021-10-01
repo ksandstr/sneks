@@ -1,0 +1,5 @@
+CFGDIR=../..
+include_rules
+
+: foreach *.c |> !cc |> %g.o
+: *.o |> !ar |> libsneks-io.a

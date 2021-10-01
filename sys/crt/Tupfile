@@ -1,0 +1,18 @@
+include_rules
+
+# what's brown and sticky?
+CFLAGS += -U__KERNEL__
+
+# add ^t when Devuan's tup gets one
+: foreach &(idldir)/sys/*.idl |> ^ IDL %b^ &(muidl) $(MUIDLFLAGS) `&(foreach) '-I +' &(idl_incdir)` --service --client --common --defs %f |> %B-client.s %B-common.s %B-service.s %B-defs.h
+: foreach &(idldir)/api/*.idl |> ^ IDL %b^ &(muidl) $(MUIDLFLAGS) `&(foreach) '-I +' &(idl_incdir)` --service %f |> %B-service.s
+: foreach *-defs.h |> ^ CP %f^ cp %f %o |> ../../include/sneks/sys/%f ../../lib/<sysdefs>
+: foreach *.s |> !as |> %g.o {sysidl_objs}
+
+: foreach *.c |> !cc |> %g.o {lib_objs}
+: foreach *-32.S |> !as |> %g.o {lib_objs}
+
+run ./gen-mung-imports.sh rangealloc slab memdesc hook
+
+: {lib_objs} mung-*.o |> !ar |> libsneks-systask.a
+: {sysidl_objs} |> !ar |> libsneks-sysidl.a

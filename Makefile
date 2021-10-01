@@ -1,43 +1,15 @@
-
-export CFGDIR:=$(abspath .)
-include config.mk
-
 .PHONY: all clean distclean check qcheck
 
 
-# TODO: replace user/test etc. with just a make -C user all, making user/crt
-# the first subdir of that.
-all: tags
-	+@make -C lib all
-	+@make -C sys all
-	+@make -C user/crt all
-	+@make -C sys/test all
-	+@make -C user/test all
-	+@make -C user/base all
-	+@make -C root all
-	+@make initrd.img
-
+# TODO: depend-build ext/muidl before mung
+all: tags ext/mung/ia32-kernel initrd.img
+	+@tup
 
 clean:
-	@rm -f *.o initrd.img $(CLEAN_PATS)
-	+@make -C user/crt clean
-	+@make -C user/test clean
-	+@make -C user/base clean
-	+@make -C sys clean
-	+@make -C root clean
-	+@make -C lib clean
-
+	@echo "There is no 'clean' target. Use 'git clean' instead, carefully."
+	@exit 1
 
 distclean: clean
-	@rm -f tags
-	@rm -rf .deps
-	+@make -C user/base distclean
-	+@make -C user/test distclean
-	+@make -C user/crt distclean
-	+@make -C sys distclean
-	+@make -C root distclean
-	+@make -C lib distclean
-	@find . -name ".deps" -type d -print|xargs rm -rf
 
 
 # originally qcheck would skip framework selftests, but the name has stuck for
@@ -50,22 +22,17 @@ qcheck: check
 # run the test suite on the host. this may become a silent part of `make check'
 # in the future, but for now it's useful for manual test validation.
 hostcheck:
-	+@make -C user/test hostsuite
-	@TEST_CMDLINE="user/test/hostsuite 2>&1" $(MUNG_DIR)/user/testbench/report.pl
+	+@tup user/test/hostsuite
+	@TEST_CMDLINE="user/test/hostsuite 2>&1" ext/mung/user/testbench/report.pl
 
 
-check: all
+check: ext/mung/ia32-kernel initrd.img
 	@echo "-- system tests..."
-	@SYSTEST=1 $(MUNG_DIR)/user/testbench/report.pl
+	@SYSTEST=1 ext/mung/user/testbench/report.pl
 	@echo "-- userspace tests..."
-	@$(MUNG_DIR)/user/testbench/report.pl
+	@ext/mung/user/testbench/report.pl
 	@echo "-- all tests completed!"
 
 
-initrd.img: scripts/make-sneks-initrd.sh
-	@rm -f $@
-	+@scripts/make-sneks-initrd.sh $@
-
-
-tags: $(shell find . -iname "*.[ch]" -or -iname "*.p[lm]")
-	@ctags -R *
+initrd.img: Tupfile
+	+@tup initrd.img

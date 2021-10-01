@@ -6,7 +6,8 @@
 # the userspace testsuite (executed by init(8)), and further command line
 # arguments to `kvm'.
 
-MUNG="../mung"
+test -z "$MUNG" && MUNG="ext/mung"
+test -z "$BUILDDIR" && BUILDDIR="."
 
 INITRD_TAIL=" init=/initrd/sbin/init"
 if [ -n "$UTEST_OPTS" ] || [ -z "$SYSTEST" ]; then
@@ -22,7 +23,7 @@ fi
 SYSTEST_PART=""
 if [ -n "$SYSTEST" ]; then
 	INITRD_TAIL="${INITRD_TAIL} latewaitmod=systest"
-	SYSTEST_PART=",sys/test/systest $SYSTEST_OPTS"
+	SYSTEST_PART=",$BUILDDIR/sys/test/systest $SYSTEST_OPTS"
 fi
 
-exec qemu-system-i386 -machine accel=kvm:tcg -serial stdio -display none -no-reboot -net none -kernel $MUNG/mbiloader/mbiloader -initrd "$MUNG/ia32-kernel,$MUNG/user/sigma0,root/root,sys/sysmem/sysmem,sys/vm/vm,sys/fs.squashfs/fs.squashfs,initrd.img${INITRD_TAIL}${SYSTEST_PART}" $@
+exec qemu-system-i386 -machine accel=kvm:tcg -serial stdio -display none -no-reboot -net none -kernel $MUNG/mbiloader/mbiloader -initrd "$MUNG/ia32-kernel,$MUNG/user/sigma0,$BUILDDIR/root/root,$BUILDDIR/sys/sysmem/sysmem,$BUILDDIR/sys/vm/vm,$BUILDDIR/sys/fs.squashfs/fs.squashfs,$BUILDDIR/initrd.img${INITRD_TAIL}${SYSTEST_PART}" $@
