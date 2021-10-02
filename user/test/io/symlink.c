@@ -56,7 +56,7 @@ START_LOOP_TEST(readlink, iter, 0, 2)
 		case 1: n = readlinkat(AT_FDCWD, linkpath, linkbuf, PATH_MAX); break;
 		case 2: n = readlinkat(dirfd, linkpath, linkbuf, PATH_MAX); break;
 	}
-	linkbuf[PATH_MAX] = '\0';
+	if(n >= 0) linkbuf[n] = '\0';
 	if(!ok(n > 0, "readlink call")) diag("n=%d, errno=%d", n, errno);
 	if(!ok1(streq(linkbuf, "foo/bar/zot"))) diag("linkbuf=`%s'", linkbuf);
 	if(!ok1(n == strlen(linkbuf))) {
@@ -94,7 +94,8 @@ START_LOOP_TEST(deref_positive, iter, 0, 7)
 
 	/* self-verification */
 	char linkbuf[100];
-	int n = readlink(pathspec, linkbuf, sizeof linkbuf);
+	int n = readlink(pathspec, linkbuf, sizeof linkbuf - 1);
+	if(n >= 0) linkbuf[n] = '\0';
 	imply_ok1(!terminal, n < 0 && errno == EINVAL);
 	imply_ok1(terminal, n > 0);
 	skip_start(!terminal, 1, "readlink errno=%d", errno) {
