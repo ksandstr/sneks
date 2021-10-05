@@ -6,10 +6,13 @@
  *     - non-positive bufsiz
  *     - symlink-specific failure modes of readlink: pathspec refers to a
  *       non-symlink object.
+ *   - move this into user/test/path/, tests into path:symlink, and bits into
+ *     /user/test/path/symlink on the initrd
  */
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <assert.h>
 #include <alloca.h>
@@ -69,6 +72,41 @@ START_LOOP_TEST(readlink, iter, 0, 2)
 END_TEST
 
 DECLARE_TEST("io:symlink", readlink);
+
+
+/* check that readlink()'s result is not null-terminated, and that results
+ * longer than the provided buffer are also not null-terminated.
+ *
+ * TODO: proper testing of this function requires a working lstat() to
+ * have a second source for the length of a symlink's contents.
+ */
+START_LOOP_TEST(unterminated_readlink_result, iter, 0, 1)
+{
+	const char *linkpath = TESTDIR "/user/test/io/symlink/teh_linkz0r";
+	const int linksize = 11;
+	diag("linkpath=`%s', linksize=%d", linkpath, linksize);
+	const bool truncate = !!(iter & 1);
+	diag("truncate=%s", btos(truncate));
+	plan_tests(5);
+
+#ifdef __sneks__
+	todo_start("borked for the moment");
+#endif
+
+	char buf[linksize + 16];
+	memset(buf, '\x7f', sizeof buf);
+	ssize_t n = readlink(linkpath, buf, truncate ? linksize - 5 : sizeof buf);
+	int err = errno;
+	skip_start(!ok(n >= 0, "readlink(2)"), 4, "err=%d", err) {
+		ok(buf[n] == '\x7f', "didn't write past returned length");
+		imply_ok1(n > 0, buf[n - 1] != '\0');
+		imply_ok1(!truncate, buf[10] == 't');
+		imply_ok1(truncate, buf[10] == '\x7f');
+	} skip_end;
+}
+END_TEST
+
+DECLARE_TEST("io:symlink", unterminated_readlink_result);
 
 
 /* test symlink dereferencing in positive cases. variables:
