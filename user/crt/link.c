@@ -35,9 +35,12 @@ ssize_t readlinkat(int dirfd, const char *restrict path,
 	if(n != 0) return NTOERR(n);
 	assert(pathbuf[pathlen] == '\0');
 
-	if(bufsize < path_max) memcpy(buf, pathbuf, min_t(size_t, pathlen, bufsize));
-	if(pathlen < bufsize) buf[pathlen] = '\0';	/* mr. nice guy */
-	return min_t(size_t, pathlen, bufsize);
+	size_t n_wrote = min_t(size_t, pathlen, bufsize);
+	if(bufsize < path_max) {
+		/* copy back from alloca'd buffer */
+		memcpy(buf, pathbuf, n_wrote);
+	}
+	return n_wrote;
 
 Einval: errno = EINVAL; return -1;
 }

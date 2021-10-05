@@ -89,10 +89,6 @@ START_LOOP_TEST(unterminated_readlink_result, iter, 0, 1)
 	diag("truncate=%s", btos(truncate));
 	plan_tests(5);
 
-#ifdef __sneks__
-	todo_start("borked for the moment");
-#endif
-
 	char buf[linksize + 16];
 	memset(buf, '\x7f', sizeof buf);
 	ssize_t n = readlink(linkpath, buf, truncate ? linksize - 5 : sizeof buf);
