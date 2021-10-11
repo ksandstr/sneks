@@ -30,6 +30,7 @@ static inline void *aligned_alloc(size_t alignment, size_t size) {
 
 extern _Noreturn void abort(void);
 extern _Noreturn void exit(int status);
+extern _Noreturn void _Exit(int status);
 
 extern int abs(int j);
 extern long int labs(long int j);

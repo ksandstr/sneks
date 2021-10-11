@@ -53,27 +53,6 @@ pid_t getpid(void) {
 }
 
 
-void exit(int status)
-{
-	int n = __proc_exit(__the_sysinfo->api.proc, status);
-	fprintf(stderr, "Proc::exit returned n=%d\n", n);
-	/* the alternative. */
-	for(;;) {
-		asm volatile ("int $69");	/* the sex number */
-		L4_Set_ExceptionHandler(L4_nilthread);
-		asm volatile ("int $96");	/* the weird sex number */
-		L4_Sleep(L4_Never);
-	}
-}
-
-
-int atexit(void (*fn)(void))
-{
-	/* failure: implementation missing (oopsie) */
-	return -1;
-}
-
-
 /* app shitcode ahoy! */
 struct spawn_bufs {
 	darray(int) fds;
