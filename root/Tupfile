@@ -1,3 +1,4 @@
+.gitignore
 include_rules
 
 # under -O3, GCC may produce SSE instructions in a runtime that doesn't align

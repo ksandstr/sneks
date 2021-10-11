@@ -1,3 +1,4 @@
+.gitignore
 include_rules
 
 : foreach *.c |> !cc |> %g.o

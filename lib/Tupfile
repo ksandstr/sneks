@@ -1,3 +1,4 @@
+.gitignore
 include_rules
 
 CFLAGS += -D__SNEKS__=1

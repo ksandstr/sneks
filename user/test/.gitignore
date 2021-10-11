@@ -1,5 +1,0 @@
-# products
-testsuite
-hostsuite
-.hostsuite-staging/*
-^.hostsuite-staging/.keep-alive

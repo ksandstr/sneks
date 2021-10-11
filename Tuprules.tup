@@ -53,7 +53,7 @@ CFLAGS=-O2 -Wall -march=native -std=gnu11 -pipe -D_GNU_SOURCE
 CFLAGS+=-m32 -mno-avx -mno-sse2 -ffunction-sections
 CFLAGS+=-fno-pic -fuse-ld=gold -fno-builtin -nostdlib -ffreestanding
 CFLAGS+=-Wno-frame-address
-CFLAGS+=$(BUILD_FLAGS)
+CFLAGS+=$(DEBUG_FLAGS) $(BUILD_FLAGS)
 
 LDFLAGS=-L /usr/lib32 -L /usr/lib/i386-linux-gnu --gc-sections
 LIBS=-ll4 -lm `gcc $(CFLAGS) -print-libgcc-file-name`
