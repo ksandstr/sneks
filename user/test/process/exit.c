@@ -18,10 +18,6 @@ START_TEST(raise_sigkill)
 {
 	plan_tests(4);
 
-#ifdef __sneks__
-	todo_start("borked");
-#endif
-
 	int child = fork();
 	if(child == 0) {
 		raise(SIGKILL);

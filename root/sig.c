@@ -85,28 +85,30 @@ add_sig:
 static bool sig_default(struct process *p, int sig)
 {
 	switch(sig) {
-		case SIGCHLD: goto ignore;
-		case SIGSEGV: goto core;
-		case SIGABRT: goto core;
 		default:
-			/* FIXME: add the rest and remove this */
-			printf("%s: ignoring sig=%d by default (perhaps wrongly)\n",
-				__func__, sig);
-			goto ignore;
+			/* FIXME: add the rest, assert against this */
+			printf("%s: ignoring sig=%d by default (perhaps wrongly)\n", __func__, sig);
+			/* FALL THRU */
+
+		/* ignored signals. */
+		case SIGCHLD:
+			assert(~p->pending_set & (1ull << sig));
+			return false;
+
+		/* signals that cause coredump. */
+		case SIGSEGV:
+		case SIGABRT:
+			/* FALL THRU */
+		/* signals that cause process termination. */
+		case SIGKILL:
+		case SIGTERM:
+			/* death. (would also dump core.) */
+			p->code = CLD_KILLED;
+			p->signo = sig;
+			p->status = 0;
+			zombify(p);
+			return true;
 	}
-
-ignore:
-	assert((p->pending_set & (1ull << sig)) == 0);
-	return false;
-
-core:
-	/* death. (would also dump core.) */
-	p->code = CLD_KILLED;
-	p->signo = sig;
-	p->status = 0;
-	zombify(p);
-
-	return true;
 }
 
 
