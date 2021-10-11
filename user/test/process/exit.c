@@ -46,10 +46,6 @@ START_LOOP_TEST(atexit_and_forced_exit, iter, 0, 1)
 	diag("forced=%s", btos(forced));
 	plan_tests(3);
 
-#ifdef __sneks__
-	todo_start("atexit not present");
-#endif
-
 	int fds[2], n = pipe(fds);
 	fail_unless(n == 0, "pipe(2): errno=%d", errno);
 
