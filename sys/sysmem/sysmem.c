@@ -578,7 +578,7 @@ static struct p_page *get_free_page(void)
 			int n_freed = replace_pages(&looped);
 			loop_freed += n_freed;
 			if(looped) {
-				if(loops > 0 && loop_freed == 0) break;
+				if(loops > 1 && loop_freed == 0) break;
 				loop_freed = 0;
 				loops++;
 			}
@@ -590,10 +590,9 @@ static struct p_page *get_free_page(void)
 		}
 		if(num_free_pages < 16) {
 			/* BOOM!
-			 *
-			 * TODO: do protocol w/ vm to get more memory.
+			 * TODO: have a protocol w/ vm to get more memory.
 			 */
-			panic("cannot replace memory in get_free_page()!");
+			panic("couldn't replace memory in get_free_page()!");
 		}
 	}
 
