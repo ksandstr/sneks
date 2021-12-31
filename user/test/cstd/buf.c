@@ -52,10 +52,6 @@ START_LOOP_TEST(pipe_output_buffering, iter, 0, 7)
 	plan_tests(7);
 	char *buf = calloc(1, BUFSIZ);
 
-#ifdef __sneks__
-	todo_start("not implemented");
-#endif
-
 	int infd, outfd;
 	assert(buftype < ARRAY_SIZE(buftypes) && buftypes[buftype] != NULL);
 	pid_t child = pipecmd(&infd, &outfd, &pipecmd_preserve,
@@ -66,6 +62,9 @@ START_LOOP_TEST(pipe_output_buffering, iter, 0, 7)
 	if(streq(buftypes[buftype], "default")) {
 		/* default for pipes, not being terminals, is block buffering. */
 		buftype = _IOFBF;
+#ifdef __sneks__
+		todo_start("need isatty()");
+#endif
 	}
 
 	/* first part should arrive iff a "none" mode was specified, and wait
@@ -74,7 +73,6 @@ START_LOOP_TEST(pipe_output_buffering, iter, 0, 7)
 	usleep(10000);
 	int got = readall(outfd, buf, BUFSIZ);
 	fail_if(got < 0, "readall: errno=%d", errno);
-	//diag("got=%d, buf=`%s'", got, buf);
 	iff_ok1(buftype == _IONBF, got == 6 && memcmp(buf, "first ", 6) == 0);
 
 	/* second part should arrive on its own when unbuffered, after first if

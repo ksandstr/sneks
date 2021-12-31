@@ -9,11 +9,24 @@
 #include <fcntl.h>
 #include <assert.h>
 
-#include <ccan/minmax/minmax.h>
 #include <ccan/array_size/array_size.h>
+#include <ccan/list/list.h>
+#include <ccan/minmax/minmax.h>
 
 
-struct memopenf {
+struct __stdio_file
+{
+	struct list_node link;	/* in file_list */
+	void *cookie;
+	int mode;	/* set of O_* plus one of RDONLY/WRONLY/RDWR in O_ACCMASK */
+	int error, bufmode;
+	char *buffer;
+	size_t bufsz, bufmax;
+	/* and a cookie_io_functions_t right after. */
+};
+
+struct memopenf
+{
 	void *buf;
 	size_t size, pos;
 	FILE *stream;
@@ -23,6 +36,7 @@ struct memopenf {
 
 FILE *stdin = NULL, *stdout = NULL, *stderr = NULL;
 
+static struct list_head file_list = LIST_HEAD_INIT(file_list);
 static char first_file_mem[(sizeof(FILE) + sizeof(cookie_io_functions_t)) * 8];
 static size_t first_file_pos = 0;
 
@@ -52,8 +66,9 @@ static FILE *alloc_file(const cookie_io_functions_t *fns)
 	}
 
 	if(f != NULL) {
-		*f = (FILE){ .error = 0 };
+		*f = (FILE){ .error = 0, .bufmax = BUFSIZ - 1, .bufmode = _IONBF };
 		*GET_IOFNS(f) = *fns;
+		list_add_tail(&file_list, &f->link);
 	}
 	return f;
 }
@@ -61,6 +76,7 @@ static FILE *alloc_file(const cookie_io_functions_t *fns)
 
 static void free_file(FILE *f)
 {
+	list_del_from(&file_list, &f->link);
 	void *last = (void *)f + sizeof *f + sizeof(cookie_io_functions_t) - 1;
 	if(last < (void *)first_file_mem
 		|| (void *)f >= (void *)first_file_mem + ARRAY_SIZE(first_file_mem))
@@ -119,8 +135,14 @@ FILE *fopencookie(void *cookie, const char *mode, cookie_io_functions_t fns)
 }
 
 
+void *fcookie_NP(FILE *stream) {
+	return stream->cookie;
+}
+
+
 int fclose(FILE *f)
 {
+	fflush(f);
 	int n = 0;
 	if(GET_IOFNS(f)->close != NULL) {
 		n = (*GET_IOFNS(f)->close)(f->cookie);
@@ -130,9 +152,27 @@ int fclose(FILE *f)
 }
 
 
+void __stdio_fclose_all(void) {
+	FILE *cur, *next;
+	list_for_each_safe(&file_list, cur, next, link) {
+		fclose(cur);
+	}
+	assert(list_empty(&file_list));
+}
+
+
 int fflush(FILE *stream)
 {
-	/* no buffers, no flushing. let others explain. */
+	while(stream->bufsz > 0) {
+		ssize_t n = (*GET_IOFNS(stream)->write)(stream->cookie, stream->buffer, stream->bufsz);
+		assert(n >= 0);
+		if(n < stream->bufsz) {
+			memmove(stream->buffer, stream->buffer + n, stream->bufsz - n);
+			stream->bufsz -= n;
+		} else {
+			stream->bufsz = 0;
+		}
+	}
 	return 0;
 }
 
@@ -156,10 +196,54 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream)
 size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream)
 {
 	if(GET_IOFNS(stream)->write == NULL) return 0;
+	if(stream->bufmode != _IONBF && stream->buffer == NULL) {
+		stream->buffer = malloc(stream->bufmax + 1);
+		if(stream->buffer == NULL) {
+			stream->error = ENOMEM;
+			return 0;
+		}
+		assert(stream->bufsz == 0);
+	}
 	/* TODO: do safe multiplication between @size and @nmemb! (and see above,
 	 * fread() needs the fix as well.)
 	 */
-	long n = (*GET_IOFNS(stream)->write)(stream->cookie, ptr, size * nmemb);
+	size_t remain = size * nmemb, n = 0;
+	switch(stream->bufmode) {
+		default: assert(false); break;
+		case _IOLBF: {
+			const char *nl;
+			while(nl = memchr(ptr, '\n', remain), nl != NULL) {
+				if(stream->bufsz > 0) fflush(stream);
+				size_t nbytes = nl - (const char *)ptr + 1;
+				ssize_t m = (*GET_IOFNS(stream)->write)(stream->cookie, ptr, nbytes);
+				assert(m >= 0);
+				remain -= m; ptr += m; n += m;
+				if(m < nbytes) break;
+			}
+			if(stream->bufsz + remain <= stream->bufmax) {
+				memcpy(stream->buffer + stream->bufsz, ptr, remain);
+				stream->bufsz += remain;
+				n += remain;
+				break;
+			} else {
+				/* FALL THRU */
+			}
+		}
+		case _IOFBF:
+			if(stream->bufsz + remain <= stream->bufmax) {
+				memcpy(stream->buffer + stream->bufsz, ptr, remain);
+				stream->bufsz += remain;
+				n += remain;
+				break;
+			} else {
+				if(stream->bufsz > 0) fflush(stream);
+				/* FALL THRU */
+			}
+		case _IONBF:
+			n += (*GET_IOFNS(stream)->write)(stream->cookie, ptr, remain);
+			break;
+	}
+
 	/* NOTE: analoguously to what happens for a fread() that hits EOF in the
 	 * middle of a @size chunk, we let the caller figure it out. this
 	 * interface is therefore unsuited for output into nonseekable streams
@@ -439,21 +523,30 @@ FILE *fmemopen(void *buf, size_t size, const char *mode)
 }
 
 
-void setbuf(FILE *stream, char *buf) {
-	/* jack shit! */
+int setvbuf(FILE *stream, char *buf, int mode, size_t size)
+{
+	if(stream->mode != _IONBF && stream->bufsz > 0) {
+		errno = EBADF;
+		return -1;
+	}
+	stream->bufmode = mode;
+	stream->buffer = buf;
+	stream->bufmax = (size > 0 ? size : BUFSIZ) - 1;
+	stream->bufsz = 0;
+	return 0;
 }
 
 
-int setvbuf(FILE *stream, char *buf, int modes, size_t n) {
-	return -1; /* toodles! */
+void setbuf(FILE *stream, char *buf) {
+	setvbuf(stream, buf, buf != NULL ? _IOFBF : _IONBF, BUFSIZ);
 }
 
 
 void setbuffer(FILE *stream, char *buf, size_t size) {
-	/* vacancy */
+	setvbuf(stream, buf, buf != NULL ? _IOFBF : _IONBF, size);
 }
 
 
 void setlinebuf(FILE *stream) {
-	/* hey gabba gabba */
+	setvbuf(stream, NULL, _IOLBF, 0);
 }

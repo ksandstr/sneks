@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <stdnoreturn.h>
 #include <sneks/sysinfo.h>
@@ -43,6 +44,7 @@ noreturn void exit(int status)
 		(*exitfns[i])();
 	}
 	/* as for exitfns, we release its memory like a cruise missile. */
+	__stdio_fclose_all();
 	_Exit(status);
 }
 

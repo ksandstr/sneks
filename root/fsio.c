@@ -50,13 +50,13 @@ L4_ThreadId_t __get_rootfs(void)
 
 
 L4_ThreadId_t fserver_NP(FILE *f) {
-	struct sfdpriv *priv = f->cookie;
+	struct sfdpriv *priv = fcookie_NP(f);
 	return priv->server;
 }
 
 
 int fhandle_NP(FILE *f) {
-	struct sfdpriv *priv = f->cookie;
+	struct sfdpriv *priv = fcookie_NP(f);
 	return priv->handle;
 }
 

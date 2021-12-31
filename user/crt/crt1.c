@@ -155,8 +155,8 @@ void __init_crt(char **envp, char *progname)
 		assert(fd == i);
 	}
 	stdin = fdopen(0, "r");
-	stdout = fdopen(1, "w");
-	stderr = fdopen(2, "w");
+	stdout = fdopen(1, "w"); setvbuf(stdout, NULL, _IOLBF, BUFSIZ);
+	stderr = fdopen(2, "w"); setvbuf(stderr, NULL, _IONBF, 0);
 	/* printf() works now. */
 
 	if(__cwd_fd < 0 && chdir("/") < 0) abort();

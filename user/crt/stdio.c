@@ -45,8 +45,11 @@ static int fd_close(void *cookie) {
 
 FILE *fdopen(int fd, const char *mode)
 {
-	return fopencookie((void *)fd, mode, (cookie_io_functions_t){
+	FILE *f = fopencookie((void *)fd, mode, (cookie_io_functions_t){
 		.write = &fd_write, .read = &fd_read,
 		.close = &fd_close, .seek = &fd_seek,
 	});
+	/* TODO: use _IOLBF when isatty(), but isatty() isn't here yet. */
+	setvbuf(f, NULL, _IOFBF, 0);
+	return f;
 }

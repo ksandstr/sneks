@@ -35,17 +35,9 @@
 #define BUFSIZ 8192
 
 
-struct __stdio_file
-{
-	void *cookie;
-	int mode;	/* set of O_* plus one of RDONLY/WRONLY/RDWR in O_ACCMASK */
-	int error;
-	/* TODO: buffer stuff? */
-
-	/* and a cookie_io_functions_t right after. */
-};
-
+struct __stdio_file;
 typedef struct __stdio_file FILE;
+extern void __stdio_fclose_all(void);
 
 
 extern int printf(const char *fmt, ...)
@@ -90,6 +82,7 @@ typedef struct {
 
 extern FILE *fopencookie(
 	void *cookie, const char *mode, cookie_io_functions_t io_funcs);
+extern void *fcookie_NP(FILE *stream);
 #endif
 
 extern FILE *fopen(const char *path, const char *mode);
