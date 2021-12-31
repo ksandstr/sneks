@@ -225,6 +225,14 @@ end:
 }
 
 
+void *memchr(const void *ptr, int c, size_t n)
+{
+	const unsigned char *m = ptr, *end = m + n;
+	while(*m != c && m < end) m++;
+	return m < end ? (void *)m : NULL;
+}
+
+
 int strncmp(const char *a, const char *b, size_t max)
 {
 	if(a == b) return 0;
