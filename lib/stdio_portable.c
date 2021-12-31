@@ -1,8 +1,6 @@
-
 /* the non-runtime-specific portion of stdio. is it smart to do all of stdio
  * on top of the fopencookie() extension? yeah it is, until proven otherwise!
  */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -438,4 +436,24 @@ FILE *fmemopen(void *buf, size_t size, const char *mode)
 	}
 
 	return mof->stream;
+}
+
+
+void setbuf(FILE *stream, char *buf) {
+	/* jack shit! */
+}
+
+
+int setvbuf(FILE *stream, char *buf, int modes, size_t n) {
+	return -1; /* toodles! */
+}
+
+
+void setbuffer(FILE *stream, char *buf, size_t size) {
+	/* vacancy */
+}
+
+
+void setlinebuf(FILE *stream) {
+	/* hey gabba gabba */
 }

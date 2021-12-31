@@ -1,7 +1,9 @@
-
 /* FIXME: this should get all its typenames from somewhere in such a way that
  * it doesn't contaminate the user namespace with vanilla versions. i.e.
  * __off_t, __ssize_t, and so forth.
+ *
+ * FIXME: all the parameter names etc. should also be either doubly
+ * underscored so that existing macros don't screw them up, or elided.
  */
 
 #ifndef _STDIO_H
@@ -21,6 +23,16 @@
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
+
+/* third argument to `setvbuf()'. */
+#define _IOFBF 0	/* block ("fully") buffered */
+#define _IOLBF 1	/* line buffered (flush on '\n', or full) */
+#define _IONBF 2	/* not buffered */
+
+/* default buffer size, as for setbuf(3). tad on the large side to be sure,
+ * but microkernel context transfers are slow so let's bloat this right up.
+ */
+#define BUFSIZ 8192
 
 
 struct __stdio_file
@@ -109,5 +121,11 @@ extern int fputc(char c, FILE *stream);
 extern int fgetc(FILE *stream);
 extern char *fgets(char *s, int size, FILE *stream);
 /* TODO: getc(), getchar(), ungetc() */
+
+/* buffer twiddle */
+extern void setbuf(FILE *stream, char *buf);
+extern int setvbuf(FILE *stream, char *buf, int mode, size_t n);
+extern void setbuffer(FILE *stream, char *buf, size_t size);
+extern void setlinebuf(FILE *stream);
 
 #endif
