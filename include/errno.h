@@ -25,6 +25,7 @@
 #define EINVAL	22	/* invalid value */
 #define ENFILE	23	/* file table overflow (system) */
 #define EMFILE	24	/* too many open files (process) */
+#define ENOTTY	25	/* not a typewriter */
 #define ENOSPC	28	/* no space left on device */
 #define ESPIPE	29	/* 's pipe, socket, or fifo (illegal seek) */
 #define EROFS	30	/* read-only file system */

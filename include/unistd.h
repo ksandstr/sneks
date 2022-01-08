@@ -1,4 +1,3 @@
-
 #ifndef _UNISTD_H
 #define _UNISTD_H 1
 
@@ -98,6 +97,8 @@ enum {
 
 
 extern _Noreturn void _exit(int);
+
+extern int isatty(int fd);
 
 
 extern unsigned int sleep(unsigned int seconds);

@@ -326,3 +326,10 @@ int fcntl(int fd, int cmd, ...)
 Einval: errno = EINVAL; return -1;
 Ebadf: errno = EBADF; return -1;
 }
+
+
+int isatty(int fd)
+{
+	errno = ENOSYS;
+	return -1;
+}
