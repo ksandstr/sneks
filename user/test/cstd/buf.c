@@ -62,9 +62,6 @@ START_LOOP_TEST(pipe_output_buffering, iter, 0, 7)
 	if(streq(buftypes[buftype], "default")) {
 		/* default for pipes, not being terminals, is block buffering. */
 		buftype = _IOFBF;
-#ifdef __sneks__
-		todo_start("need isatty()");
-#endif
 	}
 
 	/* first part should arrive iff a "none" mode was specified, and wait
