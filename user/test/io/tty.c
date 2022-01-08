@@ -6,9 +6,6 @@
 START_TEST(isatty_basic)
 {
 	plan_tests(3);
-#ifdef __sneks__
-	todo_start("missing#1");
-#endif
 
 #ifndef __sneks__
 	/* it's dicky to get a tty for test programs' stdout on a real proper unix

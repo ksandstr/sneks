@@ -1,7 +1,6 @@
 
 #define SNEKS_KMSG_IMPL_SOURCE
 #define ROOTSERV_IMPL_SOURCE
-#define BOOTCON_IMPL_SOURCE
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1399,97 +1398,6 @@ static void parse_initrd_args(struct htable *dest)
 }
 
 
-/* TODO: move into bootcon.c */
-
-static int bootcon_read(int cookie, int length, off_t offset,
-	uint8_t *buf, unsigned *len_p)
-{
-	*len_p = 0;
-	return 0;
-}
-
-
-static int bootcon_write(int cookie, off_t offset,
-	const uint8_t *buf, unsigned buf_len)
-{
-	extern void computchar(unsigned char ch);
-	for(unsigned i=0; i < buf_len; i++) computchar(buf[i]);
-	return buf_len;
-}
-
-
-static int bootcon_close(int fd) {
-	return 0;	/* everything will be fire. */
-}
-
-
-static int bootcon_ignore_flags(int *old, int fd, int or, int and) {
-	*old = 0;
-	return 0;
-}
-
-
-static int bootcon_dup(int *new_p, int old, int flags) {
-	*new_p = old;
-	return 0;
-}
-
-
-static int bootcon_dup_to(int *newfd_ptr, int oldfd, pid_t receiver_pid) {
-	*newfd_ptr = oldfd;
-	return 0;
-}
-
-
-static int bootcon_stat_handle(int fd, struct sneks_io_statbuf *st) {
-	*st = (struct sneks_io_statbuf){ };
-	return 0;
-}
-
-
-static int bootcon_thread_fn(void *param_ptr)
-{
-	// struct htable *root_args = param_ptr;
-	/* FIXME: make malloc threadsafe and remove this sleep so the dispatch
-	 * function can safely enter malloc.
-	 */
-	L4_Sleep(L4_TimePeriod(20 * 1000));
-
-	static const struct boot_con_vtable vtab = {
-		.read = &bootcon_read,
-		.write = &bootcon_write,
-		.close = &bootcon_close,
-		.set_file_flags = &bootcon_ignore_flags,
-		.set_handle_flags = &bootcon_ignore_flags,
-		.dup = &bootcon_dup,
-		.dup_to = &bootcon_dup_to,
-		.stat_handle = &bootcon_stat_handle,
-	};
-	for(;;) {
-		L4_Word_t status = _muidl_boot_con_dispatch(&vtab);
-		if(status == MUIDL_UNKNOWN_LABEL) {
-			L4_MsgTag_t tag = muidl_get_tag();
-			printf("bootcon: unknown message label=%#lx, u=%lu, t=%lu\n",
-				L4_Label(tag), L4_UntypedWords(tag), L4_TypedWords(tag));
-		} else if(status != 0 && !MUIDL_IS_L4_ERROR(status)) {
-			printf("bootcon: dispatch status %#lx (last tag %#lx)\n",
-				status, muidl_get_tag().raw);
-		}
-	}
-
-	return 0;
-}
-
-
-static L4_ThreadId_t console_init(struct htable *root_args)
-{
-	thrd_t con_thrd;
-	int n = thrd_create(&con_thrd, &bootcon_thread_fn, root_args);
-	return n != thrd_success ? L4_nilthread
-		: L4_GlobalIdOf(thrd_tidof_NP(con_thrd));
-}
-
-
 /* gets a zero-or-one argument and returns it, or NULL if there wasn't one.
  * (zero-or-more will wait until the structures accommodate it.)
  */
@@ -1503,7 +1411,7 @@ static const char *get_root_arg(struct htable *root_args, const char *key)
 
 static int launch_init(
 	uint16_t *init_pid_p,
-	struct htable *root_args, L4_ThreadId_t console)
+	struct htable *root_args, L4_ThreadId_t console, int con_fd)
 {
 	const char *init = get_root_arg(root_args, "init");
 	if(init == NULL || init[0] == '\0') {
@@ -1527,7 +1435,9 @@ static int launch_init(
 	for(int i=0; i < 3; i++) {
 		fds[i] = i;
 		servs[i] = console.raw;
-		cookies[i] = 0xbadcafe0;
+		int tmp, n = __io_dup_to(console, &tmp, con_fd, 1);
+		if(n != 0) panic("IO::dup_to of bootcon failed!");
+		cookies[i] = tmp;
 	}
 	/* init starts out with an empty environment. so sad. */
 	int n = __proc_spawn(uapi_tid, init_pid_p, prog,
@@ -1690,7 +1600,8 @@ int main(void)
 	parse_initrd_args(&root_args);
 
 	uapi_init();
-	L4_ThreadId_t con_tid = console_init(&root_args);
+	int confd;
+	L4_ThreadId_t con_tid = start_bootcon(&confd, &root_args);
 	random_init(rdtsc());
 
 	/* configure sysinfo. */
@@ -1788,7 +1699,7 @@ int main(void)
 	 * (or some such).
 	 */
 	uint16_t init_pid;
-	n = launch_init(&init_pid, &root_args, con_tid);
+	n = launch_init(&init_pid, &root_args, con_tid, confd);
 	if(n != 0) {
 		printf("FAIL: can't launch init, n=%d\n", n);
 		panic("this means your system is heavily broken!");

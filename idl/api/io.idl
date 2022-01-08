@@ -103,6 +103,12 @@ interface IO
 		raises(Posix::Errno);
 	void touch(in handle newfd)
 		raises(Posix::Errno);
+
+	/* returns 1 when @fd refers to a tty, 0 when it doesn't, and pops
+	 * EBADF when @fd isn't even valid.
+	 */
+	octet isatty(in handle fd)
+		raises(Posix::Errno);
 };
 
 };

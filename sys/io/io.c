@@ -943,6 +943,16 @@ int io_impl_stat_handle(int fd, struct sneks_io_statbuf *result_ptr)
 }
 
 
+/* by default we're never a teletype. those that are will override the vtable
+ * entry accordingly.
+ */
+int io_impl_isatty(int fd) {
+	sync_confirm();
+	if(get_fd(pidof_NP(muidl_get_sender()), fd) == NULL) return -EBADF;
+	return 0;
+}
+
+
 /* thread that converts an "edge" poke into a "level" event. without causing
  * the sysmsg handler to block, this ensures that MPL_EXIT is processed right
  * away so that SIGPIPE and the like go out immediately in response to peer

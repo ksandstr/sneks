@@ -1,4 +1,3 @@
-
 /* exports within the root task program. */
 
 #ifndef __ROOT_DEFS_H__
@@ -12,6 +11,7 @@
 #include <ccan/list/list.h>
 #include <ccan/bitmap/bitmap.h>
 #include <ccan/darray/darray.h>
+#include <ccan/htable/htable.h>
 
 #include <l4/types.h>
 #include <l4/kip.h>
@@ -184,5 +184,8 @@ extern FILE *sfdopen_NP(L4_ThreadId_t server, L4_Word_t handle, const char *mode
 extern L4_ThreadId_t fserver_NP(FILE *f);	/* these two are like fileno(3) */
 extern int fhandle_NP(FILE *f);
 
+
+/* from bootcon.c */
+extern L4_ThreadId_t start_bootcon(int *confd_p, struct htable *root_args);
 
 #endif

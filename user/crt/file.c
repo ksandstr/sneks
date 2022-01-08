@@ -330,6 +330,11 @@ Ebadf: errno = EBADF; return -1;
 
 int isatty(int fd)
 {
-	errno = ENOSYS;
-	return -1;
+	struct fd_bits *b = __fdbits(fd);
+	if(b == NULL) { errno = EBADF; return 0; }
+	uint8_t ret;
+	int n = __io_isatty(b->server, &ret, b->handle);
+	if(n < 0) { errno = -n; return 0; }
+	else if(ret == 0) { errno = ENOTTY; return 0; }
+	else return 1;
 }
