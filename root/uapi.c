@@ -1796,6 +1796,8 @@ int uapi_loop(void *param_ptr)
 		.get_path = &enosys,
 		.get_path_fragment = &enosys,
 		.stat_object = &enosys,
+		/* Sneks::Namespace */
+		.mount = &enosys, .umount = &enosys, .get_fs_tree = &enosys,
 	};
 	for(;;) {
 		L4_Word_t st = _muidl_root_uapi_dispatch(&vtab);
