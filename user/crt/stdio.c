@@ -1,8 +1,11 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <assert.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <sys/types.h>
 #include <ccan/minmax/minmax.h>
 
 #include <l4/types.h>
@@ -38,7 +41,7 @@ static int fd_seek(void *cookie, off64_t *offset, int whence) {
 
 
 static int fd_close(void *cookie) {
-	return 0;
+	return close((int)cookie) < 0 ? EOF : 0;
 }
 
 
@@ -49,5 +52,29 @@ FILE *fdopen(int fd, const char *mode)
 		.close = &fd_close, .seek = &fd_seek,
 	});
 	setvbuf(f, NULL, isatty(fd) ? _IOLBF : _IOFBF, 0);
+	return f;
+}
+
+
+FILE *fopen(const char *path, const char *modestr)
+{
+	int flags = 0;
+	bool append = false;
+	for(int i=0; modestr[i] != '\0'; i++) {
+		switch(modestr[i]) {
+			case 'r': flags |= O_RDONLY; break;
+			case 'w': flags |= O_RDWR; break;
+			case '+': append = true; break;
+			default:
+				/* ersatz failure */
+				errno = EINVAL;
+				return NULL;
+		}
+	}
+	int fd = open(path, flags, 0660);
+	if(fd < 0) return NULL;
+	if(append) lseek(fd, 0, SEEK_END);
+	FILE *f = fdopen(fd, modestr);
+	if(f == NULL) close(fd);
 	return f;
 }
