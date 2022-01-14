@@ -1,3 +1,2 @@
 include_rules
-
-: | user/<initrd> sys/<initrd> |> ^ MKSQUASHFS %o^ mksquashfs .initrd-staging %o -comp lz4 -Xhc -all-root -no-fragments >/dev/null 2>/dev/null |> initrd.img
+: .initrd-staging | user/<initrd> sys/<initrd> |> !mksquashfs |> initrd.img

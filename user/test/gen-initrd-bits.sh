@@ -1,22 +1,31 @@
 #!/bin/sh
 set -e
 
-# these are all here like this so that we can parameterize the group
-# identifier.
+STAGING=$1	# what appears under TESTDIR
+TESTDIR=$2	# what TESTDIR appears under
+GROUP=$3	# tup dependency group for initrd contents
 
-STAGING=$1
-TESTDIR=$2
-GROUP=$3
+# define ex-nihilo actions the Tupfile should take.
+do_mkdir() {
+	# emits a placeholder because tup won't depend on directories.
+	echo ": |> ^ MKDIR $1^ install -D /dev/null %o |> $STAGING/user/test/$1/.placeholder $GROUP"
+}
+do_echo() {
+	echo ": |> ^ ECHO >$2^ echo -n '$1' >%o |> $STAGING/user/test/$2 $GROUP"
+}
+do_touch() {
+	echo ": |> ^ TOUCH $1^ touch %o |> $STAGING/user/test/$1 $GROUP"
+}
 
 # io:reg
-echo ": |> ^ ECHO >io/reg/testfile^ echo -n '0123456789abcdef' >%o |> $STAGING/user/test/io/reg/testfile $GROUP"
+do_echo '0123456789abcdef' io/reg/testfile
 
 # io:dir
 for i in a b c d e f g h i j k l; do
-	echo ": |> ^ TOUCH io/dir/$i^ touch %o |> $STAGING/user/test/io/dir/$i/placeholder $GROUP"
+	do_touch io/dir/$i/placeholder
 done
 for i in 0 1 2 3 4 5 6 7 8 9; do
-	echo ": |> ^ ECHO >io/dir/$i^ echo 'shoop da woop $i' >%o |> $STAGING/user/test/io/dir/$i $GROUP"
+	do_echo "shoop da woop $i" io/dir/$i
 done
 
 # io:stat
@@ -44,9 +53,13 @@ link nonterminal_relative nonterminal_iterated_relative
 link $linksrc/reg nonterminal_absolute
 link $linksrc/symlink/nonterminal_relative nonterminal_iterated_absolute
 
+# path:mount
+do_mkdir path/mount/sub
+do_echo "indeed" path/mount/sub/not-mounted-yet
+do_echo "hello, superior filesystem" path/mount/super-test-file
 
 # cstd:fileio
-echo ": |> ^ ECHO >cstd/fileio/test-file^ echo 'hello, test file' >%o |> $STAGING/user/test/cstd/fileio/test-file $GROUP"
+do_echo 'hello, test file' cstd/fileio/test-file
 
 # for process
 base=$STAGING/user/test/exec

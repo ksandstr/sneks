@@ -85,6 +85,9 @@ SYS_LIBS=-lsneks-systask -lsneks-sysidl -lsneks
 !idlclient = |> ^ IDL %b <client>^ &(muidl) `&(foreach) '-I +' &(idl_incdir)` $(MUIDLFLAGS) --client --common --defs %f |> %B-client.s %B-common.s %B-defs.h
 !idlimpl = |> ^ IDL %b <impl>^ &(muidl) `&(foreach) '-I +' &(idl_incdir)` $(MUIDLFLAGS) --service --common --defs %f |> %B-service.s %B-common.s %B-defs.h
 
+# generate a squashfs image such that fs.squashfs will consume it.
+!mksquashfs = |> ^ MKSQUASHFS %o^ mksquashfs %f %o -comp lz4 -Xhc -all-root -no-fragments >/dev/null 2>/dev/null |> %o
+
 # putting things on the initrd. systasks under &(initrd)/$(mods), userspace in
 # plain &(initrd). add every !install or !install644 product to user/<initrd>
 # or sys/<initrd>. for absolute symlinks, prefix with $(target_initrd).

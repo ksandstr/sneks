@@ -35,8 +35,12 @@ target_initrd=/initrd
 : foreach tools/*.o |> !user-ld |> tools/%B {tools}
 : foreach {tools} |> !installs |> $(initrd)/user/test/tools/%B ../<initrd>
 : foreach scripts/* |> !install |> $(initrd)/user/test/scripts/%B ../<initrd>
+# note: non-generated content in path/test-image won't be updated by tup.
+: path/test-image | path/<subfs> |> !mksquashfs |> $(initrd)/user/test/path/mount/subfs.img ../<initrd>
 run ./gen-initrd-bits.sh $(initrd) $(target_initrd) "../<initrd>"
 
+# subfs image contents for path/mount.c
+: |> ^ ECHO >%o^ echo 'hello, test mount!' >%o |> path/test-image/test-file path/<subfs>
 
 # and here we do the same for hostsuite, sort of; instead of an initrd staging
 # area we install to a local hostsuite staging point.
@@ -80,6 +84,7 @@ CFLAGS+=-Wno-frame-address -DTESTDIR="\"$(testdir)\""
 : foreach {hosttoolobj} |> !host-ld |> tools/%B {hosttools}
 : foreach {hosttools} |> !install |> $(initrd)/user/test/tools/%B <hoststaging>
 : foreach scripts/* |> !install |> $(initrd)/user/test/scripts/%B <hoststaging>
+# not test-image.bin though
 run ./gen-initrd-bits.sh $(initrd) $(testdir) "<hoststaging>"
 
 : {hostsuite} {hosttests} | <hoststaging> |> !host-ld |> hostsuite

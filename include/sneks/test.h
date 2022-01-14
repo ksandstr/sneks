@@ -139,6 +139,8 @@ extern unsigned factorial(unsigned x); /* computes x! */
  * while @perm < n! .
  */
 extern void gen_perm(unsigned *buf, unsigned n, unsigned perm);
+/* stat() wrappers */
+extern bool test_e(const char *pathspec);
 
 /* from tap.c */
 extern void _fail_unless(int result, const char *file, int line, const char *expr, const char *fmt, ...);
