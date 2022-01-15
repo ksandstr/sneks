@@ -1,8 +1,6 @@
-
 /* tests on C11-style file I/O. fopen(), fprintf() and the like, into streams
  * of various kinds.
  */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -10,6 +8,12 @@
 #include <errno.h>
 #include <ccan/str/str.h>
 #include <sneks/test.h>
+
+
+static void chomp(char *s) {
+	int len = strlen(s);
+	while(len > 0 && s[--len] == '\n') s[len] = '\0';
+}
 
 
 /* scratch test: whether a stream opened read-write retains what's written at
@@ -239,3 +243,21 @@ START_LOOP_TEST(fread_odd_block, iter, 0, 1)
 END_TEST
 
 DECLARE_TEST("cstd:fileio", fread_odd_block);
+
+
+/* just open a file and read its contents. */
+START_TEST(fopen_basic)
+{
+	plan_tests(3);
+	FILE *f = fopen(TESTDIR "/user/test/cstd/fileio/test-file", "r");
+	skip_start(!ok(f != NULL, "fopen(3)"), 2, "errno=%d", errno) {
+		char line[200] = "";
+		ok(fgets(line, sizeof line, f) != NULL, "fgets(3)");
+		chomp(line);
+		ok1(streq(line, "hello, test file"));
+		fclose(f);
+	} skip_end;
+}
+END_TEST
+
+DECLARE_TEST("cstd:fileio", fopen_basic);

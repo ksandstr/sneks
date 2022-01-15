@@ -45,6 +45,9 @@ link $linksrc/reg nonterminal_absolute
 link $linksrc/symlink/nonterminal_relative nonterminal_iterated_absolute
 
 
+# cstd:fileio
+echo ": |> ^ ECHO >cstd/fileio/test-file^ echo 'hello, test file' >%o |> $STAGING/user/test/cstd/fileio/test-file $GROUP"
+
 # for process
 base=$STAGING/user/test/exec
 echo ": |> ^ MKDIR isdir/exit_with_0^ touch %o |> $base/isdir/exit_with_0/placeholder $GROUP"
