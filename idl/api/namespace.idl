@@ -1,0 +1,46 @@
+#ifndef __API_NAMESPACE_IDL__
+#define __API_NAMESPACE_IDL__
+
+#include <l4x2.idl>
+#include <muidl.idl>
+#include <posixlike.idl>
+
+#include <api/path.idl>
+
+module Sneks {
+
+[StubPrefix(__ns), IfaceLabel(0xe80e)]	/* b is for briefcase */
+interface Namespace
+{
+	typedef string<80> fstype;
+	typedef string<Path::PATH_MAX> opts;
+
+	void mount(in Path::path source, in Path::path target, in fstype fstype, in unsigned long mountflags, in opts data)
+		raises(muidl::NoReply, Posix::Errno);
+
+	void umount(in Path::path target, in long flags)
+		raises(muidl::NoReply, Posix::Errno);
+
+	/* systask-only. fetch contact @tid and @join point object for caller's
+	 * attached filesystem @index ∈ [0, *ENOENT*), or @index = -1 for the
+	 * caller's parent filesystem. data is subject to concurrent revision as
+	 * mounts are added and removed, per @gen changing halfway through.
+	 */
+	typedef unsigned long gen_id;
+	void get_fs_tree(out gen_id gen, out L4X2::ThreadId tid, out Path::object join, in long pid, in long index)
+		raises(Posix::Errno);
+
+	/* sysmsg events keeping parent filesystems up to date w/o full sync. */
+	const short MOUNTED_BIT = 7;
+	/* "mounted" message:
+	 *   - w0 is PID of superior filesystem, or 0 for root.
+	 *   - w1 is flags, set of M_*
+	 *   - w2 is contact TID of u/-mounted filesystem.
+	 *   - w3 is the join-point object of the superior filesystem.
+	 */
+	const long M_UNMOUNT = 1;
+};
+
+};
+
+#endif
