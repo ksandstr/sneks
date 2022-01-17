@@ -1,15 +1,10 @@
-
-/* implementation specs for various things which are expected to gain more
- * things as e.g. the root UAPI function grows beyond Sneks::Proc.
- */
-
+/* implementation specs for IDL servers in the root task. */
 #include <api/io.idl>
 #include <api/proc.idl>
 #include <api/path.idl>
 #include <api/dev.idl>
 #include <api/namespace.idl>
 #include <sys/abend.idl>
-
 
 /* root's initial console. not for consumption outside the root task. will be
  * replaced once actual ttyS0 etc. terminal selection stuff is available.
@@ -18,18 +13,20 @@ interface BootCon: Sneks::IO {
 	/* nothing here but us chickens */
 };
 
-
 /* impl spec for root's uapi server. */
-interface RootUapi: Sneks::Proc, Sneks::Path, Sneks::Namespace {
+interface RootUapi: Sneks::Proc {
 	/* emp-tay */
 };
 
+/* root resolver, mount/umount server */
+interface RootPath: Sneks::Path, Sneks::Namespace {
+	/* void */
+};
 
 /* device lookup and spawning server. */
 interface RootDevices: Sneks::DeviceNode {
 	/* inherited things only */
 };
-
 
 /* root's service mode. */
 interface RootServ: Sneks::Abend {

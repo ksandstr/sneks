@@ -1,4 +1,3 @@
-
 /* fopen() on top of sys/fs.idl, using fopencookie(). */
 
 #include <stdio.h>
@@ -19,6 +18,8 @@
 #include <l4/types.h>
 #include <l4/thread.h>
 
+#include "defs.h"
+
 
 struct sfdpriv {
 	L4_ThreadId_t server;
@@ -33,18 +34,6 @@ static int idl2errno(int n)
 	else {
 		errno = n < 0 ? -n : EIO;
 		return -1;
-	}
-}
-
-
-L4_ThreadId_t __get_rootfs(void)
-{
-	struct sneks_rootfs_info ri;
-	int n = __info_rootfs_block(L4_Pager(), &ri);
-	if(n == 0) return (L4_ThreadId_t){ .raw = ri.service };
-	else {
-		idl2errno(n);
-		return L4_nilthread;
 	}
 }
 
@@ -113,8 +102,8 @@ FILE *sfdopen_NP(L4_ThreadId_t server, L4_Word_t handle, const char *mode)
 
 FILE *fopen(const char *path, const char *modestr)
 {
-	L4_ThreadId_t fs = __get_rootfs();
-	if(L4_IsNilThread(fs)) return NULL;
+	L4_ThreadId_t root = __get_rootfs();
+	if(L4_IsNilThread(root)) return NULL;
 
 	/* TODO: translate @mode to Sneks::{Path,File} mode & flags */
 	mode_t mode = 0;
@@ -134,7 +123,7 @@ FILE *fopen(const char *path, const char *modestr)
 	unsigned object;
 	L4_ThreadId_t server;
 	L4_Word_t cookie;
-	int ifmt, n = __path_resolve(fs, &object, &server.raw,
+	int ifmt, n = __path_resolve(root, &object, &server.raw,
 		&ifmt, &cookie, 0, path, flags | mode);
 	if(n != 0) {
 		idl2errno(n);
@@ -157,11 +146,11 @@ FILE *fopen(const char *path, const char *modestr)
 	actual = L4_ActualSender();
 	if(!L4_IsNilThread(actual)) server = actual;
 
-	FILE *f = sfdopen_NP(fs, handle, modestr);
+	FILE *f = sfdopen_NP(server, handle, modestr);
 	if(f != NULL) return f;
 	else {
 		/* dodgy, but unavoidable */
-		n = __io_close(fs, handle);
+		n = __io_close(server, handle);
 		if(n > 0) {
 			fprintf(stderr, "%s: cleanup can't reach server, n=%d\n",
 				__func__, n);

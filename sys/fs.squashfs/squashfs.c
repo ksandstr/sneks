@@ -1,7 +1,7 @@
-
 #define SQUASHFSIMPL_IMPL_SOURCE
 #define WANT_SNEKS_PATH_LABELS
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/mount.h>
 #include <ccan/opt/opt.h>
 #include <ccan/endian/endian.h>
 #include <ccan/array_size/array_size.h>
@@ -37,12 +38,14 @@
 #include <sneks/systask.h>
 #include <sneks/cookie.h>
 #include <sneks/rollback.h>
+#include <sneks/msg.h>
 #include <sneks/io.h>
 
 #include <sneks/api/path-defs.h>
 #include <sneks/api/file-defs.h>
 #include <sneks/api/directory-defs.h>
 #include <sneks/api/io-defs.h>
+#include <sneks/api/namespace-defs.h>
 #include <sneks/sys/info-defs.h>
 
 #include "muidl.h"
@@ -50,9 +53,8 @@
 #include "squashfs_fs.h"
 #include "squashfs-impl-defs.h"
 
-
+#define DT_OTHERFS 200
 #define CALLER_PID pidof_NP(muidl_get_sender())
-
 
 /* cached decompressed block. addresses are relative to start of image, and
  * indicate where the compressed data starts.
@@ -66,7 +68,6 @@ struct blk {
 	uint8_t data[];	/* [length] */
 };
 
-
 /* contained within a per-fs inode info structure. */
 struct inode {
 	ino_t ino;	/* int_hash() */
@@ -79,22 +80,31 @@ struct inode {
 	};
 };
 
-
-/* directory entry. indexed in dentry_index_hash by dir_ino and index, and
- * dentry_name_hash by dir_ino and name.
+/* directory entry. indexed in dentry_index_hash by dir_ino and index,
+ * dentry_name_hash by dir_ino and name, and dentry_ino_hash by ino. when
+ * .type == DT_OTHERFS, there is a <struct otherfs> in otherfs_hash
+ * corresponding to .ino referencing another filesystem and a directory handle
+ * therein (or 0 for root, as for subfilesystems).
  *
  * TODO: it's reasonable to handle these in a cache and replace them as some
  * space estimation high watermark is hit. that'll be unlikely to happen until
- * libsneks-fs.a rules the skies.
+ * libsneks-fs.a rules the skies. dentries with type == DT_OTHERFS must not be
+ * replaced; these are either the fall-out inode for the root directory, or a
+ * fall-in inode for subordinate filesystems.
  */
 struct dentry {
 	ino_t ino, dir_ino;
 	uint32_t index;
-	uint8_t type;	/* SNEKS_DIRECTORY_DT_* */
-	unsigned short name_len; /* up to SQUASHFS_NAME_LEN */
+	uint8_t type;	/* SNEKS_DIRECTORY_DT_*, DT_OTHERFS */
+	short name_len; /* up to SQUASHFS_NAME_LEN */
 	char name[]; /* null terminated for comfort */
 };
 
+struct otherfs {
+	ino_t ino;
+	L4_ThreadId_t tid;
+	int dir;	/* handle on ->tid */
+};
 
 struct io_file_impl
 {
@@ -114,7 +124,6 @@ struct io_file_impl
 	};
 };
 
-
 struct inode_ext
 {
 	union squashfs_inode X;	/* TODO: split this one up a bit? */
@@ -126,7 +135,6 @@ struct inode_ext
 	struct inode fs_inode;
 };
 
-
 /* an entry in /dev/.device-nodes, representing a synthetic device node
  * because mksquashfs isn't as good as mkcramfs used to be.
  */
@@ -136,10 +144,19 @@ struct dev {
 	bool is_chr;
 };
 
+/* initrd access bits. one per systask. parameter of the fopencookie()
+ * callbacks when mounting from a path.
+ */
+struct srcfile {
+	int fd;
+	void *map_start;
+	size_t length;
+};
 
 static size_t rehash_blk(const void *key, void *priv);
 static size_t rehash_inode(const void *key, void *priv);
 static size_t rehash_dev(const void *key, void *priv);
+static size_t rehash_otherfs(const void *ptr, void *priv);
 static size_t rehash_dentry_by_index(const void *key, void *priv);
 static size_t rehash_dentry_by_dir_ino_and_name(const void *key, void *priv);
 static size_t rehash_dentry_by_ino(const void *key, void *priv);
@@ -156,19 +173,21 @@ static char sfs_type_table[] = {
 	[SQUASHFS_SOCKET_TYPE] = DT_SOCK,
 };
 
-static L4_ThreadId_t boot_tid, dev_tid, rootfs_tid;
+static L4_ThreadId_t dev_tid, rootfs_tid;
 
-static bool device_nodes_enabled;
+static bool device_nodes_enabled, need_subfs_sync = false;
 static ino_t dev_ino = -1;
 
+static char *arg_source = NULL, *arg_data = NULL;
+static unsigned arg_mntflags = 0, arg_parent_dir_obj;
+
 /* mount data */
-static void *fs_image;
-static size_t fs_length;
+static FILE *fs_file;
+static struct srcfile fs_src = { .fd = -1, .map_start = NULL };
 static int fs_block_size_log2;
 
 static const struct squashfs_super_block *fs_super;
-static struct htable blk_cache = HTABLE_INITIALIZER(
-		blk_cache, &rehash_blk, NULL),
+static struct htable blk_cache = HTABLE_INITIALIZER(blk_cache, &rehash_blk, NULL),
 	inode_cache = HTABLE_INITIALIZER(inode_cache, &rehash_inode, NULL),
 	device_nodes = HTABLE_INITIALIZER(device_nodes, &rehash_dev, NULL),
 	dentry_index_hash = HTABLE_INITIALIZER(dentry_index_hash,
@@ -177,7 +196,8 @@ static struct htable blk_cache = HTABLE_INITIALIZER(
 		&rehash_dentry_by_dir_ino_and_name, NULL),
 	dentry_ino_hash = HTABLE_INITIALIZER(dentry_ino_hash,
 		&rehash_dentry_by_ino, NULL),
-	symlink_loop_hash = HTABLE_INITIALIZER(symlink_loop_hash, &rehash_inode, NULL);
+	symlink_loop_hash = HTABLE_INITIALIZER(symlink_loop_hash, &rehash_inode, NULL),
+	otherfs_hash = HTABLE_INITIALIZER(otherfs_hash, &rehash_otherfs, NULL);
 
 /* ~0u for "not yet seen" */
 static unsigned *ino_to_blkoffset = NULL;	/* [fs_super->inodes + 1] */
@@ -226,6 +246,7 @@ static size_t rehash_dentry_by_index(const void *key, void *priv) {
 
 static size_t rehash_dentry_by_dir_ino_and_name(const void *key, void *priv) {
 	const struct dentry *d = key;
+	assert(strlen(d->name) == d->name_len);
 	return int_hash(d->dir_ino) ^ hash_string(d->name);
 }
 
@@ -234,35 +255,40 @@ static size_t rehash_dentry_by_ino(const void *key, void *priv) {
 	return int_hash(d->ino);
 }
 
-
 static bool cmp_dentry_by_ino(const void *cand, void *key) {
 	const struct dentry *dent = cand;
 	return dent->ino == *(ino_t *)key;
 }
 
+static size_t rehash_otherfs(const void *ptr, void *priv) {
+	const struct otherfs *oth = ptr;
+	return int_hash(oth->ino);
+}
+
+static bool cmp_otherfs_by_ino(const void *cand, void *key) {
+	ino_t *ip = key;
+	const struct otherfs *oth = cand;
+	return oth->ino == *ip;
+}
 
 static inline struct inode_ext *squashfs_i(struct inode *n) {
 	return container_of(n, struct inode_ext, fs_inode);
 }
-
 
 /* read block at @pos in the filesystem image. @length is as to cache_get(),
  * @output must have enough space for the kind of block being read. return
  * value is the number of bytes decompressed. *@next_block_p will be filled in
  * with the position of the next compressed block.
  */
-static int read_block(
-	void *output, uint64_t *next_block_p,
-	size_t pos, int length)
+static int read_block(void *output, uint64_t *next_block_p, size_t pos, int length)
 {
+	fseek(fs_file, pos, SEEK_SET);
 	int n, sz, bufmax, compressed;
 	if(length == 0) {
-		/* metadata block read. these have an information word up front, which
-		 * we'll decode.
-		 */
-		int lenword = *(uint8_t *)(fs_image + pos)
-			| (int)*(uint8_t *)(fs_image + pos + 1) << 8;
-		pos += 2;
+		/* metadata block read. decode the information word up front. */
+		uint16_t lenraw; n = fread(&lenraw, 1, 2, fs_file);
+		if(n != 2) { log_crit("can't read length word"); abort(); }
+		int lenword = LE16_TO_CPU(lenraw);
 		sz = SQUASHFS_COMPRESSED_SIZE(lenword);
 		bufmax = SQUASHFS_METADATA_SIZE;
 		compressed = SQUASHFS_COMPRESSED(lenword);
@@ -274,25 +300,26 @@ static int read_block(
 		compressed = SQUASHFS_COMPRESSED_BLOCK(length);
 		bufmax = fs_super->block_size;
 	}
-	if(next_block_p != NULL) *next_block_p = pos + sz;
-
+	if(next_block_p != NULL) *next_block_p = ftell(fs_file) + sz;
 	if(compressed) {
 		assert(fs_super->compression == LZ4_COMPRESSION);
-		n = LZ4_decompress_safe_partial(fs_image + pos, output,
-			sz, bufmax, bufmax);
-		if(n < 0) {
-			/* FIXME: return an error code and fail the caller */
-			log_crit("LZ4 decompression failed, n=%d", n);
-			abort();
+		/* TODO: decompress straight from memory-mapped input */
+		char *compbuf = malloc(sz);
+		if(compbuf == NULL) { log_crit("malloc sz=%d failed", sz); abort(); }
+		n = fread(compbuf, 1, sz, fs_file);
+		if(n == sz) {
+			n = LZ4_decompress_safe_partial(compbuf, output, sz, bufmax, bufmax);
+			if(n < 0) { log_crit("LZ4 decompression failed, n=%d", n); abort(); }
+			sz = n;
 		}
+		free(compbuf);
 	} else {
-		n = min(sz, bufmax);
-		memcpy(output, fs_image + pos, n);
+		sz = min(sz, bufmax);
+		n = fread(output, 1, sz, fs_file);
 	}
-
+	if(n < sz) { log_crit("can't read %d bytes", sz); abort(); }
 	return n;
 }
-
 
 /* @length is 0 for metadata blocks and the compressed length otherwise. */
 static struct blk *cache_get(uint64_t block, int length)
@@ -329,7 +356,7 @@ static int read_metadata(
 {
 	int done = 0;
 	while(done < length) {
-		if(*block >= fs_length) break;
+		if(*block >= fs_src.length) break;
 		struct blk *b = blk_p != NULL ? *blk_p : NULL;
 		if(b == NULL || b->block != *block) {
 			b = cache_get(*block, 0);
@@ -471,7 +498,7 @@ static struct dentry *read_dentry(iof_t *file,
 {
 	assert(index >= 0);
 
-	/* synthesize "." and ".." */
+	/* synthesize "." and ".." for index=0 and index=1 resp. */
 	if(index < 2) {
 		struct dentry *out = malloc(sizeof *out + index + 2);
 		if(out == NULL) {
@@ -598,9 +625,43 @@ Error:
 	return NULL;
 }
 
+static struct dentry *find_dentry(ino_t dir_ino, const char *name)
+{
+	size_t hash = int_hash(dir_ino) ^ hash_string(name);
+	struct htable_iter it;
+	for(struct dentry *cand = htable_firstval(&dentry_name_hash, &it, hash);
+		cand != NULL; cand = htable_nextval(&dentry_name_hash, &it, hash))
+	{
+		if(cand->dir_ino == dir_ino && streq(name, cand->name)) return cand;
+	}
+	return NULL;
+}
 
-static struct dentry *get_dentry(iof_t *file,
-	struct blk **blk_p, int index, int *err_p)
+static void remove_dentry(struct dentry *dent) {
+	htable_del(&dentry_index_hash, rehash_dentry_by_index(dent, NULL), dent);
+	htable_del(&dentry_name_hash, rehash_dentry_by_dir_ino_and_name(dent, NULL), dent);
+	if(dent->index >= 2) htable_del(&dentry_ino_hash, rehash_dentry_by_ino(dent, NULL), dent);
+}
+
+static bool add_dentry(struct dentry *dent)
+{
+	assert(find_dentry(dent->dir_ino, dent->name) == NULL);
+	bool ok = htable_add(&dentry_index_hash, rehash_dentry_by_index(dent, NULL), dent);
+	ok = ok && htable_add(&dentry_name_hash, rehash_dentry_by_dir_ino_and_name(dent, NULL), dent);
+	if(ok && dent->index >= 2) {
+		/* only add non-synthetic directories so that get_path doesn't get
+		 * confused.
+		 */
+		ok = htable_add(&dentry_ino_hash, rehash_dentry_by_ino(dent, NULL), dent);
+	} else {
+		assert(!ok || streq(dent->name, ".") || streq(dent->name, ".."));
+	}
+	if(!ok) remove_dentry(dent);
+	assert(!ok || find_dentry(dent->dir_ino, dent->name) == dent);
+	return ok;
+}
+
+static struct dentry *get_dentry(iof_t *file, struct blk **blk_p, int index, int *err_p)
 {
 	struct dentry key = { .dir_ino = file->i->ino, .index = index };
 	size_t hash = rehash_dentry_by_index(&key, NULL);
@@ -610,49 +671,15 @@ static struct dentry *get_dentry(iof_t *file,
 	{
 		if(cand->dir_ino == key.dir_ino && cand->index == key.index) return cand;
 	}
-
 	struct dentry *dent = read_dentry(file, blk_p, index, err_p);
-	if(dent != NULL) {
-		assert(hash == rehash_dentry_by_index(dent, NULL));
-		bool ok = htable_add(&dentry_index_hash, hash, dent);
-		ok = ok && htable_add(&dentry_name_hash, rehash_dentry_by_dir_ino_and_name(dent, NULL), dent);
-		if(ok && index >= 2) {
-			/* only add non-synthetic directories so that get_path doesn't get
-			 * confused.
-			 */
-			ok = htable_add(&dentry_ino_hash, rehash_dentry_by_ino(dent, NULL), dent);
-		} else {
-			assert(!ok || streq(dent->name, ".") || streq(dent->name, ".."));
-		}
-		if(!ok) {
-			*err_p = -ENOMEM;
-			htable_del(&dentry_index_hash, hash, dent);
-			htable_del(&dentry_name_hash, rehash_dentry_by_dir_ino_and_name(dent, NULL), dent);
-			free(dent);
-			dent = NULL;
-		}
+	if(dent != NULL && !add_dentry(dent)) {
+		free(dent); dent = NULL;
+		*err_p = -ENOMEM;
 	}
-
 	return dent;
 }
 
-
-static struct dentry *find_dentry(ino_t dir_ino, const char *name)
-{
-	size_t hash = int_hash(dir_ino) ^ hash_string(name);
-	struct htable_iter it;
-	for(struct dentry *cand = htable_firstval(&dentry_name_hash, &it, hash);
-		cand != NULL; cand = htable_nextval(&dentry_name_hash, &it, hash))
-	{
-		if(cand->dir_ino == dir_ino && streq(name, cand->name)) {
-			return cand;
-		}
-	}
-	return NULL;
-}
-
-
-static int lookup(int *type, ino_t dir_ino, const char *name)
+static ssize_t lookup(int *type, ino_t dir_ino, const char *name)
 {
 	assert(type != NULL);
 	assert(name[0] != '\0');
@@ -675,8 +702,8 @@ static int lookup(int *type, ino_t dir_ino, const char *name)
 		int cmp = strcmp(name, dent->name);
 		if(cmp < 0 && dent->index >= 2) {
 			/* names after dix={0,1} are in strcmp() order allowing early
-			 * return. but we must account for the first two entries are "."
-			 * and ".." which might not be.
+			 * return. but we must account for the first two entries "."
+			 * and "..", which might not.
 			 */
 			break;
 		}
@@ -690,13 +717,16 @@ static int lookup(int *type, ino_t dir_ino, const char *name)
 }
 
 
-/* propagate resolution of an absolute symbolic link to the root resolver as
- * the previous IDL sender. this function makes an attempt to send all
- * remaining parts as a string transfer to not always alloca() 4k for a
- * buffer.
+/* propagate path resolution to the given filesystem on behalf of the previous
+ * IDL sender. parameter list is complex to support symlink propagation;
+ * DT_OTHERFS propagation can just leave @path_rem, @path_stack, and
+ * @path_stack_pos at NULL and 0 respectively. this function makes an attempt
+ * to send all remaining parts as a string transfer to not always alloca() 4k
+ * for a buffer. raises muidl::NoReply and returns 0 on success, and a
+ * Path/resolve impl's return code on failure.
  */
-static int propagate_symlink(L4_ThreadId_t root_resolver,
-	const char *link, const char *path_rem,
+static int propagate_resolve(L4_ThreadId_t other_fs,
+	int dirhandle, const char *link, const char *path_rem,
 	const char *const *path_stack, int path_stack_pos,
 	L4_Word_t resolve_flags)
 {
@@ -773,11 +803,12 @@ static int propagate_symlink(L4_ThreadId_t root_resolver,
 	L4_Set_VirtualSender(muidl_get_sender());
 	L4_LoadMR(0, tag.raw);
 	L4_LoadMR(1, SNEKS_PATH_RESOLVE_SUBLABEL);
-	L4_LoadMR(2, 0);	/* TODO: get directory handle for submounts */
+	L4_LoadMR(2, dirhandle);
 	L4_LoadMR(3, resolve_flags);
 	L4_LoadMRs(4, send_si * 2, sibuf[0].raw);
-	tag = L4_Send(root_resolver);
+	tag = L4_Send(other_fs);
 	if(L4_IpcFailed(tag)) {
+		if(L4_ErrorCode() == 4) return -ESRCH;
 		log_err("propagating send failed, ec=%lu", L4_ErrorCode());
 		return -EIO;
 	}
@@ -791,20 +822,135 @@ Enametoolong:
 }
 
 
+static void add_subfs(L4_ThreadId_t fs, ino_t dir_ino)
+{
+	size_t hash = int_hash(dir_ino);
+	struct dentry *dent = htable_get(&dentry_ino_hash, hash, &cmp_dentry_by_ino, &dir_ino);
+	if(dent == NULL) {
+		/* FIXME: this is a race condition between root/filsys.c resolving
+		 * @dir_ino and its replacement before the fetchback occurs (above).
+		 * or will be once dentry replacement comes about.
+		 */
+		log_err("dentry for dir_ino=%ld disappeared?", (long)dir_ino);
+		return;
+	}
+	if(dent->type != DT_DIR && dent->type < DT_OTHERFS) {
+		/* this could hypothetically also happen: dir_ino has changed type
+		 * between then and now. but this doesn't apply to squashfs which is
+		 * read-only anyway, and libsneks-fs.a should do something like not
+		 * recycle inodes until after two cookie periods have elapsed.
+		 */
+		log_err("dentry type=%d incompatible", (int)dent->type);
+		return;
+	}
+	dent->type = DT_OTHERFS;
+	struct otherfs *oth = malloc(sizeof *oth);
+	if(oth == NULL) abort();
+	*oth = (struct otherfs){ .ino = dir_ino, .tid = fs };
+	htable_add(&otherfs_hash, hash, oth);
+}
+
+static void rm_subfs(L4_ThreadId_t fs, ino_t dir_ino)
+{
+	size_t hash = int_hash(dir_ino);
+	struct dentry *dent = htable_get(&dentry_ino_hash, hash, &cmp_dentry_by_ino, &dir_ino);
+	if(dent == NULL) {
+		log_err("can't find dentry for dir_ino=%ld (?!)", (long)dir_ino);
+	} else if(dent->type != DT_OTHERFS) {
+		/* this happens iff the same inode is referenced by multiple dentries.
+		 * which is the downside of resolving to inode number. FIXME by the
+		 * time libfs comes up.
+		 */
+		log_err("dent->type=%d not DT_OTHERFS", (int)dent->type);
+	} else {
+		dent->type = DT_DIR;
+	}
+	struct otherfs *oth = htable_get(&otherfs_hash, hash, &cmp_otherfs_by_ino, &dir_ino);
+	if(oth != NULL) {
+		htable_del(&otherfs_hash, hash, oth);
+		free(oth);
+	}
+}
+
+static void sync_subfs(void)
+{
+	if(unlikely(L4_IsNilThread(rootfs_tid))) {
+		/* is initrd, refetch rootfs (TODO: de-dup w/ fs_initialize()) */
+		struct sneks_rootfs_info inf;
+		int n = __info_rootfs_block(L4_Pager(), &inf);
+		if(n != 0) {
+			log_crit("can't get rootfs info block, n=%d", n);
+			return;
+		}
+		rootfs_tid.raw = inf.service;
+		assert(!L4_IsNilThread(rootfs_tid));
+	}
+	uint32_t first_gen, gen, join;
+	int ix = 0, n;
+	do {
+		L4_ThreadId_t fs;
+		if(n = __ns_get_fs_tree(rootfs_tid, &gen, &fs.raw, &join, getpid(), ix), n == 0) {
+			if(ix == 0) first_gen = gen; else if(first_gen != gen) return;
+			add_subfs(fs, join);
+		}
+	} while(ix++, n == 0);
+	if(n < 0 && n != -ENOENT) log_err("failed, n=%d", n);
+	need_subfs_sync = false;
+}
+
+static bool mount_handler_fn(int bit, L4_Word_t *msg, int length, void *priv)
+{
+	assert(bit == SNEKS_NAMESPACE_MOUNTED_BIT);
+	if(length < 4) { log_info("short broadcast (length=%d, need 4)", length); return true; }
+	unsigned super = msg[0], flags = msg[1], join = msg[3];
+	if(super == getpid()) {
+		L4_ThreadId_t fs = { .raw = msg[2] };
+		if(~flags & SNEKS_NAMESPACE_M_UNMOUNT) {
+			/* TODO: build lookup data directly instead of resyncing? */
+			//log_info("new submount %lu:%lu (pid=%d) at inode=%u", L4_ThreadNo(fs), L4_Version(fs), pidof_NP(fs), join);
+			/* TODO: record this somewhere, propagate lookup() accordingly. */
+			need_subfs_sync = true;
+		} else {
+			rm_subfs(fs, join);
+		}
+	}
+	return true;
+}
+
 /* FIXME: this doesn't handle trailing slashes well at all. */
 static int squashfs_resolve(
 	unsigned *object_ptr, L4_Word_t *server_ptr,
 	int *ifmt_ptr, L4_Word_t *cookie_ptr,
 	int dirfd, const char *path, int flags)
 {
+	L4_ThreadId_t actual = L4_ActualSender();
 	sync_confirm();
-
+	while(unlikely(need_subfs_sync)) sync_subfs();
 	pid_t caller_pid = CALLER_PID;
+
+	/* sysmsg is only available after the first userspace process has started,
+	 * so we'll defer its initialization until the first userspace resolve.
+	 */
+	static bool first_user = false;
+	if(!first_user && caller_pid <= SNEKS_MAX_PID && caller_pid > 0) {
+		int h = sysmsg_listen(SNEKS_NAMESPACE_MOUNTED_BIT, &mount_handler_fn, NULL);
+		if(h < 0) {
+			log_err("couldn't subscribe to filesystem mounts, n=%d", h);
+			return EXIT_FAILURE;
+		}
+		int n = sysmsg_add_filter(h, (L4_Word_t[]){ getpid() }, 1);
+		if(n != 0) {
+			log_err("couldn't add sysmsg filter for own pid, n=%d", n);
+			/* and then we'll just get more chaff. */
+		}
+		first_user = true;
+	}
+
 	ino_t dir_ino;
 	if(dirfd < 0) return -EBADF;
 	else if(dirfd == 0) dir_ino = root_ino;
 	else {
-		iof_t *df = io_get_file(caller_pid, dirfd);
+		iof_t *df = io_get_file(L4_IpcPropagated(muidl_get_tag()) ? pidof_NP(actual) : caller_pid, dirfd);
 		if(df == NULL) return -EBADF;
 		dir_ino = df->i->ino;
 	}
@@ -827,13 +973,14 @@ static int squashfs_resolve(
 		assert(htable_count(&symlink_loop_hash) == 0);
 	}
 
-	/* resolve @path one component at a time. */
+	/* resolve @path one component at a time, defaulting to the @dirfd when
+	 * path is empty so that Filesystem/mount can resolve the root path.
+	 */
 	if(path[0] == '/') return -EINVAL;
-	int type;
-	ino_t final_ino;
-	L4_ThreadId_t server;
-	for(;;) {
-		assert(*path != '\0');
+	int type = DT_DIR;
+	ino_t final_ino = dir_ino;
+	L4_ThreadId_t server = L4_Myself();
+	while(*path != '\0') {
 		char *slash = strchr(path, '/'), comp[SQUASHFS_NAME_LEN + 1];
 		const bool is_last = slash == NULL && path_stack_pos == 0;
 		const char *part;
@@ -870,8 +1017,7 @@ static int squashfs_resolve(
 		if(is_last && device_nodes_enabled && !L4_IsNilThread(dev_tid)
 			&& dir_ino == dev_ino && !streq(part, ".device-nodes"))
 		{
-			struct dev *dev = htable_get(&device_nodes, hash_string(part),
-				&cmp_dev_name, part);
+			struct dev *dev = htable_get(&device_nodes, hash_string(part), &cmp_dev_name, part);
 			if(dev == NULL) {
 				/* NOTE: should we support subdirectories of /dev? currently
 				 * this does not.
@@ -885,8 +1031,8 @@ static int squashfs_resolve(
 			break;
 		}
 
-		int ino = lookup(&type, dir_ino, part);
-		if(ino < 0) return ino;
+		ssize_t ino = lookup(&type, dir_ino, part);
+		if(ino < 0 && ino > -1000) return ino;
 
 		struct inode *nod = NULL;
 		if(type == DT_LNK && (!is_last || (~flags & AT_SYMLINK_NOFOLLOW))) {
@@ -896,8 +1042,7 @@ static int squashfs_resolve(
 				return -EIO;
 			}
 			if(nod->symlink[0] == '/') {
-				return propagate_symlink(rootfs_tid, nod->symlink, path,
-					path_stack, path_stack_pos, flags);
+				return propagate_resolve(rootfs_tid, 0, nod->symlink, path, path_stack, path_stack_pos, flags);
 			}
 			size_t hash = rehash_inode(nod, NULL);
 			struct inode *loop = htable_get(&symlink_loop_hash, hash, &cmp_inode_ino, &(ino_t){ ino });
@@ -907,6 +1052,18 @@ static int squashfs_resolve(
 			}
 			bool ok = htable_add(&symlink_loop_hash, hash, nod);
 			if(unlikely(!ok)) return -ENOMEM;
+		}
+		if(type == DT_OTHERFS) {
+			struct dentry *dent = find_dentry(dir_ino, part);
+			assert(dent != NULL);
+			if(path == NULL) path = "";	/* FIXME: this is a bodge */
+			struct otherfs *oth = htable_get(&otherfs_hash, int_hash(dent->ino), &cmp_otherfs_by_ino, &dent->ino);
+			if(oth == NULL) {
+				log_err("no otherfs for dent->ino=%d?", dent->ino);
+				return -EINVAL;
+			}
+			//log_info("propagating `%s' to %lu:%lu", path, L4_ThreadNo(oth->tid), L4_Version(oth->tid));
+			return propagate_resolve(oth->tid, oth->dir, path, NULL, path_stack, path_stack_pos, flags);
 		}
 
 		if(is_last) {
@@ -926,19 +1083,16 @@ static int squashfs_resolve(
 		}
 
 		switch(type) {
-			case DT_LNK: {
-				/* push the old one */
-				if(path_stack_pos == ARRAY_SIZE(path_stack)) {
+			case DT_LNK:
+				/* push remainder of previous, proceed into symlink data */
+				assert(nod != NULL);
+				if(unlikely(path_stack_pos == ARRAY_SIZE(path_stack))) {
 					log_info("path_stack_pos=%d (too deep)", path_stack_pos);
 					return -ELOOP;
 				}
 				path_stack[path_stack_pos++] = path;
-
-				/* proceed into new one */
-				assert(nod != NULL);
 				path = nod->symlink;
 				continue;
-			}
 			case DT_DIR: dir_ino = ino; break;
 			default: return -ENOTDIR;
 		}
@@ -1235,7 +1389,7 @@ static ssize_t read_from_inode(
 {
 	unsigned type = squashfs_i(nod)->X.base.inode_type;
 	if(type == SQUASHFS_DIR_TYPE) return -EISDIR;
-	else if(type != SQUASHFS_REG_TYPE) return -EBADF;
+	if(type != SQUASHFS_REG_TYPE) return -EBADF;
 
 	struct squashfs_reg_inode *reg = &squashfs_i(nod)->X.reg;
 	if(unlikely(reg->fragment != SQUASHFS_INVALID_FRAG)) {
@@ -1293,7 +1447,6 @@ static int squashfs_io_read(iof_t *file,
 	uint8_t *data_buf, unsigned count, off_t offset)
 {
 	if(count == 0) return 0;
-
 	return read_from_inode(file->i, data_buf, count,
 		offset < 0 ? file->pos : offset);
 }
@@ -1304,27 +1457,16 @@ static int squashfs_io_write(iof_t *a, const uint8_t *b, unsigned c, off_t d) {
 	return -EROFS;
 }
 
-
-static int squashfs_opendir(int *handle_p,
-	unsigned object, L4_Word_t cookie, int flags)
+static int squashfs_opendir(int *handle_p, unsigned object, L4_Word_t cookie, int flags)
 {
 	sync_confirm();
-
 	pid_t caller_pid = CALLER_PID;
-	/* TODO: same thing as the big comment above gen_cookie() call in
-	 * squashfs_resolve() and squashfs_open(), for same reasons.
-	 */
-	if(!validate_cookie(cookie, &device_cookie_key, L4_SystemClock(),
-		object, caller_pid))
-	{
-		return -EINVAL;
-	}
+	/* TODO: see comment above gen_cookie() call in squashfs_resolve(). */
+	if(!validate_cookie(cookie, &device_cookie_key, L4_SystemClock(), object, caller_pid) && (cookie != 0 || caller_pid < SNEKS_MIN_SYSID)) return -EINVAL;
 
 	struct inode *nod = get_inode(object);
 	if(nod == NULL) return -EINVAL;
-	if(squashfs_i(nod)->X.base.inode_type != SQUASHFS_DIR_TYPE) {
-		return -ENOTDIR;
-	}
+	if(squashfs_i(nod)->X.base.inode_type != SQUASHFS_DIR_TYPE) return -ENOTDIR;
 	const struct squashfs_dir_inode *dir = &squashfs_i(nod)->X.dir;
 
 	iof_t *f = iof_new(0);
@@ -1342,7 +1484,6 @@ static int squashfs_opendir(int *handle_p,
 		return 0;
 	}
 }
-
 
 static void confirm_seekdir(L4_Word_t newpos, iof_t *file) {
 	file->pos = newpos;
@@ -1442,10 +1583,22 @@ static int squashfs_readlink(char *data, int *data_len,
 	return 0;
 }
 
+static int squashfs_shutdown(void)
+{
+	sync_confirm();
+	struct htable_iter it;
+	for(struct otherfs *oth = htable_first(&otherfs_hash, &it); oth != NULL; oth = htable_next(&otherfs_hash, &it)) {
+		if(oth->dir == 0) continue;
+		int n = __io_close(oth->tid, oth->dir);
+		if(n != 0) log_err("IO/close of mount dirfd on oth->tid=%lu:%lu: n=%d", L4_ThreadNo(oth->tid), L4_Version(oth->tid), n);
+		htable_delval(&otherfs_hash, &it);
+		free(oth);
+	}
+	iof_t *f = io_get_file(-1, 0);
+	if(f != NULL) return -EBUSY; else { io_quit(0); return 0; }
+}
 
-static int squashfs_ipc_loop(
-	void *initrd_start, size_t initrd_size,
-	int argc, char *argv[])
+static int squashfs_ipc_loop(int argc, char *argv[])
 {
 	struct squashfs_impl_vtable vtab = {
 		/* Sneks::Path */
@@ -1453,16 +1606,16 @@ static int squashfs_ipc_loop(
 		.get_path = &squashfs_get_path,
 		.get_path_fragment = &squashfs_get_path_fragment,
 		.stat_object = &squashfs_stat_object,
-
 		/* Sneks::File */
 		.open = &squashfs_open,
 		.seek = &squashfs_seek,
-
 		/* Sneks::Directory */
 		.opendir = &squashfs_opendir,
 		.seekdir = &squashfs_seekdir,
 		.getdents = &squashfs_getdents,
 		.readlink = &squashfs_readlink,
+		/* Sneks::Filesystem */
+		.shutdown = &squashfs_shutdown,
 	};
 	FILL_SNEKS_IO(&vtab);
 
@@ -1476,55 +1629,31 @@ static int squashfs_ipc_loop(
 	return io_run(sizeof(iof_t), argc, argv);
 }
 
-
-static unsigned mount_squashfs_image(void *start, size_t sz)
+static int mount_squashfs(FILE *f)
 {
-	fs_image = start;
-	fs_length = sz;
-	fs_super = start + SQUASHFS_START;
+	fseek(f, 0, SEEK_END); fs_src.length = ftell(f);
+	struct squashfs_super_block *super = malloc(sizeof *super); if(super == NULL) return -ENOMEM;
+	fseek(f, SQUASHFS_START, SEEK_SET);
+	if(fread(super, 1, sizeof *super, f) < sizeof *super) return -errno;
+	fs_super = super;
 	fs_block_size_log2 = size_to_shift(fs_super->block_size);
-	if(1 << fs_block_size_log2 != fs_super->block_size) {
-		log_err("block size is not power of two?");
-		return EINVAL;
-	}
+	if(1 << fs_block_size_log2 != fs_super->block_size) { log_err("block size is not power of two?"); return -EINVAL; }
 	if(memcmp(&fs_super->s_magic, "hsqs", 4) != 0) {
-		log_err("invalid squashfs superblock magic number %#08x (BE)",
-			(unsigned)BE32_TO_CPU(fs_super->s_magic));
-		return EINVAL;
+		log_err("invalid squashfs superblock magic number %#08x (BE)", (unsigned)BE32_TO_CPU(fs_super->s_magic));
+		return -EINVAL;
 	}
-
-	static const char *c_modes[] = {
-		[ZLIB_COMPRESSION] = "zlib",
-		[LZMA_COMPRESSION] = "lzma",
-		[LZO_COMPRESSION] = "lzo",
-		[XZ_COMPRESSION] = "xz",
-		[LZ4_COMPRESSION] = "lz4",
-		[ZSTD_COMPRESSION] = "zstd",
-	};
-	const char *c_mode = fs_super->compression < ARRAY_SIZE(c_modes)
-		? c_modes[fs_super->compression] : NULL;
-	if(c_mode == NULL) c_mode = "[unknown]";
-
-	switch(fs_super->compression) {
-		case LZ4_COMPRESSION:
-			break;
-		default:
-			log_err("can't handle compression mode %d (%s)",
-				fs_super->compression, c_mode);
-			return EINVAL;
+	if(fs_super->compression != LZ4_COMPRESSION) {
+		log_err("can't handle compression mode %d, wanted %d (lz4)", fs_super->compression, LZ4_COMPRESSION);
+		return -EINVAL;
 	}
-
-	ino_to_blkoffset = malloc((fs_super->inodes + 1) * sizeof *ino_to_blkoffset);
-	if(ino_to_blkoffset == NULL) return ENOMEM;
+	fs_file = f;
+	if(ino_to_blkoffset = malloc((fs_super->inodes + 1) * sizeof *ino_to_blkoffset), ino_to_blkoffset == NULL) return -ENOMEM;
 	for(int i=0; i <= fs_super->inodes; i++) ino_to_blkoffset[i] = ~0u;
-	struct inode *nod = read_inode(fs_super->root_inode);
-	if(nod == NULL) return EIO;
+	struct inode *nod = read_inode(fs_super->root_inode); if(nod == NULL) return -EIO;
 	root_ino = squashfs_i(nod)->X.base.inode_number;
 	ino_to_blkoffset[root_ino] = fs_super->root_inode;
-
 	return 0;
 }
-
 
 static void parse_device_node(char *line, int length)
 {
@@ -1597,79 +1726,148 @@ static void read_device_nodes(unsigned long ino)
 	log_info("have %d device nodes", (int)htable_count(&device_nodes));
 }
 
+static int attach_super(unsigned parent_dir_obj) /* TODO: robustness? */
+{
+	L4_ThreadId_t super_tid;
+	unsigned super_join;
+	int n = __ns_get_fs_tree(rootfs_tid, &(unsigned){ 0 }, &super_tid.raw, &super_join, getpid(), -1);
+	if(n != 0) { log_err("Filesystem/get_fs_tree failed, n=%d", n); return n; }
+	struct otherfs *root_oth = malloc(sizeof *root_oth);
+	if(root_oth == NULL) return -ENOMEM;
+	/* TODO: set .ino to filesystem's max_ino + parent_dir_obj + 1 */
+	*root_oth = (struct otherfs){ .ino = 100000 + parent_dir_obj + 1, .tid = super_tid };
+	if(n = __dir_opendir(super_tid, &root_oth->dir, parent_dir_obj, 0, 0), n != 0) { log_err("Directory/opendir failed, n=%d", n); free(root_oth); return n; }
+	if(!htable_add(&otherfs_hash, rehash_otherfs(root_oth, NULL), root_oth)) { free(root_oth); return -ENOMEM; }
+	/* create fall-out dentry */
+	struct dentry *fod = malloc(sizeof *fod + 3);
+	if(fod == NULL) return -ENOMEM;
+	*fod = (struct dentry){ .type = DT_OTHERFS, .ino = root_oth->ino, .dir_ino = root_ino, .index = 1, .name_len = 2 };
+	memcpy(fod->name, "..", 3);
+	/* replacing one if it already existed */
+	struct dentry *old = find_dentry(fod->dir_ino, fod->name);
+	if(old != NULL) { remove_dentry(old); free(old); }
+	if(!add_dentry(fod)) { free(fod); return -ENOMEM; }
+	return 0;
+}
 
-static void fs_initialize(void)
+static int fs_initialize(void)
 {
 	if(device_nodes_enabled) {
-		int typ = 0;
-		ino_t ino = lookup(&typ, root_ino, "dev");
+		int typ = 0; ino_t ino = lookup(&typ, root_ino, "dev");
 		if(ino >= 0 && typ == DT_DIR) {
 			dev_ino = ino;
 			ino = lookup(&typ, dev_ino, ".device-nodes");
-			if(ino >= 0 && typ == DT_REG) {
-				read_device_nodes(ino);
-			}
+			if(ino >= 0 && typ == DT_REG) read_device_nodes(ino);
 		}
 	}
-
-	/* fetch root resolver tid in rootfs_tid. */
-	struct sneks_uapi_info ui;
-	int n = __info_uapi_block(L4_Pager(), &ui);
-	if(n != 0) {
-		log_crit("can't get uapi info block, n=%d", n);
-		abort();
-	}
-	rootfs_tid.raw = ui.service;
+	/* get rootfs_tid for resolution of absolute symlinks */
+	struct sneks_rootfs_info inf;
+	int n = __info_rootfs_block(L4_Pager(), &inf);
+	if(n != 0) { log_crit("can't get rootfs info block, n=%d", n); return n; }
+	rootfs_tid.raw = inf.service;
+	return arg_parent_dir_obj != 0 ? attach_super(arg_parent_dir_obj) : 0;
 }
 
+static ssize_t fd_read(void *cookie, char *buf, size_t size) {
+	assert(cookie == &fs_src);
+	return read(fs_src.fd, buf, size);
+}
+
+static int fd_seek(void *cookie, off64_t *offset, int whence) {
+	assert(cookie == &fs_src);
+	off64_t n = lseek(fs_src.fd, *offset, whence);
+	if(n >= 0) *offset = n;
+	return n >= 0 ? 0 : -1;
+}
+
+static int fd_close(void *cookie) {
+	assert(cookie == &fs_src);
+	close(fs_src.fd);
+	fs_src.fd = -1;
+	return 0;
+}
+
+static int mount_source_path(const char *source, unsigned mntflags) {
+	if(fs_src.fd = open(source, O_RDONLY), fs_src.fd < 0) return -errno;
+	FILE *f = fopencookie(&fs_src, "rb", (cookie_io_functions_t){ .read = &fd_read, .write = NULL, .seek = &fd_seek, .close = &fd_close });
+	if(f == NULL) { close(fs_src.fd); return -errno; }
+	return mount_squashfs(f);
+}
+
+static int boot_initrd_protocol(L4_ThreadId_t boot_tid)
+{
+	FILE *f = NULL;
+	/* two-part handshake */
+	L4_Accept(L4_UntypedWordsAcceptor);
+	L4_MsgTag_t tag = L4_Call_Timeouts(boot_tid, L4_TimePeriod(2 * 1e6), L4_Never);
+	if(L4_IpcFailed(tag)) goto ipcfail;
+	L4_Word_t size; L4_StoreMR(1, &size);
+	void *start = aligned_alloc(PAGE_SIZE, size);
+	if(start == NULL) { log_err("malloc failure for size=%#lx", size); return -ENOMEM; }
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
+	L4_LoadMR(1, (L4_Word_t)start);
+	tag = L4_Call(boot_tid);
+	if(L4_IpcFailed(tag)) goto ipcfail;
+	/* setup */
+	if(f = fmemopen(start, size, "rb"), f == NULL) return -errno;
+	fs_src.map_start = start;
+	return mount_squashfs(f);
+ipcfail:
+	log_err("protocol failure, tag=%#lx ec=%lu", tag.raw, L4_ErrorCode());
+	if(f != NULL) fclose(f);
+	return -EIO;
+}
 
 static void ignore_opt_error(const char *fmt, ...) {
 	/* foo */
 }
 
-
-static char *set_tid(const char *optarg, void *tidptr)
-{
-	assert(tidptr == &boot_tid || tidptr == &dev_tid);
-	char *copy = strdup(optarg), *sep = strchr(copy, ':');
+static char *set_tid(const char *optarg, void *tidptr) {
+	char *copy = strdupa(optarg), *sep = strchr(copy, ':');
+	if(sep == NULL) { log_err("invalid thread id `%s'", optarg); abort(); }
 	*sep++ = '\0';
 	*(L4_ThreadId_t *)tidptr = L4_GlobalId(atoi(copy), atoi(sep));
-	free(copy);
 	return NULL;
 }
 
+static char *copy_str_arg(const char *optarg, void *param) {
+	*(char **)param = strdup(optarg);
+	return NULL;
+}
 
-static char *decode_l64a_16u8(const char *optarg, void *dest)
+static char *set_uint(const char *optarg, void *param) {
+	*(unsigned int *)param = strtoul(optarg, NULL, 0);
+	return NULL;
+}
+
+static char *decode_l64a_16u8(const char *optarg, void *destptr)
 {
-	char input[41];
-	strncpy(input, optarg, sizeof input);
-	input[sizeof input - 1] = '\0';
-	assert(streq(optarg, input));
-
+	uint8_t *dest = destptr;
+	char *input = strdupa(optarg), *sep;
 	int ip = 0, op = 0;
 	do {
-		char *sep = strchr(&input[ip], ':');
-		if(sep != NULL) *sep = '\0';
+		if(sep = strchr(&input[ip], ':'), sep != NULL) *sep = '\0';
 		unsigned val = a64l(&input[ip]);
 		assert(streq(l64a(val), &input[ip]));
+		for(int i=0; i < 3 && op < 16; i++, op++, val >>= 8) dest[op] = val & 0xff;
 		if(sep != NULL) ip += sep - &input[ip] + 1;
-		for(int i=0; i < 3 && op < 16; i++, op++, val >>= 8) {
-			*(uint8_t *)(dest + op) = val & 0xff;
-		}
-	} while(op < 16);
-	for(int i = op; i < 16; i++) *(uint8_t *)(dest + i) = '\0';
-
+	} while(sep != NULL && op < 16);
+	for(int i = op; i < 16; i++) dest[i] = '\0';
 	return NULL;
 }
 
-
 static const struct opt_table opts[] = {
-	OPT_WITH_ARG("--boot-initrd", &set_tid, NULL, &boot_tid,
-		"start up in initrd mode (not for general consumption)"),
 	OPT_WITH_ARG("--device-cookie-key", &decode_l64a_16u8, NULL,
 		&device_cookie_key.key, "cookie key (base64)"),
 	OPT_WITH_ARG("--device-registry-tid", &set_tid, NULL, &dev_tid,
 		"tid:version of the system device registry"),
+	OPT_WITH_ARG("--source", &copy_str_arg, NULL, &arg_source,
+		"filesystem source path"),
+	OPT_WITH_ARG("--mount-flags", &set_uint, NULL, &arg_mntflags,
+		"mask of MS_* from <sys/mount.h>"),
+	OPT_WITH_ARG("--data", &copy_str_arg, NULL, &arg_data,
+		"other flags not covered by mntflags, comma separated"),
+	OPT_WITH_ARG("--parent-directory-object", &set_uint, NULL, &arg_parent_dir_obj, "(internal) parent directory object"),
 	OPT_ENDTABLE
 };
 
@@ -1677,49 +1875,30 @@ static const struct opt_table opts[] = {
 int main(int argc, char *argv[])
 {
 	opt_register_table(opts, NULL);
-	if(!opt_parse(&argc, argv, &ignore_opt_error)) {
-		log_crit("option parsing failed");
+	if(!opt_parse(&argc, argv, &ignore_opt_error)) return EXIT_FAILURE;
+	/* TODO: in libfs, split arg_data at commas and parse =-separated KVP. */
+	L4_ThreadId_t boot_tid = L4_nilthread;
+	if(strstarts(arg_data, "boot-initrd=")) set_tid(arg_data + 12, &boot_tid);
+	int n, devs = !!(~arg_mntflags & MS_NODEV);
+	if(!L4_IsNilThread(boot_tid)) {
+		n = boot_initrd_protocol(boot_tid);
+		devs &= pidof_NP(boot_tid) >= SNEKS_MIN_SYSID;
+	} else if(arg_source != NULL) {
+		n = mount_source_path(arg_source, arg_mntflags);
+	} else {
+		log_err("no --source or --boot-initrd");
 		return EXIT_FAILURE;
 	}
-
-	if(L4_IsNilThread(boot_tid)) {
-		log_crit("no boot_tid");
-		/* TODO: support mounting an image from a filesystem, or a block
-		 * device
-		 */
+	if(n != 0) {
+		log_err("couldn't mount squashfs, n=%d", n);
 		return EXIT_FAILURE;
+	} else {
+		device_nodes_enabled = devs;
+		/* TODO: parse arg_data? pass arg_mntflags? */
+		if(n = fs_initialize(), n != 0) {
+			log_err("initialization failed, n=%d", n);
+			return EXIT_FAILURE;
+		}
+		return squashfs_ipc_loop(argc, argv);
 	}
-
-	/* do init protocol. */
-	const L4_Time_t timeout = L4_TimePeriod(2 * 1000 * 1000);
-	L4_Accept(L4_UntypedWordsAcceptor);
-	L4_MsgTag_t tag = L4_Receive_Timeout(boot_tid, timeout);
-	if(L4_IpcFailed(tag)) goto ipcfail;
-	L4_Word_t initrd_size; L4_StoreMR(1, &initrd_size);
-
-	void *initrd_start = aligned_alloc(PAGE_SIZE, initrd_size);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
-	L4_LoadMR(1, (L4_Word_t)initrd_start);
-	/* ReplyReceive_Timeout */
-	tag = L4_Ipc(boot_tid, boot_tid, L4_Timeouts(L4_ZeroTime, timeout),
-		&(L4_ThreadId_t){ /* dummy */ });
-	if(L4_IpcFailed(tag)) goto ipcfail;
-
-	int status = mount_squashfs_image(initrd_start, initrd_size);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
-	L4_LoadMR(1, status);
-	tag = L4_Reply(boot_tid);
-	if(L4_IpcFailed(tag)) goto ipcfail;
-
-	if(status == 0) {
-		device_nodes_enabled = pidof_NP(boot_tid) >= SNEKS_MIN_SYSID;
-		fs_initialize();
-		squashfs_ipc_loop(initrd_start, initrd_size, argc, argv);
-	}
-
-	return status;
-
-ipcfail:
-	log_crit("initrd protocol fail, tag=%#lx ec=%lu", tag.raw, L4_ErrorCode());
-	return EXIT_FAILURE;
 }

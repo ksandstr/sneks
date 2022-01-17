@@ -83,17 +83,20 @@ extern L4_ThreadId_t sysmem_tid;
  */
 extern void mm_enable_sysmem(L4_ThreadId_t sysmem_tid);
 
-
 /* from main.c */
 extern L4_ThreadId_t vm_tid, sysmsg_tid, initrd_tid;
 extern L4_KernelInterfacePage_t *__the_kip;
 #define the_kip __the_kip
 extern struct cookie_key device_cookie_key;
-
-extern void send_phys_to_sysmem(
-	L4_ThreadId_t sysmem_tid, bool self, L4_Fpage_t fp);
-
-extern L4_ThreadId_t spawn_systask_from_initrd(const char *path, ...);
+extern void send_phys_to_sysmem(L4_ThreadId_t sysmem_tid, bool self, L4_Fpage_t fp);
+/* when @flags ∧ SPAWN_BOOTMOD, launches a systask from a boot module
+ * recognized with @name, appending the given NULL-terminated parameter list
+ * to that specified for the module. otherwise fopen()s @name. returns TID of
+ * systask spawned, or nilthread on failure, or aborts when boot module isn't
+ * found.
+ */
+extern L4_ThreadId_t spawn_systask(int flags, const char *path, ...);
+#define SPAWN_BOOTMOD 1
 
 /* from thrd.c */
 extern void rt_thrd_tests(void);
@@ -153,6 +156,9 @@ extern void zombify(struct process *p);
 extern int uapi_loop(void *param_ptr);
 extern void uapi_init(void);
 
+/* from filsys.c */
+extern int root_path_thread(void *null_param);
+extern L4_ThreadId_t __get_rootfs(void);
 
 /* from device.c */
 

@@ -40,7 +40,8 @@ interface Path
 	 * parent filesystem; the exception being when the parent does not exist.
 	 *
 	 * @path is always relative to @dirfd, so it should never have a leading
-	 * slash.
+	 * slash. when resolve is propagated, @dirfd refers to the propagator's
+	 * set of handles.
 	 */
 	void resolve(
 		out object inode, out L4X2::ThreadId server,

@@ -1,8 +1,6 @@
-
 /* userspace API portion of the root task. */
 
 #define ROOTUAPI_IMPL_SOURCE
-#define WANT_SNEKS_PATH_LABELS
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1705,55 +1703,6 @@ static int uapi_prlimit(pid_t pid, int resource,
 }
 
 
-static int uapi_resolve(
-	unsigned *object_p, L4_Word_t *server_raw_p,
-	int *ifmt_p, L4_Word_t *cookie_p,
-	int dirfd, const char *path, int flags)
-{
-	if(path[0] == '/') {
-		fprintf(stderr, "%s: absolute path=`%s' from %lu:%lu\n", __func__, path,
-			L4_ThreadNo(muidl_get_sender()), L4_Version(muidl_get_sender()));
-		return -EINVAL;
-	}
-
-	/* before the actual root filesystem is mounted, initrd should appear as
-	 * both the root filesystem and under /initrd. this is easily accomplished
-	 * by removing that prefix.
-	 *
-	 * TODO: but stop doing this once an actual rootfs is mounted.
-	 */
-	if(strstarts(path, "initrd/")) {
-		path += 7;
-		if(path[0] == '\0') path = ".";
-	} else if(path[0] == '\0' || streq(path, "initrd")) {
-		/* resolve these as the rootfs' root directory. */
-		path = ".";
-	}
-
-	L4_MsgTag_t tag = { .X.label = SNEKS_PATH_RESOLVE_LABEL, .X.u = 3, .X.t = 2 };
-	L4_Set_Propagation(&tag);
-	L4_Set_VirtualSender(muidl_get_sender());
-	L4_LoadMR(0, tag.raw);
-	L4_LoadMR(1, SNEKS_PATH_RESOLVE_SUBLABEL);
-	L4_LoadMR(2, 0);
-	L4_LoadMR(3, flags);
-	L4_StringItem_t rp = L4_StringItem(strlen(path) + 1, (void *)path);
-	L4_LoadMRs(4, 2, rp.raw);
-	tag = L4_Send(initrd_tid);
-	if(L4_IpcFailed(tag)) {
-		printf("%s: failed to propagate, ec=%#lx\n", __func__,
-			L4_ErrorCode());
-		return -EFAULT;	/* TODO: better error code? */
-	} else {
-		muidl_raise_no_reply();
-		return 0;
-	}
-}
-
-
-static int enosys() { return -ENOSYS; }
-
-
 /* clear UTCB bit in root for this thread, because it won't have been covered
  * in add_systask()
  */
@@ -1790,14 +1739,6 @@ int uapi_loop(void *param_ptr)
 #ifdef BUILD_SELFTEST
 		.get_systask_threads = &uapi_get_systask_threads,
 #endif
-
-		/* Sneks::Path */
-		.resolve = &uapi_resolve,
-		.get_path = &enosys,
-		.get_path_fragment = &enosys,
-		.stat_object = &enosys,
-		/* Sneks::Namespace */
-		.mount = &enosys, .umount = &enosys, .get_fs_tree = &enosys,
 	};
 	for(;;) {
 		L4_Word_t st = _muidl_root_uapi_dispatch(&vtab);

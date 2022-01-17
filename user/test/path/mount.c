@@ -39,7 +39,6 @@ START_TEST(mount_basic)
 	/* and files within the mountpoint directory are. */
 	ok(test_e(notmount), "pre-mount file seen");
 
-	todo_start("unfinished");
 	int n = mount(image, mountpoint, "squashfs", 0, NULL);
 	skip_start(!ok(n == 0, "mount"), 6, "didn't mount: %s", strerror(errno)) {
 		ok(stat(notmount, &st) < 0 && errno == ENOENT, "pre-mount file not seen");
@@ -105,7 +104,6 @@ START_LOOP_TEST(mount_umount_serial, iter, 0, 5)
 		last_i = i;
 	}
 
-	todo_start("breakage expected");
 	ok1(mount_ok);
 	ok1(umount_ok);
 	ok1(test_ok);
@@ -127,7 +125,6 @@ START_LOOP_TEST(umount_busy_status, iter, 0, 1)
 	diag("file_open=%s", btos(file_open));
 	plan_tests(8);
 
-	todo_start("unimplemented");
 	int n = mount(image, mountpoint, "squashfs", 0, NULL);
 	skip_start(!ok(n == 0, "mount"), 6, "didn't mount, errno=%d", errno) {
 		FILE *f = NULL;
@@ -165,7 +162,6 @@ START_LOOP_TEST(resolve_fallout, iter, 0, 3)
 	diag("sub_dir=%s, back_in=%s", btos(sub_dir), btos(back_in));
 	plan_tests(5);
 
-	todo_start("expected to fail");
 	int n = mount(image, mountpoint, "squashfs", 0, NULL);
 	skip_start(!ok(n == 0, "mount"), 4, "didn't mount, errno=%d", errno) {
 		char test_file[strlen(mountpoint) + 16];

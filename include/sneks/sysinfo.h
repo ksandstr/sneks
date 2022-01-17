@@ -24,7 +24,7 @@ struct __sysinfo
 	struct {
 		L4_ThreadId_t proc;	/* Sneks::Proc */
 		L4_ThreadId_t vm;	/* Sneks::VM (generally same as L4_Pager()) */
-		L4_ThreadId_t rootfs;	/* Sneks::Path */
+		L4_ThreadId_t rootfs;	/* Sneks::Path, Sneks::Filesystem */
 		L4_Word_t __reserved[29];
 	} api;
 

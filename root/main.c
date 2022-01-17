@@ -41,6 +41,7 @@
 #include <sneks/console.h>
 #include <sneks/api/io-defs.h>
 #include <sneks/api/proc-defs.h>
+#include <sneks/api/namespace-defs.h>
 #include <sneks/sys/sysmem-defs.h>
 #include <sneks/sys/kmsg-defs.h>
 
@@ -63,10 +64,9 @@ struct root_arg {
 static size_t hash_raw_word(const void *ptr, void *priv);
 
 L4_KernelInterfacePage_t *__the_kip;
-L4_ThreadId_t vm_tid = { .raw = 0 }, sysmsg_tid = { .raw = 0 },
-	initrd_tid = { .raw = 0 };
+L4_ThreadId_t vm_tid = { .raw = 0 }, sysmsg_tid = { .raw = 0 }, initrd_tid = { .raw = 0 };
 
-static L4_ThreadId_t sigma0_tid;
+static L4_ThreadId_t sigma0_tid, rootpath_tid;
 static int sysmem_pages = 0, sysmem_self_pages = 0;
 
 struct cookie_key device_cookie_key;
@@ -678,8 +678,7 @@ static char **break_argument_list(char *str, const char *delims)
 /* launches a systask from a boot module accessed by @fh, constructing a
  * parameter page from @name, @args and @rest. returns nilthread on failure.
  */
-static L4_ThreadId_t spawn_systask(
-	FILE *fh, const char *name, char **args, va_list rest)
+static L4_ThreadId_t spawn_systask_fv(FILE *fh, const char *name, char **args, va_list rest)
 {
 	assert(!L4_SameThreads(sigma0_tid, L4_Pager()));
 
@@ -748,11 +747,6 @@ static L4_ThreadId_t spawn_systask(
 		kip_area = L4_FpageLog2(L4_Address(utcb_area) - PAGE_SIZE,
 			PAGE_BITS);
 	}
-#if 0
-	printf("%s: utcb_area=%#lx:%#lx, kip_area=%#lx:%#lx, lowest=%#x\n",
-		__func__, L4_Address(utcb_area), L4_Size(utcb_area),
-		L4_Address(kip_area), L4_Size(kip_area), lowest);
-#endif
 
 	assert(!L4_IsNilThread(uapi_tid));
 	L4_ThreadId_t new_tid = create_systask(kip_area, utcb_area);
@@ -832,66 +826,34 @@ static L4_ThreadId_t spawn_systask(
 	return new_tid;
 }
 
-
-/* launches a systask from a boot module recognized with @name, appending the
- * given NULL-terminated parameter list to that specified for the module.
- */
-static L4_ThreadId_t spawn_systask_mod(const char *name, ...)
+L4_ThreadId_t spawn_systask(int flags, const char *name, ...)
 {
-	char *rest = NULL;
-	L4_BootRec_t *mod = find_boot_module(the_kip, name, &rest);
-	printf("name=`%s', mod=%p, rest=`%s'\n", name, mod, rest);
-	if(mod == NULL) return L4_nilthread;
-	char **args = break_argument_list(rest, NULL);
-
-	void *start = (void *)L4_Module_Start(mod);
-	const Elf32_Ehdr *ee = start;
-	if(memcmp(ee->e_ident, ELFMAG, SELFMAG) != 0) {
-		printf("incorrect ELF magic in boot module `%s'\n", name);
-		abort();
+	assert((flags & ~SPAWN_BOOTMOD) == 0);
+	FILE *elf;
+	char **args, *noargs = NULL, *rest = NULL, *start;
+	if(flags & SPAWN_BOOTMOD) {
+		L4_BootRec_t *mod = find_boot_module(the_kip, name, &rest);
+		if(mod == NULL) return L4_nilthread;
+		args = break_argument_list(rest, NULL);
+		start = (char *)L4_Module_Start(mod);
+		if(elf = fmemopen(start, L4_Module_Size(mod), "r"), elf == NULL) panic("out of memory in spawn_systask()");
+	} else {
+		if(elf = fopen(name, "rb"), elf == NULL) {
+			fprintf(stderr, "%s: fopen `%s': errno=%d\n", __func__, name, errno);
+			return L4_nilthread;
+		}
+		const char *tmp = strrchr(name, '/');
+		if(tmp != NULL) name = tmp + 1;
+		args = &noargs; start = NULL;
 	}
-
-	L4_ThreadId_t res;
-	FILE *fh = fmemopen(start, L4_Module_Size(mod), "r");
-	if(fh == NULL) {
-		fprintf(stderr, "%s: fmemopen() failed?\n", __func__);
-		res = L4_nilthread;
-		goto end;
-	}
-
 	va_list al; va_start(al, name);
-	res = spawn_systask(fh, name, args, al);
+	L4_ThreadId_t tid = spawn_systask_fv(elf, name, args, al);
 	va_end(al);
-
-end:
-	fclose(fh);
-	if(!L4_IsNilThread(res)) free((void *)start); /* see get_boot_info() */
-	free(rest);
-	free(args);
-	return res;
-}
-
-
-/* same as the _mod variant, but @path is resolved entirely on the initrd
- * server.
- */
-L4_ThreadId_t spawn_systask_from_initrd(const char *path, ...)
-{
-	FILE *elf = fopen(path, "rb");
-	if(elf == NULL) {
-		fprintf(stderr, "%s: fopen of `%s' failed, errno=%d\n",
-			__func__, path, errno);
-		return L4_nilthread;
-	}
-
-	const char *name = strrchr(path, '/');
-	if(name == NULL) name = path; else name++;
-	va_list rest; va_start(rest, path);
-	char *noargs = NULL;
-	L4_ThreadId_t task = spawn_systask(elf, name, &noargs, rest);
-	va_end(rest);
 	fclose(elf);
-	return task;
+	if(!L4_IsNilThread(tid)) free(start); /* see get_boot_info() */
+	free(rest);
+	if(args != &noargs) free(args);
+	return tid;
 }
 
 
@@ -907,8 +869,7 @@ START_TEST(spawn_systask_from_initrd)
 {
 	plan(5);
 
-	L4_ThreadId_t task = spawn_systask_from_initrd(
-		"/initrd/systest/sys/test/initrd_systask_partner", NULL);
+	L4_ThreadId_t task = spawn_systask(0, "/initrd/systest/sys/test/initrd_systask_partner", NULL);
 	skip_start(!ok(!L4_IsNilThread(task), "task created"), 4, "no task") {
 		L4_Accept(L4_UntypedWordsAcceptor);
 		L4_LoadMR(0, 0);
@@ -1026,7 +987,7 @@ static L4_ThreadId_t start_vm(uintptr_t sip_mem)
 {
 	assert((sip_mem & PAGE_MASK) == 0);
 
-	L4_ThreadId_t mem_tid = spawn_systask_mod("vm", NULL);
+	L4_ThreadId_t mem_tid = spawn_systask(SPAWN_BOOTMOD, "vm", NULL);
 
 	/* portion memory out to sysmem, vm, and consumers of various special
 	 * ranges.
@@ -1116,104 +1077,71 @@ initfail:
 }
 
 
-/* encode @src as 6 groups of 1-4 base64 characters separated by colons. an
- * alternate encoding would pad short groups with '.' to always 4 bytes, or
- * omit separators when the length is already 4, but that's hardly useful.
- */
-static void encode_l64a_16u8(char *dest, const uint8_t src[static 16])
-{
-	int a = 0;
-	do {
-		if(a > 0) *dest++ = ':';
-		int val = 0;
-		for(int i=0; i < 3 && a < 16; i++, a++) val |= src[a] << (i * 8);
-		char *s = l64a(val);
-		assert(a64l(s) == val);
-		int l = strlen(s);
-		memcpy(dest, s, l + 1);
-		dest += l;
-	} while(a < 16);
-}
-
-
-static L4_ThreadId_t mount_initrd(void)
+static int boot_initrd_fn(void *param)
 {
 	/* three seconds is fine. we're not riding rabbits here. (also QEMU on a
 	 * P-M needs a bit of time for vm inits and such.)
 	 */
 	const L4_Time_t timeout = L4_TimePeriod(3 * 1000 * 1000);
+	L4_BootRec_t *img = param;
 
-	L4_KernelInterfacePage_t *kip = L4_GetKernelInterface();
-	char *img_rest = NULL;
-	L4_BootRec_t *img = find_boot_module(kip, "initrd.img", &img_rest);
-	if(img == NULL || img->type != L4_BootInfo_Module) {
-		printf("no initrd.img found (type=%d), skipping\n",
-			img == NULL ? -1 : (int)img->type);
-		return L4_nilthread;
-	}
-
-	L4_ThreadId_t self = L4_MyGlobalId();
-	char boot_tid[32], dev_tid[32];
-	snprintf(boot_tid, sizeof boot_tid, "%lu:%lu",
-		L4_ThreadNo(self), L4_Version(self));
-	snprintf(dev_tid, sizeof dev_tid, "%lu:%lu",
-		L4_ThreadNo(devices_tid), L4_Version(devices_tid));
-	char devcky[40] = "";
-	encode_l64a_16u8(devcky, device_cookie_key.key);
-	/* NOTE: this shadows the global initrd_tid! */
-	L4_ThreadId_t initrd_tid = spawn_systask_mod("fs.squashfs",
-		"--boot-initrd", boot_tid, "--device-cookie-key", devcky,
-		"--device-registry-tid", dev_tid, NULL);
-	if(L4_IsNilThread(initrd_tid)) {
-		panic("can't start fs.squashfs to mount initrd!");
-	}
-
-	/* first message communicates length of image, reply carries start
-	 * address.
+	/* get introduction, reply with image size.
+	 * TODO: should this authenticate? or be more robust?
 	 */
+	L4_ThreadId_t client;
+	L4_MsgTag_t tag = L4_Wait_Timeout(timeout, &client);
+	if(L4_IpcFailed(tag) || pidof_NP(client) < SNEKS_MIN_SYSID) {
+		printf("%s: introduction message failed, ec=%lu\n", __func__, L4_ErrorCode());
+		abort();
+	}
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
 	L4_LoadMR(1, L4_Module_Size(img));
-	L4_MsgTag_t tag = L4_Call_Timeouts(initrd_tid, timeout, timeout);
+	tag = L4_Reply(client);
 	if(L4_IpcFailed(tag)) goto ipcfail;
-	L4_Word_t start; L4_StoreMR(1, &start);
 
+	/* get start address, prepare memory, reply to sync. */
+	tag = L4_Receive_Timeout(client, timeout);
+	if(L4_IpcFailed(tag) || L4_UntypedWords(tag) < 1) goto ipcfail;
+	L4_Word_t start; L4_StoreMR(1, &start);
 	uint8_t *copybuf = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
 	for(size_t off = 0; off < L4_Module_Size(img); off += PAGE_SIZE) {
 		size_t left = L4_Module_Size(img) - off;
-		memcpy(copybuf, (void *)L4_Module_Start(img) + off,
-			min_t(size_t, left, PAGE_SIZE));
+		memcpy(copybuf, (void *)L4_Module_Start(img) + off, min_t(size_t, left, PAGE_SIZE));
 		if(left < PAGE_SIZE) memset(copybuf + left, 0, PAGE_SIZE - left);
 		uint16_t ret = 0;
-		int n = __sysmem_send_virt(sysmem_tid, &ret, (L4_Word_t)copybuf,
-			initrd_tid.raw, start + off);
+		int n = __sysmem_send_virt(sysmem_tid, &ret, (L4_Word_t)copybuf, client.raw, start + off);
 		if(n != 0 || ret != 0) {
-			printf("sysmem::send_virt failed, n=%d, ret=%u\n", n, ret);
+			printf("%s: send_virt failed, n=%d, ret=%u\n", __func__, n, ret);
 			abort();
 		}
 	}
 	free(copybuf);
 	free((void *)L4_Module_Start(img));	/* see get_boot_info() */
-
-	/* sync & get mount status. */
 	L4_LoadMR(0, 0);
-	tag = L4_Call_Timeouts(initrd_tid, timeout, timeout);
+	tag = L4_Reply(client);
 	if(L4_IpcFailed(tag)) goto ipcfail;
-	L4_Word_t status; L4_StoreMR(1, &status);
-
-	if(status != 0) {
-		printf("initrd mount failure, status=%lu\n", status);
-		panic("can't mount initrd!");
-	}
-
-	/* TODO: release physical memory of initrd image? */
-
-	return initrd_tid;
+	return 0;
 
 ipcfail:
-	printf("IPC fail; tag=%#lx, ec=%lu\n", tag.raw, L4_ErrorCode());
-	panic("couldn't do init protocol with fs.squashfs!");
+	printf("%s: IPC fail; tag=%#lx, ec=%lu\n", __func__, tag.raw, L4_ErrorCode());
+	return 1;
 }
 
+static void mount_initrd(void)
+{
+	L4_BootRec_t *img = find_boot_module(L4_GetKernelInterface(), "initrd.img", &(char *){ NULL });
+	if(img == NULL || img->type != L4_BootInfo_Module) {
+		printf("no initrd.img found (type=%d), skipping\n", img == NULL ? -1 : (int)img->type);
+		return;
+	}
+	thrd_t bit; if(thrd_create(&bit, &boot_initrd_fn, img) != thrd_success) abort();
+	assert(L4_IsGlobalId(tidof(bit)));
+	char mntdata[40]; snprintf(mntdata, sizeof mntdata, "boot-initrd=%lu:%lu", L4_ThreadNo(tidof(bit)), L4_Version(tidof(bit)));
+	int n, status;
+	if(n = __ns_mount(rootpath_tid, "", "/", "squashfs!bootmod", 0, mntdata), n != 0) { perror_ipc("failed to mount initrd", n); abort(); }
+	if(n = thrd_join(bit, &status), n != thrd_success) abort();
+	if(status != 0) abort();
+}
 
 static int impl_kmsg_putstr(const char *str)
 {
@@ -1519,7 +1447,7 @@ static COLD void run_waitmods(struct htable *root_args, const char *stem)
 	const char *waitmod = get_root_arg(root_args, arg);
 	if(waitmod == NULL) return;
 
-	L4_ThreadId_t wm_tid = spawn_systask_mod(waitmod, NULL);
+	L4_ThreadId_t wm_tid = spawn_systask(SPAWN_BOOTMOD, waitmod, NULL);
 	if(!L4_IsNilThread(wm_tid)) {
 		while(wait_until_gone(wm_tid, L4_Never) != 0) { /* spin */ }
 	}
@@ -1648,17 +1576,21 @@ int main(void)
 		abort();
 	}
 	stupid_sync(devices);
-
 	generate_u(device_cookie_key.key, sizeof device_cookie_key.key);
-	initrd_tid = mount_initrd();
-	put_sysinfo("rootfs:tid", 1, initrd_tid.raw);
 
-	sysmsg_tid = spawn_systask_from_initrd(
-		"/initrd/lib/sneks-0.0p0/sysmsg", NULL);
+	thrd_t rootpath;
+	n = thrd_create(&rootpath, &root_path_thread, NULL);
+	if(n != thrd_success) {
+		printf("can't start RootPath thread!\n");
+		abort();
+	}
+	rootpath_tid = L4_GlobalIdOf(tidof_NP(rootpath));
+	put_sysinfo("rootfs:tid", 1, rootpath_tid.raw);
+	mount_initrd();
+
+	sysmsg_tid = spawn_systask(0, "/initrd/lib/sneks-0.0p0/sysmsg", NULL);
 	put_sysinfo("sys:sysmsg:tid", 1, sysmsg_tid.raw);
-
-	L4_ThreadId_t pipeserv = spawn_systask_from_initrd(
-		"/initrd/lib/sneks-0.0p0/pipeserv", NULL);
+	L4_ThreadId_t pipeserv = spawn_systask(0, "/initrd/lib/sneks-0.0p0/pipeserv", NULL);
 	put_sysinfo("posix:pipe:tid", 1, pipeserv.raw);
 
 	struct __sysinfo *sip = sip_mem;
@@ -1667,7 +1599,7 @@ int main(void)
 		.sysinfo_size_log2 = PAGE_BITS,
 		.api.proc = uapi_tid,
 		.api.vm = vm_tid,
-		.api.rootfs = uapi_tid,
+		.api.rootfs = rootpath_tid,
 		.memory.page_size_log2 = PAGE_BITS,
 		.memory.biggest_page_log2 = PAGE_BITS,
 		.posix.pipe = pipeserv,

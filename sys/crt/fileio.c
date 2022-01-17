@@ -64,22 +64,13 @@ int open(const char *path, int flags, ...)
 		errno = -EINVAL;
 		return -1;
 	}
-
-	bool booted;
-	L4_ThreadId_t rootfs_tid = __get_rootfs(&booted);
-	if(!booted && strstarts(path, "/initrd/")) path += 8;
 	while(*path == '/') path++;
-
 	unsigned object;
 	L4_ThreadId_t server;
 	L4_Word_t cookie;
-	int ifmt, n = __path_resolve(rootfs_tid, &object, &server.raw,
-		&ifmt, &cookie, 0, path, flags | mode);
+	int ifmt, n = __path_resolve(__get_rootfs(), &object, &server.raw, &ifmt, &cookie, 0, path, flags | mode);
 	if(IOERR(n)) return -1;
-	if((ifmt & SNEKS_PATH_S_IFMT) != SNEKS_PATH_S_IFREG) {
-		errno = EBADF;	/* bizarre, but works */
-		return -1;
-	}
+	if((ifmt & SNEKS_PATH_S_IFMT) != SNEKS_PATH_S_IFREG) { errno = EBADF; return -1; } /* bizarre, but works */
 
 	L4_Set_VirtualSender(L4_nilthread);
 	assert(L4_IsNilThread(L4_ActualSender()));

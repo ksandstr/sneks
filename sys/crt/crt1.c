@@ -190,18 +190,12 @@ long sysconf(int name)
 	}
 }
 
-L4_ThreadId_t __get_rootfs(bool *root_mounted_p)
-{
-	struct sneks_rootfs_info blk;
+L4_ThreadId_t __get_rootfs(void) {
+	struct sneks_rootfs_info blk = { };
 	int n = __info_rootfs_block(L4_Pager(), &blk);
-	if(n != 0) {
-		log_crit("can't get rootfs block, n=%d", n);
-		abort();
-	}
-	if(root_mounted_p != NULL) *root_mounted_p = false;	/* TODO */
+	if(n != 0) { log_crit("can't get rootfs block: %s", stripcerr(n)); abort(); }
 	return (L4_ThreadId_t){ .raw = blk.service };
 }
-
 
 int __crt1_entry(void)
 {

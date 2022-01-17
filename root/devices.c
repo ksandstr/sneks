@@ -189,16 +189,9 @@ static int devices_open(int *handle_p,
 	assert(n == strlen(spawnpath));
 	struct dev_entry *ent = malloc(sizeof *ent + n + 1);
 	if(ent == NULL) return -ENOMEM;
-	*ent = (struct dev_entry){
-		.type = type, .minor = minor, .major = major,
-		.server = spawn_systask_from_initrd(spawnpath, NULL),
-	};
-	if(L4_IsNilThread(ent->server)) {
-		free(ent);
-		return -ENODEV;
-	}
-	assert(n == strlen(spawnpath));
-	memcpy(ent->name, spawnpath, n + 1);
+	*ent = (struct dev_entry){ .type = type, .minor = minor, .major = major, .server = spawn_systask(0, spawnpath, NULL) };
+	if(L4_IsNilThread(ent->server)) { free(ent); return -ENODEV; }
+	strscpy(ent->name, spawnpath, n + 1);
 
 	assert(devno_hash == rehash_entry_by_devno(ent, NULL));
 	bool ok = htable_add(&devno_ht, devno_hash, ent);
