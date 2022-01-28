@@ -1,7 +1,4 @@
-
-/* sysmsg client-side implementation. */
-
-#include <stdio.h>
+/* sysmsg client-side for systasks. */
 #include <stdlib.h>
 #include <stdint.h>
 #include <assert.h>
@@ -10,40 +7,33 @@
 #include <ccan/darray/darray.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/compiler/compiler.h>
-
 #include <l4/types.h>
 #include <l4/thread.h>
 #include <l4/ipc.h>
-
+#include <sneks/systask.h>
 #include <sneks/thread.h>
 #include <sneks/msg.h>
 #include <sneks/sys/msg-defs.h>
 #include <sneks/sys/info-defs.h>
-
 
 struct handler {
 	sysmsg_handler_fn fn;
 	void *priv;
 };
 
+static int receiver_fn(void *);
 
 static L4_ThreadId_t sysmsg_tid = { .raw = 0 };
 static once_flag init_flag = ONCE_FLAG_INIT;
 static thrd_t receiver;
 static tss_t current_handler;
-
 static darray(struct handler) handlers[32];
-
-
-static int receiver_fn(void *);
-
 
 static COLD void initialize(void)
 {
 	int n = tss_create(&current_handler, NULL);
 	if(n != thrd_success) {
-		fprintf(stderr, "%s:%s: tss_create failed, n=%d\n",
-			__FILE__, __func__, n);
+		log_crit("tss_create failed, n=%d", n);
 		abort();
 	}
 	for(int i=0; i < ARRAY_SIZE(handlers); i++) darray_init(handlers[i]);
@@ -51,39 +41,32 @@ static COLD void initialize(void)
 	L4_ThreadId_t sysinfo_tid;
 	n = __info_lookup(L4_Pager(), &sysinfo_tid.raw);
 	if(n != 0) {
-		fprintf(stderr, "%s:%s: InfoMeta::lookup failed, n=%d\n",
-			__FILE__, __func__, n);
+		log_crit("__info_lookup failed, n=%d", n);
 		abort();
 	}
 	struct sneks_sysapi_info info;
 	n = __info_sysapi_block(sysinfo_tid, &info);
 	if(n != 0) {
-		fprintf(stderr, "%s:%s: InfoMeta::sysapi_block failed, n=%d\n",
-			__FILE__, __func__, n);
+		log_crit("__info_sysapi_block failed, n=%d", n);
 		abort();
 	}
-
 	sysmsg_tid.raw = info.sysmsg;
 
 	n = thrd_create(&receiver, &receiver_fn, NULL);
 	if(n != thrd_success) {
-		fprintf(stderr, "%s:%s: thrd_create() failed, n=%d\n",
-			__FILE__, __func__, n);
+		log_crit("thrd_create() failed, n=%d", n);
 		abort();
 	}
 	L4_Accept(L4_UntypedWordsAcceptor);
 	L4_LoadMR(0, 0);
 	L4_MsgTag_t tag = L4_Lcall(thrd_to_tid(receiver));
 	if(L4_IpcFailed(tag)) {
-		fprintf(stderr, "%s:%s: can't sync with receiver, ec=%lu\n",
-			__FILE__, __func__, L4_ErrorCode());
+		log_crit("can't sync with receiver, ec=%lu", L4_ErrorCode());
 		abort();
 	}
 }
 
-
-static L4_Word_t invoke_handlers(
-	int bits, L4_Word_t body[static 62], int length)
+static L4_Word_t invoke_handlers(int bits, L4_Word_t body[static 62], int length)
 {
 	bool immediate = true;
 	while(bits > 0) {
@@ -100,14 +83,12 @@ static L4_Word_t invoke_handlers(
 	return immediate ? 0 : 1;
 }
 
-
 static int receiver_fn(void *param_ptr)
 {
 	int32_t oldmask = 0;
 	int n = __sysmsg_setmask(sysmsg_tid, &oldmask, 0, ~0u);
 	if(n != 0) {
-		fprintf(stderr, "%s:%s: Sysmsg::setmask failed, n=%d\n",
-			__FILE__, __func__, n);
+		log_err("Sysmsg::setmask failed, n=%d", n);
 		return -1;
 	}
 
@@ -123,18 +104,15 @@ static int receiver_fn(void *param_ptr)
 		L4_Accept(L4_UntypedWordsAcceptor);
 		L4_MsgTag_t tag = L4_Receive(sysmsg_tid);
 		for(;;) {
-			L4_ThreadId_t actual = L4_IpcPropagated(tag)
-				? L4_ActualSender() : sysmsg_tid;
+			L4_ThreadId_t actual = L4_IpcPropagated(tag) ? L4_ActualSender() : sysmsg_tid;
 			if(L4_IpcFailed(tag)) {
-				fprintf(stderr, "%s:%s: ipc with sysmsg failed: ec=%lu\n",
-					__FILE__, __func__, L4_ErrorCode());
+				log_err("ipc with sysmsg failed: ec=%lu", L4_ErrorCode());
 				break;
 			}
 			if(L4_Label(tag) != 0xe807 || L4_TypedWords(tag) > 0
 				|| L4_UntypedWords(tag) < 1)
 			{
-				fprintf(stderr, "%s:%s: weird tag=%#lx from sysmsg\n",
-					__FILE__, __func__, tag.raw);
+				log_info("weird tag=%#lx from sysmsg", tag.raw);
 				break;
 			}
 
@@ -143,11 +121,10 @@ static int receiver_fn(void *param_ptr)
 			int length = L4_UntypedWords(tag) - 1;
 			assert(length <= ARRAY_SIZE(body));
 			L4_StoreMRs(2, length, body);
-
 			L4_Word_t st = invoke_handlers(bits, body, length);
+
 			L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1 }.raw);
 			L4_LoadMR(1, st);
-
 			/* "ReplyReceive" */
 			L4_ThreadId_t dummy;
 			L4_Accept(L4_UntypedWordsAcceptor);
@@ -155,67 +132,53 @@ static int receiver_fn(void *param_ptr)
 				L4_Timeouts(L4_ZeroTime, L4_Never), &dummy);
 		}
 	}
-
 	return 0;
 }
-
 
 int sysmsg_listen(int bit, sysmsg_handler_fn fn, void *priv)
 {
 	assert(bit >= 0 && bit < ARRAY_SIZE(handlers));
 	call_once(&init_flag, &initialize);
-
 	if(handlers[bit].size == 0) {
 		int32_t oldmask = 0;
 		int n = __sysmsg_setmask(sysmsg_tid, &oldmask, 1u << bit, ~0u);
-		if(n != 0) return n;
+		if(n < 0) return n; else if(n > 0) return -EIO;
 	}
-
 	darray_push(handlers[bit], (struct handler){ .fn = fn, .priv = priv });
 	return (bit & (ARRAY_SIZE(handlers) - 1)) | (handlers[bit].size - 1) << 6;
 }
-
 
 int sysmsg_add_filter(int handle, const L4_Word_t *labels, int n_labels)
 {
 	if(n_labels < 1) return 0;
 	if(handle < 0) return -EBADF;
-
 	int bit = handle % ARRAY_SIZE(handlers), offs = handle >> 6;
 	assert(offs < handlers[bit].size);
-
 	return __sysmsg_add_filter(sysmsg_tid, 1u << bit, labels, n_labels);
 }
-
 
 int sysmsg_rm_filter(int handle, const L4_Word_t *labels, int n_labels)
 {
 	if(n_labels < 1) return 0;
 	if(handle < 0) return -EBADF;
-
 	int bit = handle % ARRAY_SIZE(handlers), offs = handle >> 6;
 	assert(offs < handlers[bit].size);
-
 	return __sysmsg_rm_filter(sysmsg_tid, 1u << bit, labels, n_labels);
 }
-
 
 int sysmsg_broadcast(int maskp, int maskn, const L4_Word_t *body, int length)
 {
 	call_once(&init_flag, &initialize);
 	if(tss_get(current_handler) != NULL) return -EDEADLK;
 	bool immediate;
-	int n = __sysmsg_broadcast(sysmsg_tid, &immediate,
-		maskp, maskn, body, length);
+	int n = __sysmsg_broadcast(sysmsg_tid, &immediate, maskp, maskn, body, length);
 	return n != 0 ? n : (immediate ? 0 : 1);
 }
-
 
 int sysmsg_close(int handle)
 {
 	if(init_flag == ONCE_FLAG_INIT) return -EBADF;
 	if(handle < 0) return -EBADF;
-
 	int bit = handle % ARRAY_SIZE(handlers), pos = handle >> 6;
 	if(handlers[bit].size <= pos) return -EBADF;
 
@@ -231,8 +194,6 @@ int sysmsg_close(int handle)
 		int32_t oldmask;
 		int n = __sysmsg_setmask(sysmsg_tid, &oldmask, 0, ~(1ul << bit));
 		if(n != 0) return n;
-		//assert(oldmask & (1u << bit));
 	}
-
 	return 0;
 }
