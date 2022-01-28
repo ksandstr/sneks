@@ -1,147 +1,124 @@
-
-#define SYSMSG_IMPL_SOURCE 1
-
+#define SYSMSG_IMPL_SOURCE
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
 #include <errno.h>
 #include <assert.h>
-#include <ccan/darray/darray.h>
+#include <muidl.h>
 #include <ccan/array_size/array_size.h>
+#include <ccan/compiler/compiler.h>
 #include <ccan/htable/htable.h>
+#include <ccan/list/list.h>
+#include <ccan/minmax/minmax.h>
 #include <ccan/siphash/siphash.h>
-
 #include <l4/types.h>
 #include <l4/thread.h>
 #include <l4/ipc.h>
-
 #include <sneks/hash.h>
 #include <sneks/bitops.h>
 #include <sneks/process.h>
 #include <sneks/systask.h>
 #include <sneks/sys/msg-defs.h>
 
-#include "muidl.h"
-
-
 #define FILTER_SIZE (64 / sizeof(L4_Word_t))	/* one cacheline's worth */
 #define SLOTS_PER_LIMB (sizeof(L4_Word_t) * 8 / 4)
 
+/* TODO: into a lib/ utility header! */
+#define for_each_bit(b, mask) /* long version */ \
+	for(long _acc = (mask), b = ffsl(_acc) - 1; _acc != 0; _acc &= ~(1l << b), b = ffsl(_acc) - 1)
 
-struct msgclient
-{
+struct msgclient {
 	L4_ThreadId_t recv_tid;
-	int subs_mask, n_filters;
+	int subs_mask, filter_mask, n_filters;
 	L4_Word_t *filter;	/* 4-bit counting 3-hash bloom filter */
+	struct list_head subs;
 };
 
+struct sub {
+	struct list_node link;
+	struct msgclient *client;
+	short bit;
+};
 
-static size_t rehash_msgclient(const void *ptr, void *priv);
-static L4_MsgTag_t recursive_sysmsg_call(
-	L4_MsgTag_t tag, L4_ThreadId_t sender);
+static size_t rehash_msgclient(const void *, void *);
+static size_t rehash_sub(const void *, void *);
+static L4_MsgTag_t recursive_sysmsg_call(L4_MsgTag_t tag, L4_ThreadId_t sender);
 static bool filter_pass(L4_Word_t *filter, int maskp, uint32_t hash);
 
-
-static darray(struct msgclient *) subs[32];
-static struct htable client_ht = HTABLE_INITIALIZER(client_ht,
-	&rehash_msgclient, NULL);
-
+static struct htable client_ht = HTABLE_INITIALIZER(client_ht, &rehash_msgclient, NULL),
+	subs_ht = HTABLE_INITIALIZER(subs_ht, &rehash_sub, NULL);
 static L4_ThreadId_t main_tid;
-static L4_Word_t filter_salt[ARRAY_SIZE(subs)];
+static L4_Word_t filter_salt[32];
 
-
-static size_t rehash_msgclient(const void *ptr, void *priv) {
+static size_t rehash_msgclient(const void *ptr, void *priv UNUSED) {
 	return int_hash(pidof_NP(((const struct msgclient *)ptr)->recv_tid));
 }
 
+static size_t rehash_sub(const void *item, void *priv UNUSED) {
+	const struct sub *s = item;
+	return int_hash(s->bit);
+}
 
 static bool cmp_pid_to_msgclient(const void *cand, void *key) {
 	const struct msgclient *c = cand;
 	return pidof_NP(c->recv_tid) == *(int *)key;
 }
 
-
 static int order_msgclientptr_by_pid(const void *a, const void *b) {
-	const struct msgclient *l = *(const struct msgclient **)a,
-		*r = *(const struct msgclient **)b;
+	const struct msgclient *l = *(const struct msgclient **)a, *r = *(const struct msgclient **)b;
 	return pidof_NP(l->recv_tid) - pidof_NP(r->recv_tid);
 }
-
 
 static struct msgclient *get_client(L4_ThreadId_t tid) {
 	int pid = pidof_NP(tid);
 	return htable_get(&client_ht, int_hash(pid), &cmp_pid_to_msgclient, &pid);
 }
 
-
-/* TODO: call this from whatever notifies about systask deaths. */
-#if !1
-static void msgclient_dtor(struct msgclient *c)
+static void rmsub(struct msgclient *c, int bit)
 {
-	assert(c->subs_mask == 0);
-	bool ok = htable_del(&client_ht, rehash_msgclient(c, NULL), c);
-	assert(ok);
-	free(c->filter);
-	free(c);
+	size_t hash = int_hash(bit);
+	struct htable_iter it;
+	for(struct sub *s = htable_firstval(&subs_ht, &it, hash); s != NULL; s = htable_nextval(&subs_ht, &it, hash)) {
+		if(s->bit != bit || s->client != c) continue;
+		list_del_from(&c->subs, &s->link);
+		htable_del(&subs_ht, hash, s);
+		free(s);
+	}
 }
-#endif
 
+static void addsub(struct msgclient *c, int bit)
+{
+	struct sub *s = malloc(sizeof *s);
+	if(s == NULL) abort();
+	*s = (struct sub){ .client = c, .bit = bit };
+	if(!htable_add(&subs_ht, rehash_sub(s, NULL), s)) abort();
+	list_add_tail(&c->subs, &s->link);
+}
 
-/* NOTE: this has two calls to abort() in it due to failing mallocs. ideally
- * it'd have an error return path instead, though it's not known what systasks
- * would do if Sysmsg::setmask fails.
- */
 static int setmask(L4_ThreadId_t recv_tid, int or, int and)
 {
 	struct msgclient *c = get_client(recv_tid);
-	if(c == NULL && and == 0 && or == 0) return 0;
 	if(c == NULL) {
-		c = malloc(sizeof *c);
-		if(c == NULL) abort();
+		if(and == 0 && or == 0) return 0;
+		if(c = malloc(sizeof *c), c == NULL) abort();
 		*c = (struct msgclient){ .recv_tid = recv_tid };
-		bool ok = htable_add(&client_ht, rehash_msgclient(c, NULL), c);
-		if(!ok) abort();
+		if(!htable_add(&client_ht, rehash_msgclient(c, NULL), c)) abort();
+		list_head_init(&c->subs);
 	}
-
 	int old_mask = c->subs_mask;
 	c->subs_mask = (c->subs_mask & and) | or;
 	int removed = old_mask & ~c->subs_mask, added = ~old_mask & c->subs_mask;
-	//log_info("removed=%#x, added=%#x", removed, added);
-	while(removed != 0) {
-		int bit = ffsl(removed) - 1;
-		assert(bit >= 0);
-		assert(subs[bit].size > 0);
-		removed &= ~(1 << bit);
-		bool found = false;
-		for(int i=0; i < subs[bit].size; i++) {
-			if(subs[bit].item[i] == c) {
-				subs[bit].item[i] = subs[bit].item[subs[bit].size - 1];
-				darray_resize(subs[bit], subs[bit].size - 1);
-				found = true;
-				break;
-			}
-		}
-		assert(found);
-	}
-	while(added != 0) {
-		int bit = ffsl(added) - 1;
-		assert(bit >= 0);
-		added &= ~(1 << bit);
-		darray_push(subs[bit], c);
-	}
-
+	c->filter_mask &= ~removed;
+	for_each_bit(b, removed) { rmsub(c, b); }
+	for_each_bit(b, added) { addsub(c, b); }
 	return old_mask;
 }
-
 
 static int impl_setmask(int or, int and) {
 	return setmask(muidl_get_sender(), or, and);
 }
 
-
-static int send_to_client(
-	struct msgclient *c,
-	L4_Word_t bits, const L4_Word_t *body, size_t body_len)
+static int send_to_client(struct msgclient *c, L4_Word_t bits, const L4_Word_t *body, size_t body_len)
 {
 	assert(!L4_SameThreads(muidl_get_sender(), c->recv_tid));
 	L4_MsgTag_t tag = (L4_MsgTag_t){ .X.label = 0xe807, .X.u = body_len + 1 };
@@ -156,121 +133,74 @@ static int send_to_client(
 		tag = recursive_sysmsg_call(tag, c->recv_tid);
 	}
 	/* this may cause funny behaviour in that an IPC failure in a Sysmsg call
-	 * from within a handler may cause the outer handler call to fail also,
-	 * which may in turn cause handler replies to appear in the muidl dispatch
-	 * loop.
+	 * from within a handler could cause the outer handler call to fail also,
+	 * which may in turn lead to handler replies appearing in the muidl
+	 * dispatch loop.
 	 */
 	if(L4_IpcFailed(tag)) return -(int)L4_ErrorCode();
-
-	assert(L4_UntypedWords(tag) == 1);
-	L4_Word_t st; L4_StoreMR(1, &st);
-	return st;
+	else {
+		assert(L4_UntypedWords(tag) == 1);
+		L4_Word_t st; L4_StoreMR(1, &st);
+		return st;
+	}
 }
 
-
-static bool impl_broadcast(
-	int32_t maskp, int32_t maskn,
-	const L4_Word_t *body, unsigned body_len)
+static bool impl_broadcast(int maskp, int maskn, const L4_Word_t *body, unsigned body_len)
 {
-	if(maskp == 0 || maskn == ~0) return true;	/* no-ops */
-
-	/* collect receivers. */
-	struct msgclient **receivers;
-	int n_receivers;
-	darray(struct msgclient *) temp = darray_new();
-	bool merge = __builtin_popcount(maskp) > 1;
-	if(!merge && maskn == 0) {
-		int bit = ffsl(maskp) - 1;
-		receivers = subs[bit].item;
-		n_receivers = subs[bit].size;
-	} else {
-		int acc = maskp;
-		while(acc != 0) {
-			int bit = ffsl(acc) - 1;
-			acc &= ~(1 << bit);
-			if(maskn == 0) {
-				darray_append_items(temp, subs[bit].item, subs[bit].size);
-			} else {
-				darray_realloc(temp, temp.size + subs[bit].size);
-				for(int i=0; i < subs[bit].size; i++) {
-					if((subs[bit].item[i]->subs_mask & maskn) == 0) {
-						darray_push(temp, subs[bit].item[i]);
-					}
-				}
+	if(maskp == 0 || maskn == ~0) return true;
+	struct msgclient *recbuf[64], **recs = recbuf;
+	int sz = 0, alloc = ARRAY_SIZE(recbuf), count = 0, immediate = true;
+	for_each_bit(bit, maskp) {
+		size_t hash = int_hash(bit);
+		struct htable_iter it;
+		for(struct sub *s = htable_firstval(&subs_ht, &it, hash); s != NULL; s = htable_nextval(&subs_ht, &it, hash)) {
+			if(s->bit != bit || (s->client->subs_mask & maskn)) continue;
+			if(sz == alloc) {
+				if(recs == recbuf && (recs = memdup(recbuf, sz * sizeof *recs), recs == NULL)) abort();
+				alloc = max(16, alloc * 2);
+				recs = realloc(recs, alloc * sizeof *recs);
+				if(recs == NULL) abort();
 			}
+			recs[sz++] = s->client;
 		}
-		/* sort, uniq */
-		qsort(temp.item, temp.size, sizeof temp.item[0],
-			&order_msgclientptr_by_pid);
-		n_receivers = 0;
-		for(int i=1; i < temp.size; i++) {
-			if(order_msgclientptr_by_pid(&temp.item[i-1],
-				&temp.item[i]) != 0)
-			{
-				temp.item[n_receivers++] = temp.item[i];
-			}
-		}
-		receivers = temp.item;
 	}
-
-	bool immediate = true;
+	qsort(recs, sz, sizeof *recs, &order_msgclientptr_by_pid);
+	if(sz > 0) count++;
+	for(int i = 1; i < sz; i++) { /* uniq */
+		if(order_msgclientptr_by_pid(&recs[i - 1], &recs[i]) != 0) recs[count++] = recs[i];
+	}
 	uint32_t hash = int_hash(body[0]);
-	for(int i=0; i < n_receivers; i++) {
-		assert(i < 1 || receivers[i - 1] != receivers[i]);
-		if(!filter_pass(receivers[i]->filter, maskp, hash)) continue;
-		int n = send_to_client(receivers[i], maskp, body, body_len);
+	for(int i = 0; i < count; i++) {
+		assert(i < 1 || recs[i - 1] != recs[i]);
+		int f = recs[i]->filter_mask; /* has to pass at least one bit in maskp. */
+		if((f & maskp) == maskp && !filter_pass(recs[i]->filter, maskp & f, hash)) continue;
+		int n = send_to_client(recs[i], maskp, body, body_len);
 		if(n == 1) immediate = false;
-		else if(n < 0) {
-			log_err("couldn't send to pid=%d, n=%d", pidof_NP(receivers[i]->recv_tid), n);
-		}
+		if(n < 0) log_err("couldn't send to pid=%d, n=%d", pidof_NP(recs[i]->recv_tid), n);
 	}
-
-	darray_free(temp);
+	if(recs != recbuf) free(recs);
 	return immediate;
 }
 
-
-/* four-bit unsigned saturating increment.
- *
- * returns true when the field became saturated, false if it was already or is
- * afterward at non-saturation. each field is 4 bits wide for maximum
- * reversibility.
+/* four-bit unsigned saturating increment. returns true when the field became
+ * saturated, false if it was already or is afterward at non-saturation. each
+ * field is 4 bits wide for maximum reversibility.
  */
-static bool filter_inc(L4_Word_t *filter, int slot)
-{
+static bool filter_inc(L4_Word_t *filter, int slot) {
 	int limb = slot / SLOTS_PER_LIMB, offs = (slot % SLOTS_PER_LIMB) * 4;
-#if 1
 	bool sat = ((filter[limb] >> offs) & 0xf) == 0xe;
 	if(((filter[limb] >> offs) & 0xf) < 0xf) filter[limb] += 1lu << offs;
 	return sat;
-#else
-	L4_Word_t mask = 0xf << offs, val = filter[limb] & mask,
-		notsat = MASK32(val - mask);
-	filter[limb] = (~notsat & filter[limb])
-		| (notsat & (filter[limb] + (1 << offs)));
-
-	return notsat && ((filter[limb] & mask) == mask);
-#endif
 }
-
 
 /* four-bit unsigned saturation-preserving decrement. also preserves zeroes,
  * even though the sole call site's use of filter_query() ensures they never
  * appear.
  */
-static void filter_dec(L4_Word_t *filter, int slot)
-{
+static void filter_dec(L4_Word_t *filter, int slot) {
 	int limb = slot / SLOTS_PER_LIMB, offs = (slot % SLOTS_PER_LIMB) * 4;
-#if 1
 	if((((filter[limb] >> offs) + 1) & 0xf) > 1) filter[limb] -= 1lu << offs;
-#else
-	L4_Word_t mask = 0xf << offs, val = filter[limb] & mask,
-		notsat = MASK32(val - mask), notzero = MASK32(val);
-	filter[limb] = ((~notsat | ~notzero) & filter[limb])
-		| (notsat & notzero & (filter[limb] - (1 << offs)));
-#endif
 }
-
 
 static void get_slots(int slots[static 3], uint32_t hash)
 {
@@ -279,41 +209,31 @@ static void get_slots(int slots[static 3], uint32_t hash)
 		slots[i] = hash & (n_slots - 1);
 		hash /= n_slots;
 	}
-	/* FIXME: make slots[0..2] distinct. */
+	/* TODO: make slots[0..2] distinct */
 }
-
 
 static bool filter_query(L4_Word_t *filter, const int slots[static 3])
 {
 	bool ret = true;
 	for(int i=0; i < 3; i++) {
-		int limb = slots[i] / SLOTS_PER_LIMB,
-			offs = (slots[i] % SLOTS_PER_LIMB) * 4;
+		int limb = slots[i] / SLOTS_PER_LIMB, offs = (slots[i] % SLOTS_PER_LIMB) * 4;
 		ret &= !!(filter[limb] & (0xf << offs));
 	}
 	return ret;
 }
 
-
 static bool filter_pass(L4_Word_t *filter, int maskp, uint32_t hash)
 {
 	if(filter == NULL) return true;
-	for(int acc = maskp, bit = ffsl(acc) - 1;
-		acc != 0;
-		acc &= ~(1 << bit), bit = ffsl(acc) - 1)
-	{
+	for_each_bit(bit, maskp) {
 		int slots[3]; get_slots(slots, hash ^ filter_salt[bit]);
 		if(filter_query(filter, slots)) return true;
 	}
 	return false;
 }
 
-
 #ifdef BUILD_SELFTEST
-
 #include <sneks/test.h>
-#include <sneks/systask.h>
-
 
 /* test that the filter saturates the addressed slot, doesn't affect any
  * slot besides, and returns the saturation result correctly.
@@ -351,7 +271,6 @@ END_TEST
 
 SYSTASK_SELFTEST("sysmsg:bloom", filter_inc);
 
-
 START_TEST(filter_dec)
 {
 	plan_tests(4);
@@ -375,21 +294,17 @@ SYSTASK_SELFTEST("sysmsg:bloom", filter_dec);
 
 #endif
 
-
-static void add_filter(L4_ThreadId_t sender,
-	int mask, const L4_Word_t *labels, unsigned n_labels)
+static void add_filter(L4_ThreadId_t sender, int mask, const L4_Word_t *labels, unsigned n_labels)
 {
 	struct msgclient *c = get_client(sender);
 	if(c == NULL) {
 		/* clients must start with a call to setmask, or not be recognized. */
-		log_err("no client for pid=%d (%lu:%lu)?", pidof_NP(sender),
-			L4_ThreadNo(sender), L4_Version(sender));
+		log_err("no client for pid=%d (%lu:%lu)?", pidof_NP(sender), L4_ThreadNo(sender), L4_Version(sender));
 		return;
 	}
 	if(c->filter == NULL) {
 		assert(c->n_filters == 0);
-		c->filter = calloc(FILTER_SIZE, sizeof *c->filter);
-		if(c->filter == NULL) {
+		if(c->filter = calloc(FILTER_SIZE, sizeof *c->filter), c->filter == NULL) {
 			log_err("can't allocate client filter!");
 			/* FIXME: set some kind of an all-saturated filter, and don't free
 			 * it in msgclient_dtor()?
@@ -397,42 +312,30 @@ static void add_filter(L4_ThreadId_t sender,
 			return;
 		}
 	}
-
 	for(int i=0; i < n_labels; i++) {
 		uint32_t hash = int_hash(labels[i]);
-		for(int acc = mask, bit = ffsl(acc) - 1;
-			acc != 0;
-			acc &= ~(1 << bit), bit = ffsl(acc) - 1)
-		{
-			int slots[3];
-			get_slots(slots, hash ^ filter_salt[bit]);
+		for_each_bit(bit, mask) {
+			int slots[3]; get_slots(slots, hash ^ filter_salt[bit]);
 			for(int j=0; j < 3; j++) filter_inc(c->filter, slots[j]);
 		}
+		c->filter_mask |= mask;
 	}
 	c->n_filters += n_labels * __builtin_popcount(mask);
 }
-
 
 static void impl_add_filter(int mask, const L4_Word_t *labels, unsigned n_labels) {
 	return add_filter(muidl_get_sender(), mask, labels, n_labels);
 }
 
-
-static void rm_filter(L4_ThreadId_t sender,
-	int mask, const L4_Word_t *labels, unsigned n_labels)
+static void rm_filter(L4_ThreadId_t sender, int mask, const L4_Word_t *labels, unsigned n_labels)
 {
 	struct msgclient *c = get_client(sender);
 	if(c == NULL || c->filter == NULL) return;
-
 	int removed = 0;
 	for(int i=0; i < n_labels; i++) {
 		uint32_t hash = int_hash(labels[i]);
-		for(int acc = mask, bit = ffsl(acc) - 1;
-			acc != 0;
-			acc &= ~(1 << bit), bit = ffsl(acc) - 1)
-		{
-			int slots[3];
-			get_slots(slots, hash ^ filter_salt[bit]);
+		for_each_bit(bit, mask) {
+			int slots[3]; get_slots(slots, hash ^ filter_salt[bit]);
 			if(!filter_query(c->filter, slots)) continue;
 			for(int j=0; j < 3; j++) filter_dec(c->filter, slots[j]);
 			removed++;
@@ -446,14 +349,11 @@ static void rm_filter(L4_ThreadId_t sender,
 	}
 }
 
-
 static void impl_rm_filter(int mask, const L4_Word_t *labels, unsigned n_labels) {
 	return rm_filter(muidl_get_sender(), mask, labels, n_labels);
 }
 
-
-static L4_MsgTag_t recursive_sysmsg_call(
-	L4_MsgTag_t tag, L4_ThreadId_t sender)
+static L4_MsgTag_t recursive_sysmsg_call(L4_MsgTag_t tag, L4_ThreadId_t sender)
 {
 	L4_ThreadId_t dummy;
 	int err;
@@ -498,36 +398,26 @@ static L4_MsgTag_t recursive_sysmsg_call(
 			err = ENOSYS;
 			goto error;
 	}
-
-reply:
-	/* "ReplyReceive" */
+reply:	/* "ReplyReceive" */
 	L4_Accept(L4_UntypedWordsAcceptor);
-	return L4_Ipc(sender, sender,
-		L4_Timeouts(L4_ZeroTime, L4_Never), &dummy);
-
+	return L4_Ipc(sender, sender, L4_Timeouts(L4_ZeroTime, L4_Never), &dummy);
 error:
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 1, .X.u = 1 }.raw);
 	L4_LoadMR(1, err);
 	goto reply;
 }
 
-
 int main(void)
 {
 	main_tid = L4_Myself();
-	for(int i=0; i < ARRAY_SIZE(subs); i++) darray_init(subs[i]);
-
 	/* siphash is a bit much for this, but w/e until sys/crt gets random(). */
-	static const unsigned char t_key[16] = {
-		0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
-	};
+	static const unsigned char t_key[16] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 };
 	uint64_t salt = UINT64_C(0xBADC0FFEE0DDF00D);
 	salt = siphash_2_4(&salt, sizeof salt, t_key);
 	for(int i=0; i < ARRAY_SIZE(filter_salt); i++) {
 		salt = siphash_2_4(&salt, sizeof salt, t_key);
 		filter_salt[i] = salt;
 	}
-
 	static const struct sysmsg_vtable vtab = {
 		.setmask = &impl_setmask,
 		.broadcast = &impl_broadcast,
@@ -536,15 +426,11 @@ int main(void)
 	};
 	for(;;) {
 		L4_Word_t status = _muidl_sysmsg_dispatch(&vtab);
-		if(status != 0 && !MUIDL_IS_L4_ERROR(status)
-			&& selftest_handling(status))
-		{
+		if(status != 0 && !MUIDL_IS_L4_ERROR(status) && selftest_handling(status)) {
 			/* oof */
 		} else {
-			log_info("dispatch status %#lx (last tag %#lx)",
-				status, muidl_get_tag().raw);
+			log_info("dispatch status %#lx (last tag %#lx)", status, muidl_get_tag().raw);
 		}
 	}
-
 	return 0;
 }
