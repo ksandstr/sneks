@@ -220,14 +220,7 @@ size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream)
 				remain -= m; ptr += m; n += m;
 				if(m < nbytes) break;
 			}
-			if(stream->bufsz + remain <= stream->bufmax) {
-				memcpy(stream->buffer + stream->bufsz, ptr, remain);
-				stream->bufsz += remain;
-				n += remain;
-				break;
-			} else {
-				/* FALL THRU */
-			}
+			/* FALL THRU */
 		}
 		case _IOFBF:
 			if(stream->bufsz + remain <= stream->bufmax) {
@@ -235,10 +228,9 @@ size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream)
 				stream->bufsz += remain;
 				n += remain;
 				break;
-			} else {
-				if(stream->bufsz > 0) fflush(stream);
-				/* FALL THRU */
 			}
+			if(stream->bufsz > 0) fflush(stream);
+			/* FALL THRU */
 		case _IONBF:
 			n += (*GET_IOFNS(stream)->write)(stream->cookie, ptr, remain);
 			break;
