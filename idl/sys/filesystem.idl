@@ -1,0 +1,17 @@
+#ifndef __SYS_FILESYSTEM_IDL__
+#define __SYS_FILESYSTEM_IDL__
+
+#include <posixlike.idl>
+
+module Sneks {
+
+[StubPrefix(__fs), Label(0xe80f)]	/* f is for respects */
+interface Filesystem
+{
+	/* filesystem flushes its dirty data and exits, or pops EBUSY. */
+	void shutdown() raises(Posix::Errno);
+};
+
+};
+
+#endif
