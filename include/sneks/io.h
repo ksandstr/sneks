@@ -65,7 +65,6 @@ extern int io_run(size_t iof_size, int argc, char *argv[]);
  */
 extern int io_quit(int rc);
 
-
 /* file and handle creation.
  *
  * an implementor calls iof_new() to create a new file such as for open(2),
@@ -88,7 +87,9 @@ extern void iof_undo_new(iof_t *file);
 extern int io_add_fd(pid_t pid, iof_t *file, int flags);
 
 /* io_get_file() resolves the handle @fd to a file for @pid. a NULL result may
- * be passed as EBADF.
+ * be passed as EBADF. as a special case, when @pid == -1 it'll disregard @fd
+ * and return an arbitrary iof_t or NULL if there are no active descriptors
+ * for any client.
  *
  * note that this function should never be called from within a
  * confirm/rollback handler or from the io_lifecycle_func() callback. in the

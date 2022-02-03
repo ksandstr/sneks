@@ -622,7 +622,12 @@ int io_add_fd(pid_t pid, iof_t *iof, int flags)
 
 iof_t *io_get_file(pid_t pid, int fd) {
 	assert(invariants());
-	struct fd *f = get_fd(pid, fd);
+	struct fd *f;
+	if(likely(pid != -1)) f = get_fd(pid, fd);
+	else {
+		struct ra_iter it;
+		f = ra_first(fd_ra, &it);
+	}
 	return likely(f != NULL) ? IOF_T(f->file) : NULL;
 }
 
