@@ -1,4 +1,3 @@
-
 #define SNEKS_IO_IMPL_SOURCE	/* for muidl_raise_no_reply() */
 #undef BUILD_SELFTEST
 
@@ -1209,6 +1208,7 @@ int io_run(size_t iof_size, int argc, char *argv[])
 
 	assert(invariants());
 
+	int rc;
 	for(;;) {
 		L4_Word_t status = (*callbacks.dispatch)(callbacks.dispatch_priv);
 		L4_ThreadId_t sender = muidl_get_sender();
@@ -1225,6 +1225,10 @@ int io_run(size_t iof_size, int argc, char *argv[])
 			/* queue-consumption stimulus; some I/O notifications may fire. */
 			sync_confirm();		/* a previous reply succeeded. */
 			lifecycle_sync();
+		} else if(L4_IsLocalId(sender) && (L4_Label(tag) & 0xff00) == 0xff00) {
+			/* io_quit() was run */
+			rc = L4_Label(tag) & 0xff;
+			break;
 		} else {
 			log_info("dispatch status %#lx (last tag %#lx)", status, tag.raw);
 			L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1, .X.label = 1 }.raw);
@@ -1232,5 +1236,27 @@ int io_run(size_t iof_size, int argc, char *argv[])
 			L4_Reply(sender);
 		}
 		assert(invariants());
+	}
+	/* TODO: make io_run() reentrant; right now this is only for
+	 * Filesystem/shutdown via io_quit().
+	 */
+	return rc;
+}
+
+int io_quit(int rc)
+{
+	/* utilize the poke thread. */
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+	L4_LoadMR(1, main_tid.raw);
+	L4_LoadMR(2, 0xff00 | (rc & 0xff));
+	L4_MsgTag_t tag = L4_Reply(thrd_to_tid(poke_thrd));
+	if(L4_IpcSucceeded(tag)) return 0;
+	else {
+		L4_Word_t ec = L4_ErrorCode();
+		if(ec == 2) return -EBUSY;
+		else {
+			log_info("L4 errorcode=%#lx on reply to poke_thrd", ec);
+			return -EIO;
+		}
 	}
 }

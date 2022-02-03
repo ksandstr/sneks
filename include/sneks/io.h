@@ -60,6 +60,10 @@ enum lifecycle_tag {
 
 /* main loop. returns like main(). not longjmp() safe. */
 extern int io_run(size_t iof_size, int argc, char *argv[]);
+/* called from a callback to cause io_run() to return @rc. returns negative
+ * errno on failure, 0 on success.
+ */
+extern int io_quit(int rc);
 
 
 /* file and handle creation.
