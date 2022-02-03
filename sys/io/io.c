@@ -982,9 +982,8 @@ static noreturn int poke_fn(void *param_ptr)
 				break;
 			}
 			L4_ThreadId_t dest; L4_StoreMR(1, &dest.raw);
-			L4_Word_t label; L4_StoreMR(2, &label);
 			L4_Accept(L4_UntypedWordsAcceptor);
-			L4_LoadMR(0, (L4_MsgTag_t){ .X.label = label }.raw);
+			L4_LoadMR(0, (L4_MsgTag_t){ .X.label = L4_Label(tag) }.raw);
 			/* "LsendWaitLocal" */
 			tag = L4_Lipc(dest, L4_anylocalthread,
 				L4_Timeouts(L4_Never, L4_Never), &sender);
@@ -1007,9 +1006,8 @@ static void spawn_poke_thrd(void)
 	 * an early edge poke.
 	 */
 	L4_Accept(L4_UntypedWordsAcceptor);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xbe7a, .X.u = 1 }.raw);
 	L4_LoadMR(1, L4_MyLocalId().raw);
-	L4_LoadMR(2, 0xbe7a);
 	L4_MsgTag_t tag = L4_Lcall(thrd_to_tid(poke_thrd));
 	if(L4_IpcFailed(tag)) {
 		log_crit("can't sync with poke thread, ec=%lu", L4_ErrorCode());
@@ -1127,9 +1125,8 @@ static bool lifecycle_handler_fn(
 		&& (~ctrl & (1 << 20)));
 
 	if(poke) {
-		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1, .X.label = 0xbaab }.raw);
 		L4_LoadMR(1, main_tid.raw);
-		L4_LoadMR(2, 0xbaab);
 		L4_MsgTag_t tag = L4_Reply(thrd_to_tid(poke_thrd));
 		if(L4_IpcFailed(tag) && L4_ErrorCode() != 2) {
 			log_err("failed lifecycle poke, ec=%lu", L4_ErrorCode());
@@ -1155,9 +1152,8 @@ void io_set_fast_confirm(void)
 	 * once and returning to confirm immediately. for now this'll do.
 	 */
 	L4_ThreadId_t poke_tid = thrd_to_tid(poke_thrd);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xbaab, .X.u = 1 }.raw);
 	L4_LoadMR(1, main_tid.raw);
-	L4_LoadMR(2, 0xbaab);
 	L4_Reply(poke_tid);
 }
 
@@ -1246,9 +1242,8 @@ int io_run(size_t iof_size, int argc, char *argv[])
 int io_quit(int rc)
 {
 	/* utilize the poke thread. */
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2 }.raw);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xff00 | (rc & 0xff), .X.u = 1 }.raw);
 	L4_LoadMR(1, main_tid.raw);
-	L4_LoadMR(2, 0xff00 | (rc & 0xff));
 	L4_MsgTag_t tag = L4_Reply(thrd_to_tid(poke_thrd));
 	if(L4_IpcSucceeded(tag)) return 0;
 	else {
