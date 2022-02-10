@@ -122,6 +122,5 @@ L4_ThreadId_t start_bootcon(int *confd_p, struct htable *root_args)
 	*confd_p = bootcon_nextfd++;
 	thrd_t con_thrd;
 	int n = thrd_create(&con_thrd, &bootcon_thread_fn, NULL);
-	return n != thrd_success ? L4_nilthread
-		: L4_GlobalIdOf(thrd_tidof_NP(con_thrd));
+	return n != thrd_success ? L4_nilthread : L4_GlobalIdOf(tidof_NP(con_thrd));
 }

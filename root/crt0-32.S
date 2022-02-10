@@ -11,7 +11,7 @@ __return_from_main:
 	int $1
 	jmp __return_from_main
 
-# FIXME: duplicated in root/main.c THREAD_STACK_SIZE
+# NOTE: same as STACK_SIZE in root/thrd.c
 	.bss
 	.align 4096
 	.space 4096

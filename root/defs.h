@@ -19,8 +19,6 @@
 #include <sneks/devcookie.h>
 
 
-#define THREAD_STACK_SIZE 4096
-
 /* flags in <struct process>. comment describes behaviour when set. */
 #define PF_WAIT_ANY 1	/* sleeping in passive waitid(P_ALL, ...) */
 #define PF_SAVED_MASK 2	/* signal delivery is in sigsuspend mode */
@@ -99,13 +97,9 @@ extern L4_ThreadId_t spawn_systask_from_initrd(const char *path, ...);
 
 
 /* from thrd.c */
-
-extern void rt_thrd_init(void);
+extern L4_ThreadId_t tidof_NP(thrd_t t);
+extern void init_root_thrd(void);
 extern void rt_thrd_tests(void);
-
-/* FIXME: rename this to match the one in sys/crt (& later, userspace) */
-extern L4_ThreadId_t thrd_tidof_NP(thrd_t t);
-
 extern int next_early_utcb_slot;	/* for add_systask() */
 
 

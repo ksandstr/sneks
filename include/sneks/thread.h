@@ -36,7 +36,7 @@ struct thrd
 extern struct thrd *thrd_from_tid(L4_ThreadId_t tid);
 extern L4_ThreadId_t thrd_to_tid(thrd_t t);
 
-#define thrd_tidof_NP(t) thrd_to_tid((t))
+#define tidof_NP(t) thrd_to_tid((t))
 
 
 #endif

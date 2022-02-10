@@ -48,9 +48,6 @@
 #include "defs.h"
 
 
-#define THREAD_STACK_SIZE 4096
-
-
 struct sysmem_page {
 	L4_Word_t address;
 };
@@ -393,7 +390,7 @@ static L4_ThreadId_t start_sysmem(
 		fprintf(stderr, "%s: can't create thread: n=%d\n", __func__, n);
 		abort();
 	}
-	*pager_p = thrd_tidof_NP(pg);
+	*pager_p = tidof_NP(pg);
 	int rc = L4_Set_Priority(*pager_p, 1);	/* very very low indeed. */
 	if(rc == 0) panic("couldn't set sysmem pager priority!");
 
@@ -596,10 +593,10 @@ static COLD void rename_first_threads(void)
 		printf("%s: thrd_create failed, n=%d\n", __func__, n);
 		abort();
 	}
-	pop_interrupt_to(thrd_tidof_NP(helper));
+	pop_interrupt_to(tidof_NP(helper));
 
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xf00d }.raw);
-	L4_MsgTag_t tag = L4_Send(thrd_tidof_NP(helper));
+	L4_MsgTag_t tag = L4_Send(tidof_NP(helper));
 	if(L4_IpcFailed(tag)) {
 		printf("%s: helper quit msg failed, ec=%lu\n", __func__, L4_ErrorCode());
 		abort();
@@ -1572,7 +1569,7 @@ static int rootserv_loop(void *parameter)
 
 static void stupid_sync(thrd_t t) {
 	L4_LoadMR(0, 0);
-	L4_Send(thrd_tidof_NP(t));
+	L4_Send(tidof_NP(t));
 }
 
 
@@ -1585,7 +1582,7 @@ int main(void)
 	printf("hello, world!\n");
 	the_kip = L4_GetKernelInterface();
 	sigma0_tid = L4_Pager();
-	rt_thrd_init();
+	init_root_thrd();
 	rename_first_threads();
 	random_init(rdtsc());
 
@@ -1611,7 +1608,7 @@ int main(void)
 		printf("can't start kmsg!\n");
 		abort();
 	}
-	put_sysinfo("kmsg:tid", 1, thrd_tidof_NP(kmsg).raw);
+	put_sysinfo("kmsg:tid", 1, tidof_NP(kmsg).raw);
 	random_init(rdtsc());
 
 	/* launch the userspace API server. */
@@ -1628,8 +1625,8 @@ int main(void)
 	stupid_sync(uapi);
 	random_init(rdtsc());
 
-	put_sysinfo("uapi:tid", 1, thrd_tidof_NP(uapi).raw);
-	uapi_tid = thrd_tidof_NP(uapi);
+	put_sysinfo("uapi:tid", 1, tidof_NP(uapi).raw);
+	uapi_tid = tidof_NP(uapi);
 
 	/* start the rootserv thread, for handling of panics and the like. */
 	thrd_t rootserv;
@@ -1638,7 +1635,7 @@ int main(void)
 		printf("can't start rootserv!\n");
 		abort();
 	}
-	put_sysinfo("rootserv:tid", 1, thrd_tidof_NP(rootserv).raw);
+	put_sysinfo("rootserv:tid", 1, tidof_NP(rootserv).raw);
 
 	void *sip_mem = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
 	L4_Fpage_t sip_page = L4_FpageLog2((uintptr_t)sip_mem, PAGE_BITS);
