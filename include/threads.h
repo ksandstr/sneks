@@ -49,7 +49,7 @@ extern void call_once(once_flag *flag, void (*func)(void));
 typedef int thrd_t;
 extern thrd_t thrd_current(void);
 extern int thrd_create(thrd_t *thr, thrd_start_t fn, void *arg);
-extern void thrd_exit(int res);
+extern _Noreturn void thrd_exit(int res);
 extern int thrd_join(thrd_t thr, int *res_p);
 
 /* non-portable outside the testbench runtime. */

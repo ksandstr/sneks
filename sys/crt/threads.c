@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdatomic.h>
+#include <stdnoreturn.h>
 #include <threads.h>
 #include <ccan/likely/likely.h>
 #include <ccan/list/list.h>
@@ -133,7 +134,7 @@ int thrd_create(thrd_t *thread, thrd_start_t fn, void *param_ptr)
  * should at least return thrd_error and put the system in some reasonable
  * state.
  */
-void thrd_exit(int res)
+noreturn void thrd_exit(int res)
 {
 	/* destroy per-thread data. this access pattern wrt tss_meta is mildly bad
 	 * because of the spinlock section.

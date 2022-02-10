@@ -60,7 +60,7 @@ int *__errno_location(void)
 }
 
 
-void thrd_exit(int res) {
+noreturn void thrd_exit(int res) {
 	/* pedantic but correct. */
 	exit(res);
 }

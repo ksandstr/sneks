@@ -73,7 +73,7 @@ static struct rt_thread *rt_self(void)
 }
 
 
-void thrd_exit(int res)
+noreturn void thrd_exit(int res)
 {
 	struct rt_thread *rt = rt_self();
 	atomic_store(&rt->retval, res);
