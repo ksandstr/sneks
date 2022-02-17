@@ -1,4 +1,3 @@
-
 #include <string.h>
 #include <assert.h>
 #include <alloca.h>
@@ -12,11 +11,9 @@
 
 #include "private.h"
 
-
 ssize_t readlink(const char *restrict path, char *restrict buf, size_t bufsize) {
 	return readlinkat(AT_FDCWD, path, buf, bufsize);
 }
-
 
 ssize_t readlinkat(int dirfd, const char *restrict path,
 	char *restrict buf, size_t bufsize)
@@ -33,8 +30,6 @@ ssize_t readlinkat(int dirfd, const char *restrict path,
 	int pathlen = 0;
 	n = __dir_readlink(r.server, pathbuf, &pathlen, r.object, r.cookie);
 	if(n != 0) return NTOERR(n);
-	assert(pathbuf[pathlen] == '\0');
-
 	size_t n_wrote = min_t(size_t, pathlen, bufsize);
 	if(bufsize < path_max) {
 		/* copy back from alloca'd buffer */
