@@ -30,6 +30,7 @@
 #include <l4/sigma0.h>
 
 #include <sneks/elf.h>
+#include <sneks/ipc.h>
 #include <sneks/mm.h>
 #include <sneks/hash.h>
 #include <sneks/bitops.h>
@@ -1520,21 +1521,7 @@ static COLD void run_waitmods(struct htable *root_args, const char *stem)
 
 	L4_ThreadId_t wm_tid = spawn_systask_mod(waitmod, NULL);
 	if(!L4_IsNilThread(wm_tid)) {
-		/* wait until it's been removed, indicating completion. */
-		L4_MsgTag_t tag;
-		do {
-			L4_Accept(L4_UntypedWordsAcceptor);
-			tag = L4_Receive(wm_tid);
-			if(L4_IpcSucceeded(tag)) {
-				L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1, .X.label = 1 }.raw);
-				L4_LoadMR(1, EINVAL);
-				tag = L4_Reply(wm_tid);
-			}
-		} while(L4_IpcSucceeded(tag) || L4_ErrorCode() == 2);
-		if(L4_ErrorCode() != 5) {
-			printf("%swaitmod exit check failed, ec=%lu\n", stem, L4_ErrorCode());
-			abort();
-		}
+		while(wait_until_gone(wm_tid, L4_Never) != 0) { /* spin */ }
 	}
 }
 

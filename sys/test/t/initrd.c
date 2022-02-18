@@ -1,6 +1,4 @@
-
-/* tests on access to initrd data from within systests. */
-
+/* tests on access to initrd data from within the main systest program. */
 #include <stdio.h>
 #include <string.h>
 #include <sys/types.h>
@@ -15,9 +13,10 @@
 #include <l4/ipc.h>
 
 #include <sneks/process.h>
+#include <sneks/ipc.h>
 #include <sneks/test.h>
 
-
+/* open(2) a file and read its contents. */
 START_LOOP_TEST(open_file_and_read, iter, 0, 1)
 {
 	const bool two_pieces = !!(iter & 1);
@@ -50,7 +49,9 @@ START_LOOP_TEST(open_file_and_read, iter, 0, 1)
 }
 END_TEST
 
+SYSTEST("systest:initrd", open_file_and_read);
 
+/* test spawning of userspace programs. */
 START_TEST(spawn_into_userspace)
 {
 	plan_tests(3);
@@ -58,8 +59,7 @@ START_TEST(spawn_into_userspace)
 	char my_id[100];
 	snprintf(my_id, sizeof my_id, "%#lx", L4_Myself().raw);
 	char *argv[] = { "initrd_spawn_partner", my_id, NULL }, *envp[] = { NULL };
-	int cpid = spawn_NP("/initrd/systest/sys/test/initrd_spawn_partner",
-		argv, envp);
+	int cpid = spawn_NP("/initrd/systest/sys/test/initrd_spawn_partner", argv, envp);
 	if(!ok(cpid > 0, "spawn succeeded")) diag("errno=%d", errno);
 
 	L4_ThreadId_t sender = L4_nilthread;
@@ -76,7 +76,6 @@ START_TEST(spawn_into_userspace)
 				L4_ThreadNo(sender), L4_Version(sender), pidof_NP(sender));
 		}
 	}
-
 	if(L4_IpcSucceeded(tag)) {
 		L4_LoadMR(0, 0);
 		tag = L4_Reply(sender);
@@ -84,18 +83,11 @@ START_TEST(spawn_into_userspace)
 			diag("reply failed, ec=%#lx", L4_ErrorCode());
 		}
 	}
-
+	/* clean up */
 	if(cpid > 0 && !child_died) {
-		/* systasks can't wait on children so instead we'll sleep until the
-		 * partner's main thread has gone.
-		 */
-		do {
-			tag = L4_Receive_Timeout(sender, L4_Never);
-		} while(!L4_IpcFailed(tag) || L4_ErrorCode() != 5);
+		while(wait_until_gone(sender, L4_Never) != 0) { /* rave, repeat */ }
 	}
 }
 END_TEST
 
-
-SYSTEST("systest:initrd", open_file_and_read);
 SYSTEST("systest:initrd", spawn_into_userspace);

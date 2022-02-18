@@ -12,6 +12,7 @@
 #include <l4/ipc.h>
 #include <l4/kip.h>
 #include <sneks/hash.h>
+#include <sneks/ipc.h>
 #include <sneks/api/proc-defs.h>
 #include "defs.h"
 #include "epoch.h"
@@ -164,12 +165,9 @@ int thrd_join(thrd_t thrd, int *res_p)
 	L4_ThreadId_t tid = t->tid;
 	e_end(eck);
 
-	L4_MsgTag_t tag;
-	do {
-		L4_Accept(L4_UntypedWordsAcceptor);
-		tag = L4_Receive(tid);
-		/* TODO: report out-of-band reception */
-	} while(L4_IpcSucceeded(tag) || L4_ErrorCode() != 5);
+	while(wait_until_gone(tid, L4_Never) != 0) {
+		/* TODO: report out-of-band reception etc. */
+	}
 	if(!killer) return thrd_error;
 
 	if(res_p != NULL) *res_p = t->retval;
