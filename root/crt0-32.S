@@ -13,6 +13,6 @@ __return_from_main:
 
 # NOTE: same as STACK_SIZE in root/thrd.c
 	.bss
-	.align 4096
-	.space 4096
+	.align 8192
+	.space 8192
 __stack:

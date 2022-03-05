@@ -17,7 +17,7 @@
 #include "epoch.h"
 
 #define MAGIC 0xb00bd06e	/* tity hound */
-#define STACK_SIZE 4096
+#define STACK_SIZE 8192
 
 /* thread context at top of stack, aligned to STACK_SIZE. */
 struct rt_thread {
