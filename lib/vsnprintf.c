@@ -1,425 +1,243 @@
-
-/* mildly dated implementation of vsnprintf(3). lacks support for size_t
- * modifiers and various other goodies.
+/* mildly nonconformant C23 vsnprintf() sans floats, doubles, and wide
+ * char/str support. constant stack space. no POSIX extensions, not LP64
+ * clean.
  */
-
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <ctype.h>
+#include <assert.h>
 #include <limits.h>
+#include <ccan/minmax/minmax.h>
 
+struct fmt_param {
+	int shift, width, precision;
+	bool is_signed, upper, grouping, forcesign, spacesign, leftjust, prefix;
+	char pad;
+};
 
-static void convert_long(char *, long long, int, char, int *);
-static void convert_ulong(char *, unsigned long long, int, char, int *);
-static void convert_hex_long(
-	char *, unsigned long long, int, char, const char *, int *);
-static void convert_oct_long(char *, unsigned long long, int, char, int *);
-
-static int parse_width(const char *, int *);
-
-
-/*
- * NOTE: this is a limited subset of the functionality that real
- * C99 specifies. also, it doesn't always properly break apart and explode
- * when unimplemented features are used!
- *
- * ... also, it's a simple and likely-to-work thing that we've got here.
- * optimized for maintainability and for just work damnit, rather than
- * raw speed. (what kind of a dickhead depends on snprintf's speed anyway?)
- *
- * returns a hard -1 if there was an error in the format string, and
- * stores an error indicator in the output string.
- *
- * FIXME: field width acts as a _lower_ bound, when it should also act
- * as an _upper_ bound for e.g. strings.
- *
- * TODO: this is a bit stack-hungry. that's not good in e.g. a kernel
- * where thread stacks are limited to a few kilobytes.
- */
-int vsnprintf(char *str, size_t size, const char *fmt, va_list arg_list)
+static size_t fmt_ull(char *restrict buf, size_t max, unsigned long long val, const struct fmt_param *p)
 {
-	if(fmt == NULL) {
-		strscpy(str, "(null format)", size);
-		return 0;
+	if(buf == NULL) max = 0;
+	bool sign = p->is_signed && val > LLONG_MAX, zero = val == 0;
+	int pos = 0, mask = (1 << p->shift) - 1, d, g = 0, sc = '-', width = max(p->width, 1), last = 0, np = 0;
+	if(sign) val = -(long long)val;
+	else if(p->forcesign || p->spacesign) {
+		sc = p->forcesign ? '+' : ' ';
+		sign = true;
 	}
-
-	/* arg_list may be just a handle. make a proper copy for us. */
-	va_list ap;
-	va_copy(ap, arg_list);
-
-	size_t outpos = 0;
-	int out_total = 0;
-	for(size_t i=0; fmt[i] != '\0'; i++) {
-		if(fmt[i] != '%') {
-			/* fastpath */
-			if(outpos < size) str[outpos++] = fmt[i];
-			out_total++;
-			continue;
+	while(val > 0 || pos == 0) {
+		if(p->shift > 0) {
+			d = val & mask;
+			val >>= p->shift;
+		} else {
+			d = val % 10;
+			val /= 10;
 		}
+		int c = last = "0123456789abcdef"[d];
+		if(pos++ < max) buf[pos - 1] = last = p->upper ? toupper(c) : c;
+		if(p->grouping && ++g == 3) {
+			if(pos++ < max) buf[pos - 1] = '_';
+			g = 0; last = '_';
+		}
+	}
+	while(pos < p->precision) {
+		if(pos++ < max) buf[pos - 1] = '0';
+		last = '0';
+	}
+	char prefix[3];
+	if(p->prefix && !zero) {
+		if(p->shift != 3) {
+			assert(p->shift == 1 || p->shift == 4);
+			int c = ".b..x"[p->shift];
+			prefix[np++] = p->upper ? toupper(c) : c;
+		}
+		if(p->shift != 3 || last != '0') prefix[np++] = '0';
+	}
+	if(sign) prefix[np++] = sc;
+	if(!p->leftjust && p->pad == ' ') {	/* prefix before space pad */
+		for(int i=0; i < np && pos + i < max; i++) buf[pos + i] = prefix[i];
+		pos += np; np = 0;
+	}
+	while(!p->leftjust && pos < width - np) {
+		if(pos++ < max) buf[pos - 1] = p->pad;
+	}
+	for(int i=0; i < np && pos + i < max; i++) buf[pos + i] = prefix[i];
+	pos += np;
+	if(max > 0) {
+		buf[min_t(int, pos, max)] = '\0';
+		for(int i = 0, len = min_t(int, pos, max); i < len / 2; i++) {
+			char *a = &buf[i], *b = &buf[len - 1 - i], t = *a;
+			*a = *b;
+			*b = t;
+		}
+	}
+	if(p->leftjust) {
+		while(pos < width) {
+			if(pos++ < max) buf[pos - 1] = p->pad;
+		}
+		if(max > 0) buf[min_t(int, pos, max)] = '\0';
+	}
+	return pos;
+}
 
-		if(fmt[++i] == '\0') goto error;
-
-		/* modifiers */
-		/* (could track is_short also, but those are coerced to larger
-		 * integers by the varargs mechanism.)
-		 */
-		// bool is_short = false;
-		bool is_alternate = false, field_width_set = false;
-		char pad_char = ' ';
-		int field_width = 1, is_len = 0;
-
-		bool was_modifier;
-		do {
-			was_modifier = true;
-			switch(fmt[i]) {
-				case 'l': is_len++; break;
-				case 'h':
-					/* forbid "short long long" conversions */
-					if(is_len > 0) goto error;
-					// is_short = true;
-					break;
-				case '#': is_alternate = true; break;
-				case '0': pad_char = '0'; break;
-				case '1' ... '9': {
-					int len = 0, w = parse_width(&fmt[i], &len);
-					if(w == 0) goto error;
-					field_width = w;
-					if(field_width < 0) field_width = 0;
-					field_width_set = true;
-					i += len - 1;
-					break;
-				}
-				default: was_modifier = false; break;
+int vsnprintf(char *restrict str, size_t size, const char *restrict fmt, va_list ap)
+{
+	static_assert(sizeof(int_fast8_t) == sizeof(int32_t));
+	static_assert(sizeof(int_fast16_t) == sizeof(int32_t));
+	assert(fmt != NULL);
+	size_t pos = 0, max = str != NULL && size > 0 ? size - 1 : 0;
+	if(max > 0) *str = '\0';
+	for(size_t i = 0; fmt[i] != '\0'; i++) {
+		size_t nb = strchrnul(fmt + i, '%') - (fmt + i);
+		if(nb > 0) {
+			/* unformatted section */
+			if(pos < max) {
+				memcpy(str + pos, fmt + i, min(max - pos, nb));
+				str[min(pos + nb, max)] = '\0';
 			}
-			if(was_modifier) {
-				if(fmt[++i] == '\0') goto error;
-			}
-		} while(was_modifier);
-		if(is_len > 2) {
-			/* forbid "long long long" and longer conversions */
-			goto error;
+			pos += nb;
+			if(fmt[i += nb] == '\0') break;
 		}
-
-		/* after modifiers, the actual conversion character. */
-
-		/* for integral conversions, fetch the appropriate length of value.
-		 *
-		 * TODO: support size_t, ssize_t (i.e. the 'z', is_size, modifier)!
-		 * TODO: support intmax_t, uintmax_t ('j', is_intmax)!
-		 * TODO: support ptrdiff_t ('t', is_ptrdiff)!
-		 */
-		unsigned long long u_val = 0;
-		long long s_val = 0;
-		char c_val = 0;
-		switch(fmt[i]) {
-			case 'i': case 'd':
-				/* (ignore shortness; shorts are coerced to ints anyway.) */
-				if(is_len == 0) s_val = va_arg(ap, int);
-				else if(is_len == 1) s_val = va_arg(ap, long);
-				else if(is_len == 2) s_val = va_arg(ap, long long);
-				break;
-
-			case 'o': case 'u': case 'x': case 'X':
-				if(is_len == 0) u_val = va_arg(ap, unsigned int);
-				else if(is_len == 1) u_val = va_arg(ap, unsigned long);
-				else if(is_len == 2) u_val = va_arg(ap, unsigned long long);
-				break;
-
-			case 'c':
-				if(is_len == 0) c_val = va_arg(ap, int);
-				else {
-					/* TODO: do multibyte shit at some point (never) */
-					goto error;
+		assert(fmt[i] == '%');
+		switch(fmt[++i]) {
+			case '\0': return -1;
+			case '%':
+				if(pos++ < max) {
+					str[pos - 1] = '%';
+					str[min(pos, max)] = '\0';
 				}
-				break;
-		}
-
-		/* (buf must have room for field width + 24 characters, since a 64-bit
-		 * uintmax produces 22 characters and possibly a preceding zero. this
-		 * will obviously fit base-10 and base-16 conversions too, since they
-		 * would produce a shorter output. we'll include room for a terminator
-		 * too, just to be safe. also one character in case the unsigned form is
-		 * longer than the signed maximum. and a few characters for the alternate
-		 * forms.)
-		 */
-		char buf[field_width + 32];
-		const char *conv_src = buf;
-		int conv_size;
-		switch(fmt[i]) {
-			case '%': conv_src = &fmt[i]; conv_size = 1; break;
-
-			case 'n':
-				*(va_arg(ap, int *)) = out_total;
 				continue;
-
-			case 'c':
-				/* characters are pushed as ints. apparently.
-				 * FIXME: this totally doesn't handle the wchar_t conversion.
-				 */
-				buf[0] = c_val;
-				buf[1] = '\0';
-				conv_size = 1;
-				break;
-
-			case 'i':
-			case 'd':
-				/* a 64-bit MAXINT would be 9223372036854775807-ish (19 digits),
-				 * whereas a 32-bit MAXINT is 2147483647.
-				 */
-				convert_long(buf, s_val, field_width, pad_char, &conv_size);
-				break;
-
-			case 'u':
-				convert_ulong(buf, u_val, field_width, pad_char, &conv_size);
-				break;
-
-			case 'x':
-			case 'X': {
-				/* 64 bits = 16 characters + terminator */
-				const char *convtab =
-					fmt[i] == 'x' ? "0123456789abcdef"
-								  : "0123456789ABCDEF";
-				int xpos;
-				if(is_alternate) {
-					buf[0] = '0';
-					buf[1] = fmt[i];
-					xpos = 2;
-				} else {
-					xpos = 0;
+		}
+		/* accept modifiers */
+		struct fmt_param p = { .pad = ' ', .width = -1, .precision = -1, .is_signed = true };
+		bool dot = false, mod, widtharg = false, precarg = false, fast = false;
+		int longness = 0, bits = 0;
+		char type = ' ', *end;
+		do {
+			mod = true;
+			switch(fmt[i]) {
+				case 'l': if(longness < 0 || ++longness > 2) return -1; else break;
+				case 'h': if(longness > 0 || --longness < -2) return -1; else break;
+				case '#': p.prefix = true; break;
+				case '0': if(!p.leftjust) p.pad = '0'; break;
+				case '.': dot = true; break;
+				case '*': if(dot) precarg = true; else widtharg = true; break;
+				case '1' ... '9':
+					*(dot ? &p.precision : &p.width) = strtoul(fmt + i, &end, 10);
+					i = (end - fmt) - 1;
+					break;
+				case 'w':
+					type = 'w';
+					fast = fmt[++i] == 'f';
+					bits = strtoul(fmt + i + fast, &end, 10);
+					if(bits == 0 && end == fmt + i + fast) return -1;
+					i = (end - fmt) - 1;
+					break;
+				case 'j': case 'z': case 't': type = fmt[i]; break;
+				case '\'': p.grouping = true; break;
+				case '-': p.pad = ' '; p.leftjust = true; break;
+				case '+': p.forcesign = true; p.spacesign = false; break;
+				case ' ': p.spacesign = !p.forcesign; break;
+				default: mod = false; break;
+			}
+			if(mod && fmt[++i] == '\0') return -1;
+		} while(mod);
+		if(type == ' ') type = "chdlL"[longness + 2]; else if(longness != 0) return -1;
+		if(widtharg) {
+			p.width = va_arg(ap, int);
+			if(p.width < 0) {
+				p.leftjust = true;
+				p.width = -p.width;
+			}
+		}
+		if(precarg) {
+			int prec = va_arg(ap, int);
+			if(prec >= 0) p.precision = prec;
+		}
+		/* conversion */
+		switch(fmt[i]) {
+			case 'X': p.upper = true; /* FALL THRU */
+			case 'p': if(fmt[i] == 'p') { p.prefix = true; type = 'z'; } /* FALL THRU */
+			case 'x': p.shift = 4;	/* FALL THRU */
+			case 'o': if(fmt[i] == 'o') p.shift = 3;	/* FALL THRU */
+			case 'b': if(fmt[i] == 'b') p.shift = 1;	/* FALL THRU */
+			case 'u': p.is_signed = false; p.forcesign = false; p.spacesign = false; /* FALL THRU */
+			case 'i': case 'd': {
+				unsigned long long val;
+				if(type == 'w') {
+					if(bits & (bits - 1)) return -1;	/* not power of two */
+					if(bits < 8 || bits > 64) return -1;
+					type = bits < 64 ? 'd' : 'L';
 				}
-				convert_hex_long(&buf[xpos], u_val, field_width, pad_char,
-					convtab, &conv_size);
-				conv_size += xpos;
+				switch(type) {
+					case 'j': val = va_arg(ap, intmax_t); break;
+					case 'z': val = va_arg(ap, ssize_t); break;
+					case 't': val = va_arg(ap, ptrdiff_t); break;
+					case 'c': case 'h': case 'd': case 'l':
+						if(!p.is_signed) val = va_arg(ap, unsigned int); else val = va_arg(ap, int);
+						break;
+					case 'L': val = va_arg(ap, unsigned long long); break;
+					default: val = -1;
+				}
+				pos += fmt_ull(pos < max ? str + pos : NULL, max - pos, val, &p);
 				break;
 			}
-
-			case 'o': {
-				int xpos = 0;
-				if(is_alternate && u_val != 0) buf[xpos++] = '0';
-				convert_oct_long(&buf[xpos], u_val, field_width, pad_char,
-					&conv_size);
-				conv_size += xpos;
+			case 'C': longness = 1;	/* FALL THRU */
+			case 'c': {
+				int c = (unsigned char)va_arg(ap, int);
+				if(pos++ < max) str[pos - 1] = c;
 				break;
 			}
-
-			case 'p':
-				buf[0] = '0';
-				buf[1] = 'x';
-				convert_hex_long(&buf[2], (uintptr_t)va_arg(ap, void *),
-					field_width, pad_char, "0123456789abcdef", &conv_size);
-				conv_size += 2;
-				break;
-
-			case 's':
-				/* FIXME: apply padding up to field_width when asked? */
-				conv_src = va_arg(ap, const char *);
-				if(conv_src != NULL) {
-					if(field_width_set) {
-						conv_size = strnlen(conv_src, field_width);
-					} else {
-						conv_size = strlen(conv_src);
+			case 'S': longness = 1; /* FALL THRU */
+			case 's': {
+				const char *src = va_arg(ap, const char *);
+				if(src == NULL) src = "(nil)";
+				ssize_t len = strnlen(src, p.precision >= 0 ? p.precision : SIZE_MAX);
+				assert(p.precision < 0 || len <= p.precision);
+				if(p.width > len) {
+					if(pos < max) {
+						size_t npad = min_t(ssize_t, p.width - len, max - pos);
+						memset(str + pos, ' ', npad);
+						str[pos + npad] = '\0';
 					}
-				} else {
-					conv_src = "(null)";
-					conv_size = 6;
+					pos += p.width - len;
+				}
+				if(pos < max) memcpy(str + pos, src, min_t(ssize_t, max - pos, len));
+				pos += len;
+				break;
+			}
+			case 'n': {
+				void *p = va_arg(ap, void *);
+				switch(type) {
+					case 'j': *(intmax_t *)p = pos; break;
+					case 'z': *(ssize_t *)p = pos; break;
+					case 't': *(ptrdiff_t *)p = pos; break;
+					case 'c': *(signed char *)p = pos; break;
+					case 'h': *(short *)p = pos; break;
+					case 'd': *(int *)p = pos; break;
+					case 'l': *(long *)p = pos; break;
+					case 'L': *(long long *)p = pos; break;
+					case 'w':
+						switch(bits + fast) {	/* now you know why you fear the night */
+							case 8: *(int8_t *)p = pos; break;
+							case 16: *(int16_t *)p = pos; break;
+							case 32: case 33: case 9: case 17: *(int32_t *)p = pos; break;
+							case 64: case 65: *(int64_t *)p = pos; break;
+							default: return -1;
+						}
+						break;
 				}
 				break;
-
-			default:
-				goto error;
+			}
+			case 'f': case 'F': case 'e': case 'E': case 'g': case 'G': case 'a': case 'A':
+				/* floats TODO */
+			default: return -1;
 		}
-
-		if(conv_size > 0) {
-			out_total += conv_size;
-			if(outpos + conv_size >= size) conv_size = size - outpos;
-			memcpy(&str[outpos], conv_src, conv_size);
-			outpos += conv_size;
-		}
+		if(max > 0) str[min(pos, max)] = '\0';
 	}
-	if(size > 0) {
-		str[outpos >= size ? size - 1 : outpos] = '\0';
-	}
-
-	va_end(ap);
-	return out_total;
-
-error:
-	strscpy(str, "format string error", size);
-	va_end(ap);
-	return -1;
-}
-
-extern int kvsnprintf(char *, size_t, const char *, va_list)
-	__attribute__((alias ("vsnprintf")));
-
-
-
-/* FIXME: this hasn't been tested on a LP64 setup. there's no reason why
- * it wouldn't work there too, but.
- */
-static void convert_long(
-	char *buf,
-	long long val,
-	int width,
-	char pad,
-	int *count_p)
-{
-	if(width < 1) width = 1;
-	if(val == 0) {
-		for(int i=0; i<width-1; i++) buf[i] = pad;
-		buf[width-1] = '0';
-		buf[width] = '\0';
-		*count_p = width;
-		return;
-	}
-
-	const bool neg = val < 0;
-	bool bump = false;
-	if(neg) {
-		if(val == LLONG_MIN) {
-			bump = true;
-			val++;
-		}
-		val = -val;
-	}
-
-	const int tmplen = width + 22;
-	char tmp[tmplen];
-	tmp[tmplen - 1] = '\0';
-	int pos = tmplen - 1;
-	while(val > 0) {
-		int d = val % 10;
-		val /= 10;
-		if(bump) {
-			d++;
-			bump = false;
-		}
-		tmp[--pos] = "0123456789"[d];
-	}
-	/* pad until at field width, minus possible sign */
-	while(tmplen - pos - 1 < width - (neg ? 1 : 0)) tmp[--pos] = pad;
-	if(neg) tmp[--pos] = '-';
-
-	int count = tmplen - pos;
-	memcpy(buf, &tmp[pos], count);
-	*count_p = count - 1;		/* exclude the terminator */
-}
-
-
-/* NOTE: same caveats apply as for convert_long(). oh, the power of
- * cut-and-paste.
- */
-static void convert_ulong(
-	char *buf,
-	unsigned long long val,
-	int width,
-	char pad,
-	int *count_p)
-{
-	if(width < 1) width = 1;
-	if(val == 0) {
-		for(int i=0; i<width-1; i++) buf[i] = pad;
-		buf[width-1] = '0';
-		buf[width] = '\0';
-		*count_p = width;
-		return;
-	}
-
-	const int tmplen = width + 22;
-	char tmp[tmplen];
-	tmp[tmplen - 1] = '\0';
-	int pos = tmplen - 1;
-	while(val > 0) {
-		int d = val % 10;
-		val /= 10;
-		tmp[--pos] = "0123456789"[d];
-	}
-	/* pad until at field width */
-	while(tmplen - pos - 1 < width) tmp[--pos] = pad;
-
-	int count = tmplen - pos;
-	memcpy(buf, &tmp[pos], count);
-	*count_p = count - 1;		/* exclude the terminator */
-}
-
-
-static void convert_hex_long(
-	char *buf,
-	unsigned long long val,
-	int width,
-	char pad,
-	const char *digits,
-	int *count_p)
-{
-	if(width < 1) width = 1;
-	if(val == 0) {
-		for(int i=0; i<width-1; i++) buf[i] = pad;
-		buf[width-1] = '0';
-		buf[width] = '\0';
-		*count_p = width;
-		return;
-	}
-
-	const int tmplen = width + 22;
-	char tmp[tmplen];
-	tmp[tmplen-1] = '\0';
-	int pos = tmplen - 1;
-	while(val > 0) {
-		tmp[--pos] = digits[val & 15];
-		val >>= 4;
-	}
-	/* pad */
-	while(tmplen - pos - 1 < width) tmp[--pos] = pad;
-
-	int count = tmplen - pos;
-	memcpy(buf, &tmp[pos], count);
-	*count_p = count - 1;
-}
-
-
-static void convert_oct_long(
-	char *buf,
-	unsigned long long val,
-	int width,
-	char pad,
-	int *count_p)
-{
-	if(width < 1) width = 1;
-	if(val == 0) {
-		for(int i=0; i<width-1; i++) buf[i] = pad;
-		buf[width-1] = '0';
-		buf[width] = '\0';
-		*count_p = width;
-		return;
-	}
-
-	const int tmplen = width + 23;
-	char tmp[tmplen];
-	tmp[tmplen-1] = '\0';
-	int pos = tmplen - 1;
-	while(val > 0) {
-		tmp[--pos] = "0123456789"[val & 7];
-		val >>= 3;
-	}
-	/* pad */
-	while(tmplen - pos - 1 < width) tmp[--pos] = pad;
-	
-	int count = tmplen - pos;
-	memcpy(buf, &tmp[pos], count);
-	*count_p = count - 1;
-}
-
-
-static int parse_width(const char *str, int *len_p)
-{
-	int val = 0, len;
-	for(len=0; str[len]!='\0'; len++) {
-		if(str[len] < '0' || str[len] > '9') break;
-		int digit = str[len] - '0';
-		val = val * 10 + digit;
-	}
-	*len_p = len;
-	return val;
+	return pos;
 }

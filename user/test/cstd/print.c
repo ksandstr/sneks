@@ -98,9 +98,6 @@ DECLARE_TEST("cstd:print", basic);
 START_TEST(error)
 {
 	plan_tests(30);
-#ifdef __sneks__
-	todo_start("broken");
-#endif
 	ok(!fmterr("foo"), "validate fmterr()");
 #define _(x, ...) ok1(fmterr(x, ##__VA_ARGS__));
 	_("%"); _("foo%"); _("%l"); _("%h"); _("%.");	/* premature ends */
@@ -144,9 +141,6 @@ DECLARE_TEST("cstd:print", concat);
 START_TEST(percent_n)
 {
 	plan_tests(19);
-#ifdef __sneks__
-	todo_start("broken");
-#endif
 	{ int d = -1; ok1(test_fmt("", "%n", &d) && d == 0); }
 	{ int d = -1; ok1(test_fmt("z", "%c%n", 'z', &d) && d == 1); }
 	{ int d = -1; ok1(test_fmt("zZ", "%c%n%s", 'z', &d, "Z") && d == 1); }
@@ -177,9 +171,6 @@ DECLARE_TEST("cstd:print", percent_n);
 START_TEST(percent_s)
 {
 	plan_tests(24);
-#ifdef __sneks__
-	todo_start("broken");
-#endif
 	ok1(snprintf(NULL, 0, "%s", "foo") == 3);
 	ok1(snprintf(NULL, 0, "%.2s", "foo") == 2);
 	ok1(snprintf(NULL, 0, "%.*s", 2, "foo") == 2);
@@ -214,9 +205,6 @@ DECLARE_TEST("cstd:print", percent_s);
 START_TEST(percent_d)
 {
 	plan_tests(50);
-#ifdef __sneks__
-	todo_start("broken");
-#endif
 	ok1(test_fmt("0", "%d", 0));
 	ok1(test_fmt("1", "%d", 1));
 	ok1(test_fmt("-1", "%d", -1));
@@ -298,9 +286,6 @@ DECLARE_TEST("cstd:print", truncated_integer);
 START_TEST(nondecimal_u)
 {
 	plan_tests(37);
-#ifdef __sneks__
-	todo_start("broken");
-#endif
 	ok1(test_fmt("0", "%o", 0));
 	ok1(test_fmt("777", "%o", 0777));
 	ok1(test_fmt("0777", "%#o", 0777));
