@@ -1,5 +1,6 @@
 #define BOOTCON_IMPL_SOURCE
 
+#include <stddef.h>
 #include <stdint.h>
 #include <assert.h>
 #include <errno.h>

@@ -1,5 +1,6 @@
 /* select(2) and poll(2). */
 
+#include <stddef.h>
 #include <string.h>
 #include <assert.h>
 #include <errno.h>
