@@ -5,6 +5,7 @@ include_rules
 # case, here we build testsuite for sneks.
 
 CFLAGS+=-DTESTDIR="\"/\""
+CFLAGS_print.c += -Wno-format-zero-length -Wno-format
 
 initrd=../../.initrd-staging
 target_initrd=/initrd
