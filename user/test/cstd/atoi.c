@@ -48,9 +48,6 @@ DECLARE_TEST("cstd:atoi", a64l_static);
 START_TEST(strtoul_static)
 {
 	plan_tests(16);
-#ifdef __sneks__
-	todo_start("known børk'd");
-#endif
 	char *end;
 	ok1(strtoul("-1", NULL, 10) == -1);
 	ok1(strtoul("+1", NULL, 10) == 1);
@@ -77,9 +74,6 @@ DECLARE_TEST("cstd:atoi", strtoul_static);
 START_TEST(strtoul_error)
 {
 	plan_tests(10);
-#ifdef __sneks__
-	todo_start("known børk'd");
-#endif
 	errno = 0; ok1(strtoul("", NULL, 10) == 0 && (errno == 0 || errno == EINVAL));
 	errno = 0; ok1(strtoul("-zzzzzzzzzzzzzzzz", NULL, 36) == ULONG_MAX && errno == ERANGE);
 	errno = 0; ok1(strtoul("zzzzzzzzzzzzzzzz", NULL, 36) == ULONG_MAX && errno == ERANGE);

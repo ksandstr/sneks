@@ -51,10 +51,11 @@ extern int putenv(char *string);
 extern int clearenv(void);
 
 extern int atoi(const char *nptr);
-extern long int strtol(const char *nptr, char **endptr, int base);
-extern long long int strtoll(const char *nptr, char **endptr, int base);
-extern unsigned long int strtoul(const char *nptr, char **endptr, int base);
-extern double strtod(const char *nptr, char **endptr);
+extern long strtol(const char *restrict str, char **restrict endptr, int base);
+extern long long strtoll(const char *restrict str, char **restrict endptr, int base);
+extern unsigned long strtoul(const char *restrict str, char **restrict endptr, int base);
+extern unsigned long long strtoull(const char *restrict str, char **restrict endptr, int base);
+extern double strtod(const char *restrict str, char **restrict endptr);
 
 extern long a64l(const char *str64);
 extern char *l64a(long value);
