@@ -43,7 +43,7 @@ static unsigned long long strtoull_max(const char *restrict str, char **restrict
 		}
 		if(digit >= base) break;
 		str++;
-		if(acc >= lim && digit > max % base) {
+		if(acc > lim || max - acc * base < digit) {
 			errno = ERANGE;
 			acc = ULLONG_MAX;
 			minus = false;
@@ -52,8 +52,8 @@ static unsigned long long strtoull_max(const char *restrict str, char **restrict
 		acc = acc * base + digit;
 		noconv = false;
 	}
-	if(end != NULL) *end = (char *)(noconv ? orig : str);
 	/* doesn't set EINVAL when no conversion occurred. */
+	if(end != NULL) *end = (char *)(noconv ? orig : str);
 	if(minus) acc = -(long long)acc;
 	return acc;
 }

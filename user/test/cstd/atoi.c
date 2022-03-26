@@ -70,14 +70,17 @@ END_TEST
 
 DECLARE_TEST("cstd:atoi", strtoul_static);
 
-/* error cases. this one isn't LP64 clean. */
+/* error cases. larger constants are needed to hit ULONG_MAX on LP64. */
 START_TEST(strtoul_error)
 {
-	plan_tests(10);
+	plan_tests(13);
 	errno = 0; ok1(strtoul("", NULL, 10) == 0 && (errno == 0 || errno == EINVAL));
 	errno = 0; ok1(strtoul("-zzzzzzzzzzzzzzzz", NULL, 36) == ULONG_MAX && errno == ERANGE);
 	errno = 0; ok1(strtoul("zzzzzzzzzzzzzzzz", NULL, 36) == ULONG_MAX && errno == ERANGE);
 	errno = 0; ok1(strtoul("4294967296", NULL, 10) == ULONG_MAX && errno == ERANGE);
+	errno = 0; ok1(strtoul("42949672950", NULL, 10) == ULONG_MAX && errno == ERANGE);
+	errno = 0; ok1(strtoul("-4294967296", NULL, 10) == ULONG_MAX && errno == ERANGE);
+	errno = 0; ok1(strtoul("-42949672950", NULL, 10) == ULONG_MAX && errno == ERANGE);
 	errno = 0; ok1(strtoul("123", NULL, 1) == 0 && errno == EINVAL);
 	errno = 0; ok1(strtoul("123", NULL, 37) == 0 && errno == EINVAL);
 	errno = 0; ok1(strtoul("123", NULL, -10) == 0 && errno == EINVAL);
