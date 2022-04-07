@@ -288,7 +288,7 @@ void rewind(FILE *stream) {
 }
 
 
-int vfprintf(FILE *stream, const char *fmt, va_list args)
+int vfprintf(FILE *stream, const char *restrict fmt, va_list args)
 {
 	char buffer[256], *outptr;
 	va_list al;
@@ -323,7 +323,7 @@ int vfprintf(FILE *stream, const char *fmt, va_list args)
 }
 
 
-int fprintf(FILE *stream, const char *fmt, ...)
+int fprintf(FILE *stream, const char *restrict fmt, ...)
 {
 	va_list al;
 	va_start(al, fmt);
@@ -333,7 +333,7 @@ int fprintf(FILE *stream, const char *fmt, ...)
 }
 
 
-int printf(const char *fmt, ...)
+int printf(const char *restrict fmt, ...)
 {
 	va_list al;
 	va_start(al, fmt);
@@ -343,7 +343,7 @@ int printf(const char *fmt, ...)
 }
 
 
-int snprintf(char *buf, size_t size, const char *fmt, ...)
+int snprintf(char *restrict buf, size_t size, const char *restrict fmt, ...)
 {
 	va_list al;
 	va_start(al, fmt);

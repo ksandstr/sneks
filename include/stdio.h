@@ -39,29 +39,19 @@ struct __stdio_file;
 typedef struct __stdio_file FILE;
 extern void __stdio_fclose_all(void);
 
-
-extern int printf(const char *fmt, ...)
-	__attribute__((format(printf, 1, 2)));
-
-extern int fprintf(FILE *stream, const char *fmt, ...)
-	__attribute__((format(printf, 2, 3)));
-
-extern int vfprintf(FILE *stream, const char *fmt, va_list args);
-
-extern int snprintf(char *buf, size_t size, const char *fmt, ...)
-	__attribute__((format(printf, 3, 4)));
-extern int sprintf(char *buf, const char *fmt, ...)
-	__attribute__((format(printf, 2, 3)));
-
-extern int vsnprintf(
-	char *buf,
-	size_t size,
-	const char *fmt,
-	va_list arg_list);
-
-
 extern FILE *stdin, *stdout, *stderr;
 
+extern int printf(const char *restrict fmt, ...)
+	__attribute__((format(printf, 1, 2)));
+extern int fprintf(FILE *stream, const char *restrict fmt, ...)
+	__attribute__((format(printf, 2, 3)));
+extern int vfprintf(FILE *stream, const char *restrict fmt, va_list args);
+
+extern int sprintf(char *restrict buf, const char *restrict fmt, ...)
+	__attribute__((format(printf, 2, 3)));
+extern int snprintf(char *restrict buf, size_t size, const char *restrict fmt, ...)
+	__attribute__((format(printf, 3, 4)));
+extern int vsnprintf(char *restrict buf, size_t size, const char *restrict fmt, va_list arg_list);
 
 /* stream operations. */
 
