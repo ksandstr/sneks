@@ -10,9 +10,11 @@ _start:
 	call exit
 	int $3
 
-# two pages' worth should be well enough for whatever systasks main()s do.
+# TODO: arrange __crt1_entry to call main() on a separate stack, which isn't
+# the initialization stack; then reduce the latter (this one here) to like 512
+# bytes or something.
 	.global __stktop
 	.bss
-	.align 8192
-	.space 8192
+	.align 64*1024
+	.space 64*1024
 __stktop:
