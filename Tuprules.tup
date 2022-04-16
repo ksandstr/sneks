@@ -35,9 +35,11 @@ LD=ld.gold
 # script-like tools
 &foreach=scripts/foreach.pl
 
-ifneq (@(DEBUG),y)
+ifeq (@(DEBUG),n)
+CFLAGS += -O2
 DEBUG_FLAGS += -DNDEBUG
 else
+CFLAGS += -Og -g1
 #DEBUG_FLAGS += -DDEBUG_ME_HARDER
 #DEBUG_FLAGS += -D_L4_DEBUG_ME_HARDER
 #DEBUG_FLAGS += -DCCAN_LIST_DEBUG
@@ -49,7 +51,7 @@ endif
 
 MUIDLFLAGS=$(DEBUG_FLAGS) $(BUILD_FLAGS)
 
-CFLAGS=-O2 -Wall -march=native -std=gnu11 -pipe -D_GNU_SOURCE
+CFLAGS+=-Wall -march=native -std=gnu11 -pipe -D_GNU_SOURCE
 CFLAGS+=-m32 -mno-avx -mno-sse2 -ffunction-sections
 CFLAGS+=-fno-pic -fuse-ld=gold -fno-builtin -nostdlib -ffreestanding
 CFLAGS+=-Wno-frame-address
@@ -86,7 +88,9 @@ mods = lib/sneks-0.0p0
 target_initrd = /initrd
 !install = |> ^ INSTALL %o^ install -D %f %o |>
 # i.e. u=rw,og=r
-!install644 = |> ^ INSTALL %o^ install --mode=644 -D %f %o |>
+!install644 = |> ^ INSTALL-644 %o^ install --mode=644 -D %f %o |>
+# install and strip
+!installs = |> ^ INSTALL-s %o^ install -s -D %f %o |>
 
 # tags for convenience. vim users would set tags=**/tags .
 : *.c *.h *.pl *.pm |> ^ TAGS^ ctags %f |> tags

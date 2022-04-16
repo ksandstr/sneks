@@ -16,5 +16,5 @@ run ./scan-systests.pl &(sysdir)
 initrd=../../.initrd-staging
 : spawn-partner.o |> !user-ld |> initrd_spawn_partner
 : systask-partner.o |> !sys-ld |> initrd_systask_partner
-: foreach initrd_*_partner |> !install |> $(initrd)/systest/sys/test/%f ../<initrd>
+: foreach initrd_*_partner |> !installs |> $(initrd)/systest/sys/test/%f ../<initrd>
 : |> echo 'hello, world' >%o |> $(initrd)/systest/sys/test/hello.txt ../<initrd>

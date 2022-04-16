@@ -1,4 +1,3 @@
-
 #define SNEKS_KMSG_IMPL_SOURCE
 #define ROOTSERV_IMPL_SOURCE
 
@@ -1525,8 +1524,7 @@ static COLD void run_waitmods(struct htable *root_args, const char *stem)
 	}
 }
 
-
-static int rootserv_loop(void *parameter)
+static noreturn int rootserv_loop(void *parameter)
 {
 	printf("*** root entering service mode in tid=%lu:%lu\n",
 		L4_ThreadNo(L4_Myself()), L4_Version(L4_Myself()));
@@ -1536,10 +1534,8 @@ static int rootserv_loop(void *parameter)
 	};
 	for(;;) {
 		L4_Word_t status = _muidl_root_serv_dispatch(&vtab);
-		if(status != 0 && !MUIDL_IS_L4_ERROR(status)
-			&& selftest_handling(status))
-		{
-			/* das it mane */
+		if(status != 0 && !MUIDL_IS_L4_ERROR(status) && selftest_handling(status)) {
+			/* test yoself */
 		} else if(status == MUIDL_UNKNOWN_LABEL) {
 			/* do nothing. */
 			L4_MsgTag_t tag = muidl_get_tag();
@@ -1550,9 +1546,7 @@ static int rootserv_loop(void *parameter)
 				status, muidl_get_tag().raw);
 		}
 	}
-	assert(false);
 }
-
 
 static void stupid_sync(thrd_t t) {
 	L4_LoadMR(0, 0);

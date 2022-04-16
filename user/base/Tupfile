@@ -10,6 +10,6 @@ include_rules
 : sh.o |> !user-ld |> sh
 
 initrd=../../.initrd-staging
-: init |> !install |> $(initrd)/sbin/init ../<initrd>
+: init |> !installs |> $(initrd)/sbin/init ../<initrd>
 : etc/inittab |> !install644 |> $(initrd)/etc/inittab ../<initrd>
-: sh |> !install |> $(initrd)/bin/sh ../<initrd>
+: sh |> !installs |> $(initrd)/bin/sh ../<initrd>

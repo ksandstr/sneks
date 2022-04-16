@@ -2,4 +2,4 @@ include_rules
 
 : foreach *.c |> !cc |> %g.o
 : *.o *.a |> !sys-ld |> sysmsg
-: sysmsg |> !install |> ../../.initrd-staging/$(mods)/sysmsg ../<initrd>
+: sysmsg |> !installs |> ../../.initrd-staging/$(mods)/sysmsg ../<initrd>

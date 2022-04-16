@@ -29,11 +29,11 @@ target_initrd=/initrd
 : foreach path/*.c |> !cc |> path/%B.o {tests}
 
 : {testsuite} {tests} |> !user-ld |> testsuite
-: testsuite |> !install |> $(initrd)/user/testsuite ../<initrd>
+: testsuite |> !installs |> $(initrd)/user/testsuite ../<initrd>
 
 : foreach tools/*.c |> !cc |> tools/%B.o
 : foreach tools/*.o |> !user-ld |> tools/%B {tools}
-: foreach {tools} |> !install |> $(initrd)/user/test/tools/%B ../<initrd>
+: foreach {tools} |> !installs |> $(initrd)/user/test/tools/%B ../<initrd>
 : foreach scripts/* |> !install |> $(initrd)/user/test/scripts/%B ../<initrd>
 run ./gen-initrd-bits.sh $(initrd) $(target_initrd) "../<initrd>"
 
