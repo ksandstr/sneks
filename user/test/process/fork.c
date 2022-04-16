@@ -1,4 +1,3 @@
-
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -6,19 +5,16 @@
 #include <assert.h>
 #include <signal.h>
 #include <sys/wait.h>
-
+#include <sneks/test.h>
 #ifdef __l4x2__
 #include <l4/types.h>
 #include <l4/ipc.h>
 #endif
 
-#include <sneks/test.h>
-
-
 START_LOOP_TEST(fork_basic, iter, 0, 1)
 {
 #ifdef __l4x2__
-	const bool active_exit = (iter & 1) != 0;
+	const bool active_exit = iter & 1;
 	diag("active_exit=%s", btos(active_exit));
 	plan_tests(3);
 
@@ -55,35 +51,23 @@ END_TEST
 
 DECLARE_TEST("process:fork", fork_basic);
 
-
-/* tests that it's possible to fork a bunch of times concurrently, without
- * crashing the system.
- */
+/* tests that it's possible to fork a bunch of times concurrently. */
 START_LOOP_TEST(fork_wide, iter, 0, 1)
 {
-	const int n_children = (iter & 1) != 0 ? 48 : 8;
+	const int n_children = iter & 1 ? 48 : 8;
 	diag("n_children=%d", n_children);
 	plan_tests(3);
 
-	int children[n_children], n_started = 0;
+	int children[n_children], n_started = 0, n_waited = 0, n, st;
 	for(int i=0; i < n_children; i++) {
-		children[i] = fork();
-		if(children[i] > 0) n_started++;
+		if(children[i] = fork(), children[i] > 0) n_started++;
 		else {
-			assert(children[i] == 0);
+			fail_unless(children[i] == 0, "fork failed, errno=%d", errno);
 			exit(0);
 		}
 	}
-	if(!ok1(n_started == n_children)) {
-		diag("n_started=%d", n_started);
-	}
-
-	int n_waited = 0, n;
-	do {
-		int st;
-		n = wait(&st);
-		if(n > 0) n_waited++;
-	} while(n > 0);
+	if(!ok1(n_started == n_children)) diag("n_started=%d", n_started);
+	do if(n = wait(&st), n > 0) n_waited++; while(n > 0);
 	if(!ok1(n < 0 && errno == ECHILD)) diag("n=%d, errno=%d", n, errno);
 	if(!ok1(n_waited == n_children)) diag("n_waited=%d", n_waited);
 }
@@ -91,14 +75,14 @@ END_TEST
 
 DECLARE_TEST("process:fork", fork_wide);
 
-
 /* tests recursive forking. */
 START_LOOP_TEST(fork_deep, iter, 0, 1)
 {
-	const int depth = (iter & 1) == 0 ? 2 : 20;
+	const int depth = ~iter & 1 ? 2 : 20;
+	diag("depth=%d", depth);
 	plan_tests(2);
 
-	int child, level = 0;
+	int child = -1, level = 0;
 	while(level <= depth) {
 		child = fork();
 		if(child > 0) break;
@@ -113,7 +97,6 @@ START_LOOP_TEST(fork_deep, iter, 0, 1)
 		diag("level=%d, child=%d, self=%d", level, child, getpid());
 		exit(pid == child && WIFEXITED(st) && WEXITSTATUS(st) == 0 ? 0 : 1);
 	}
-
 	ok1(pid == child);
 	ok1(WIFEXITED(st) && WEXITSTATUS(st) == 0);
 }
@@ -121,28 +104,19 @@ END_TEST
 
 DECLARE_TEST("process:fork", fork_deep);
 
-
 /* access memory that wasn't mapped into the parent. this should pop a failure
  * in vm that only forks pages but not the maps they came from.
  */
 START_TEST(access_mmap_memory)
 {
 	plan_tests(1);
-
 	static char block[16 * 1024];
 	memset(block, 0, sizeof block);
-
 	pass("didn't segfault");
 }
 END_TEST
 
 DECLARE_TEST("process:fork", access_mmap_memory);
-
-
-
-static int last_fork_child = 0;
-static bool fork_first_st_ok = true, fork_later_st_ok = true;
-static volatile sig_atomic_t last_child_signaled = 0;
 
 /* forking within a signal handler is one of those ``through the looking
  * glass'' things of POSIX.
@@ -161,10 +135,13 @@ static volatile sig_atomic_t last_child_signaled = 0;
  * first 5 SIGCHLD, and fork-to-return in response to SIGINT which starts the
  * sequence off.
  */
+static int last_fork_child = 0;
+static bool fork_first_st_ok = true, fork_later_st_ok = true;
+static volatile sig_atomic_t last_child_signaled = 0;
+
 static void forking_handler(int signum)
 {
 	static int n_forks = 0;
-
 	if(signum == SIGINT) {
 		last_fork_child = fork();
 		/* invisible steering wheel! */
@@ -179,16 +156,13 @@ static void forking_handler(int signum)
 			exit(0);
 		} else {
 			last_fork_child = n;
-			fork_first_st_ok = fork_first_st_ok
-				&& (n_forks > 1 || WEXITSTATUS(st) != 0);
-			fork_later_st_ok = fork_later_st_ok
-				&& (n_forks == 1 || WEXITSTATUS(st) == 0);
+			fork_first_st_ok = fork_first_st_ok && (n_forks > 1 || WEXITSTATUS(st) != 0);
+			fork_later_st_ok = fork_later_st_ok && (n_forks == 1 || WEXITSTATUS(st) == 0);
 		}
 	} else {
 		last_child_signaled = 1;
 	}
 }
-
 
 /* see comment above. doing any of this in production code may lead to
  * surprisingly unorthodox control flow and (more importantly) is very
