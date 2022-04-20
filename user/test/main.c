@@ -54,37 +54,17 @@ static const struct opt_table opts[] = {
 };
 
 
-int main(int argc, char *argv[], char *envp[])
+int main(int argc, char *argv[])
 {
-	/* FIXME: remove the #ifdef once sneks gets setvbuf(3) */
-#ifndef __sneks__
 	setvbuf(stdout, NULL, _IONBF, 0);
-#endif
-
 	opt_register_table(opts, NULL);
 	if(!opt_parse(&argc, argv, &ignore_opt_error)) {
 		printf("*** option parsing failed!\n");
 		return 1;
 	}
-
-	/* TODO: use getenv() once crt1.c works its spawn environment issue
-	 * out.
-	 */
-#if 1
-	char *envargs = NULL;
-	for(int i=0; envp[i] != NULL; i++) {
-		if(strncmp(envp[i], "UTEST_OPTS=", 11) == 0) {
-			envargs = envp[i] + 11;
-			break;
-		}
-	}
-#else
 	char *envargs = getenv("UTEST_OPTS");
-#endif
 	if(envargs != NULL) {
-		/* parse a second set of arguments from UTEST_OPTS. these are
-		 * separated by ampersands.
-		 */
+		/* accept more ampersand-separated arguments from UTEST_OPTS. */
 		envargs = strdup(envargs);	/* leak like a boss */
 		darray(char *) other_argv = darray_new();
 		darray_push(other_argv, argv[0]);
