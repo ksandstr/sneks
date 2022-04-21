@@ -55,7 +55,7 @@ static bool trunc_ok(size_t prefix, const char *fmt, ...)
 	va_end(al);
 	if(!ok1(n_head >= 0)) diag("fmt=`%s', errno=%d", fmt, errno);
 	if(!ok1(n_head > strlen(head))) diag("n_head=%d, head=`%s' (len=%d)", n_head, head, strlen(head));
-	if(!ok1(prefix == strlen(head)) || true) diag("head=`%s'", head);
+	ok1(prefix == strlen(head));
 	/* test that the output is same when produced into both excessively large
 	 * and exactly-sized buffers.
 	 */
@@ -71,7 +71,7 @@ static bool trunc_ok(size_t prefix, const char *fmt, ...)
 	va_end(al);
 	if(!ok1(n_exact == n_head)) diag("n_exact=%d, n_head=%d", n_exact, n_head);
 	ok1(streq(exact, excess));
-	diag("exact=`%s'", exact);
+	diag("head=`%s', exact=`%s'", head, exact);
 	return subtest_end() == 0;
 }
 
@@ -136,6 +136,29 @@ START_TEST(concat)
 END_TEST
 
 DECLARE_TEST("cstd:print", concat);
+
+/* huge numbers. huge */
+START_TEST(huge)
+{
+	const int big = 2 * 1024 * 1024;	/* cDonald's theorem */
+	diag("big=%d", big);
+	plan_tests(8);
+#ifdef __sneks__
+	todo_start("foolish, foolish");
+#endif
+	ok1(snprintf(NULL, 0, "%*d", big, 123) == big);
+	ok1(snprintf(NULL, 0, "%.*d", big, 123) == big);
+	ok1(snprintf(NULL, 0, "%-*d", big, 123) == big);
+	ok1(snprintf(NULL, 0, "%-.*d", big, 123) == big);
+	char pref[5];
+	ok1(snprintf(pref, sizeof pref, "%*d", big, 123) == big && streq(pref, "    "));
+	ok1(snprintf(pref, sizeof pref, "%.*d", big, 123) == big && streq(pref, "0000"));
+	ok1(snprintf(pref, sizeof pref, "%-*d", big, 123) == big && streq(pref, "123 "));
+	ok1(snprintf(pref, sizeof pref, "%-.*d", big, 123) == big && streq(pref, "0000"));
+}
+END_TEST
+
+DECLARE_TEST("cstd:print", huge);
 
 /* %n */
 START_TEST(percent_n)
