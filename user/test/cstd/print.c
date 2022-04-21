@@ -143,9 +143,6 @@ START_TEST(huge)
 	const int big = 2 * 1024 * 1024;	/* cDonald's theorem */
 	diag("big=%d", big);
 	plan_tests(8);
-#ifdef __sneks__
-	todo_start("foolish, foolish");
-#endif
 	ok1(snprintf(NULL, 0, "%*d", big, 123) == big);
 	ok1(snprintf(NULL, 0, "%.*d", big, 123) == big);
 	ok1(snprintf(NULL, 0, "%-*d", big, 123) == big);

@@ -1,6 +1,6 @@
 /* mildly nonconformant C23 vsnprintf() sans floats, doubles, and wide
- * char/str support. constant stack space. no POSIX extensions, not LP64
- * clean.
+ * char/str support. constant stack space. calls malloc. no POSIX extensions,
+ * not LP64 clean.
  */
 #include <stdio.h>
 #include <string.h>
@@ -24,18 +24,19 @@ static size_t fmt_ull(char *restrict buf, size_t max, unsigned long long val, co
 	if(buf == NULL) max = 0;
 	bool sign = p->is_signed && val > LLONG_MAX, zero = val == 0;
 	int pos = 0, mask = (1 << p->shift) - 1, d, g = 0, sc = '-', width = max(p->width, 1), last = 0, np = 0;
-	if(sign) val = -(long long)val;
+	unsigned long long acc = val;
+	if(sign) acc = -(long long)acc;
 	else if(p->forcesign || p->spacesign) {
 		sc = p->forcesign ? '+' : ' ';
 		sign = true;
 	}
-	while(val > 0 || pos == 0) {
+	while(acc > 0 || pos == 0) {
 		if(p->shift > 0) {
-			d = val & mask;
-			val >>= p->shift;
+			d = acc & mask;
+			acc >>= p->shift;
 		} else {
-			d = val % 10;
-			val /= 10;
+			d = acc % 10;
+			acc /= 10;
 		}
 		int c = last = "0123456789abcdef"[d];
 		if(pos++ < max) buf[pos - 1] = last = p->upper ? toupper(c) : c;
@@ -44,9 +45,10 @@ static size_t fmt_ull(char *restrict buf, size_t max, unsigned long long val, co
 			g = 0; last = '_';
 		}
 	}
-	while(pos < p->precision) {
-		if(pos++ < max) buf[pos - 1] = '0';
+	if(pos < p->precision) {
 		last = '0';
+		if(pos < max) memset(buf + pos, '0', min_t(size_t, max - pos + 1, p->precision - pos));
+		pos = p->precision;
 	}
 	char prefix[3];
 	if(p->prefix && !zero) {
@@ -62,12 +64,20 @@ static size_t fmt_ull(char *restrict buf, size_t max, unsigned long long val, co
 		for(int i=0; i < np && pos + i < max; i++) buf[pos + i] = prefix[i];
 		pos += np; np = 0;
 	}
-	while(!p->leftjust && pos < width - np) {
-		if(pos++ < max) buf[pos - 1] = p->pad;
+	if(!p->leftjust && pos < width - np) {
+		if(pos < max) memset(buf + pos, p->pad, min_t(size_t, max - pos + 1, width - np - pos));
+		pos = width - np;
 	}
 	for(int i=0; i < np && pos + i < max; i++) buf[pos + i] = prefix[i];
 	pos += np;
-	if(max > 0) {
+	if(max > 0 && pos > max) {
+		/* TODO: replace w/ fancy analytical solution */
+		char *truncbuf = malloc(pos + 1);
+		fmt_ull(truncbuf, pos, val, p);
+		memcpy(buf, truncbuf, max);
+		buf[max] = '\0';
+		free(truncbuf);
+	} else if(max > 0) {
 		buf[min_t(int, pos, max)] = '\0';
 		for(int i = 0, len = min_t(int, pos, max); i < len / 2; i++) {
 			char *a = &buf[i], *b = &buf[len - 1 - i], t = *a;
@@ -76,8 +86,9 @@ static size_t fmt_ull(char *restrict buf, size_t max, unsigned long long val, co
 		}
 	}
 	if(p->leftjust) {
-		while(pos < width) {
-			if(pos++ < max) buf[pos - 1] = p->pad;
+		if(pos < width) {
+			if(pos < max) memset(buf + pos, p->pad, min_t(size_t, max - pos + 1, width - pos));
+			pos = width;
 		}
 		if(max > 0) buf[min_t(int, pos, max)] = '\0';
 	}
