@@ -58,6 +58,12 @@ extern int ffsll(long long);
 #define strstr(h, n) __builtin_strstr((h), (n))
 #endif
 
+extern char *strerror(int);
+extern char *stripcerr_NP(int);
+#ifdef __SNEKS__
+#define stripcerr(n) stripcerr_NP((n))
+#endif
+
 /* such nonstandard, very clever, wow. */
 extern void *memdup(const void *, size_t);
 /* returns @l. undefined results when @l[0..n-1] and @r[0..n-1] overlap. */

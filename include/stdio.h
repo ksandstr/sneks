@@ -85,4 +85,11 @@ extern int setvbuf(FILE *stream, char *buf, int mode, size_t n);
 extern void setbuffer(FILE *stream, char *buf, size_t size);
 extern void setlinebuf(FILE *stream);
 
+/* from error.c */
+extern void perror(const char *where);
+extern void perror_ipc_NP(const char *where, int ipc_status);
+#ifdef __SNEKS__
+#define perror_ipc(a, b) perror_ipc_NP((a), (b))
+#endif
+
 #endif

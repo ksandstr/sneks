@@ -1,7 +1,7 @@
 #ifndef _ERRNO_H
 #define _ERRNO_H
 
-/* codes added lazily */
+/* codes added lazily; keep lib/error.c:sys_errlist in sync also. */
 #define EPERM	1	/* operation not permitted */
 #define ENOENT	2	/* no such file or directory */
 #define ESRCH	3	/* no such process */
@@ -50,5 +50,9 @@ extern int *__errno_location(void);
 #ifdef _GNU_SOURCE
 extern char *program_invocation_name, *program_invocation_short_name;
 #endif
+
+/* TODO: make these conditional on _DEFAULT_SOURCE? */
+extern int sys_nerr;
+extern const char *const sys_errlist[];
 
 #endif
