@@ -1,13 +1,9 @@
-
 #ifndef _SYS_STAT_H
 #define _SYS_STAT_H
 
-/* TODO: don't pollute the namespace, just get what we need */
 #include <time.h>
 #include <sys/types.h>
-
 #include <sneks/api/path-defs.h>
-
 
 #define S_IFMT SNEKS_PATH_S_IFMT
 #define S_IFDIR SNEKS_PATH_S_IFDIR
@@ -17,6 +13,14 @@
 #define S_IFIFO SNEKS_PATH_S_IFIFO
 #define S_IFLNK SNEKS_PATH_S_IFLNK
 #define S_IFSOCK SNEKS_PATH_S_IFSOCK
+
+#define S_ISREG(m) (((m) & S_IFMT) == S_IFREG)
+#define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+#define S_ISCHR(m) (((m) & S_IFMT) == S_IFCHR)
+#define S_ISBLK(m) (((m) & S_IFMT) == S_IFBLK)
+#define S_ISFIFO(m) (((m) & S_IFMT) == S_IFIFO)
+#define S_ISLNK(m) (((m) & S_IFMT) == S_IFLNK)
+#define S_ISSOCK(m) (((m) & S_IFMT) == S_IFSOCK)
 
 /* mode bits
  *
