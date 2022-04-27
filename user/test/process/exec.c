@@ -1,6 +1,4 @@
-
 /* tests on the execve(2) family. */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,9 +13,12 @@
 #include <ccan/array_size/array_size.h>
 #include <ccan/darray/darray.h>
 #include <ccan/pipecmd/pipecmd.h>
-
 #include <sneks/test.h>
 
+/* TODO: this could be in an utility module, right? */
+static int ord_str(const void *a, const void *b) {
+	return strcmp(*(const char **)a, *(const char **)b);
+}
 
 /* foundation: that an assistant program's exit status can be examined. */
 START_LOOP_TEST(exit_status, iter, 0, 2)
@@ -27,7 +28,7 @@ START_LOOP_TEST(exit_status, iter, 0, 2)
 		case 0: prgname = "exit_with_0"; break;
 		case 1: prgname = "exit_with_1"; break;
 		case 2: prgname = "exit_with_getpid"; break;
-		default: assert(false);
+		default: abort();
 	}
 	diag("prgname=`%s'", prgname);
 	plan_tests(6);
@@ -59,7 +60,6 @@ END_TEST
 
 DECLARE_TEST("process:exec", exit_status);
 
-
 /* kinds of executable, positive: regular programs, scripts run by a regular
  * program, and scripts run by another script.
  */
@@ -70,7 +70,7 @@ START_LOOP_TEST(kinds_positive, iter, 0, 2)
 		case 0: prgname = "tools/exit_with_0"; break;
 		case 1: prgname = "scripts/first_order_script"; break;
 		case 2: prgname = "scripts/second_order_script"; break;
-		default: assert(false);
+		default: abort();
 	}
 	diag("prgname=`%s'", prgname);
 	plan_tests(4);
@@ -98,13 +98,12 @@ END_TEST
 
 DECLARE_TEST("process:exec", kinds_positive);
 
-
 /* passing of file descriptors, arguments, and the environment. */
 static const char *find_env(char *const envp[], const char *key);
 
 START_LOOP_TEST(fd_arg_env_passing, iter, 0, 1)
 {
-	const bool use_vector = !!(iter & 1);
+	const bool use_vector = iter & 1;
 	diag("use_vector=%s", btos(use_vector));
 	plan_tests(13);
 
@@ -121,10 +120,7 @@ START_LOOP_TEST(fd_arg_env_passing, iter, 0, 1)
 		goto end;
 	}
 
-	char *prgname = "user/test/tools/argdumper",
-		*const env[] = { "FOO=bar", "PATH=/bin:/sbin:/usr/bin:/usr/sbin",
-			"howl=gargl=gargl", NULL };
-
+	char *prgname = "user/test/tools/argdumper", *const env[] = { "FOO=bar", "PATH=/bin:/sbin:/usr/bin:/usr/sbin", "howl=gargl=gargl", NULL };
 	fflush(stdout);
 	int child = fork();
 	if(child == 0) {
@@ -227,7 +223,6 @@ END_TEST
 
 DECLARE_TEST("process:exec", fd_arg_env_passing);
 
-
 static const char *find_env(char *const envp[], const char *key)
 {
 	for(int i=0; envp[i] != NULL; i++) {
@@ -241,14 +236,8 @@ static const char *find_env(char *const envp[], const char *key)
 	return NULL;
 }
 
-
 /* test that the current directory is inherited by the child image. */
-
-static int ord_str(const void *, const void *);
-
-static const char *cwd_dirs[] = {
-	"", "/user/test", "/user/test/io/dir",
-};
+static const char *cwd_dirs[] = { "", "/user/test", "/user/test/io/dir" };
 
 START_LOOP_TEST(cwd, iter, 0, ARRAY_SIZE(cwd_dirs) - 1)
 {
@@ -294,7 +283,6 @@ START_LOOP_TEST(cwd, iter, 0, ARRAY_SIZE(cwd_dirs) - 1)
 			malformed = true;
 			continue;
 		}
-
 		darray_push(ents, talloc_strdup(tal, line + 4));
 	}
 	fclose(input);
@@ -314,7 +302,6 @@ START_LOOP_TEST(cwd, iter, 0, ARRAY_SIZE(cwd_dirs) - 1)
 	skip_start(!ok1(local.size == ents.size), 1, "unequal results") {
 		qsort(ents.item, ents.size, sizeof ents.item[0], &ord_str);
 		qsort(local.item, local.size, sizeof local.item[0], &ord_str);
-
 		bool all_same = true;
 		for(size_t i=0; i < ents.size; i++) {
 			if(!streq(ents.item[i], local.item[i])) {
@@ -333,12 +320,6 @@ END_TEST
 
 DECLARE_TEST("process:exec", cwd);
 
-
-static int ord_str(const void *a, const void *b) {
-	return strcmp(*(const char **)a, *(const char **)b);
-}
-
-
 /* test that the program name is passed to a child process as it should be:
  * program_invocation_name being the full directory (where applicable), the
  * short_name being the terminal part of previous, and argv[0] being one of
@@ -350,7 +331,7 @@ static int ord_str(const void *a, const void *b) {
  */
 START_LOOP_TEST(program_name, iter, 0, 1)
 {
-	const bool full_path = !!(iter & 1);
+	const bool full_path = iter & 1;
 	diag("full_path=%s", btos(full_path));
 	void *tal = talloc_new(NULL);
 
