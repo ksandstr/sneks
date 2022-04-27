@@ -103,7 +103,7 @@ int close(int fd)
 	return IOERR(n) ? -1 : 0;
 }
 
-long read(int fd, void *buf, size_t count)
+ssize_t read(int fd, void *buf, size_t count)
 {
 	if(!VALID(fd)) { errno = EBADF; return -1; }
 	unsigned buf_len = min_t(size_t, count, INT_MAX);

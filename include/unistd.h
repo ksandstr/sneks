@@ -1,11 +1,8 @@
 #ifndef _UNISTD_H
 #define _UNISTD_H 1
 
+#include <stddef.h>
 #include <stdint.h>
-
-/* TODO: selectively include size_t, ssize_t, uid_t, gid_t, off_t, and
- * pid_t
- */
 #include <sys/types.h>
 
 /* TODO: get these from API decls once find-idl-defs.pl understands the
@@ -43,8 +40,8 @@ extern int pause(void);
 
 
 extern int close(int fd);
-extern long read(int fd, void *buf, size_t count);
-extern long write(int fd, const void *buf, size_t count);
+extern ssize_t read(int fd, void *buf, size_t count);
+extern ssize_t write(int fd, const void *buf, size_t count);
 extern off_t lseek(int fd, off_t offset, int whence);
 
 extern int dup(int oldfd);

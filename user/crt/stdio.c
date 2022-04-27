@@ -13,13 +13,13 @@
 static ssize_t fd_read(void *cookie, char *buf, size_t size) {
 	ssize_t n;
 	do n = read((int)cookie, buf, size); while(n < 0 && errno == EINTR);
-	return max_t(ssize_t, n, 0);
+	return max(n, 0);
 }
 
 static ssize_t fd_write(void *cookie, const char *buf, size_t size) {
 	ssize_t n;
 	do n = write((int)cookie, buf, size); while(n < 0 && errno == EINTR);
-	return max_t(ssize_t, n, 0);
+	return max(n, 0);
 }
 
 static int fd_seek(void *cookie, off64_t *offset, int whence) {
