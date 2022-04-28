@@ -97,15 +97,13 @@ static size_t fmt_ull(char *restrict buf, size_t max, unsigned long long val, co
 
 int vsnprintf(char *restrict str, size_t size, const char *restrict fmt, va_list ap)
 {
-	static_assert(sizeof(int_fast8_t) == sizeof(int32_t));
-	static_assert(sizeof(int_fast16_t) == sizeof(int32_t));
+	static_assert(sizeof(int_fast8_t) == sizeof(int32_t) && sizeof(int_fast16_t) == sizeof(int32_t));
 	assert(fmt != NULL);
-	size_t pos = 0, max = str != NULL && size > 0 ? size - 1 : 0;
+	size_t pos = 0, max = str != NULL && size > 0 ? size - 1 : 0, nb;
 	if(max > 0) *str = '\0';
 	for(size_t i = 0; fmt[i] != '\0'; i++) {
-		size_t nb = strchrnul(fmt + i, '%') - (fmt + i);
-		if(nb > 0) {
-			/* unformatted section */
+		if(nb = strchrnul(fmt + i, '%') - (fmt + i), nb > 0) {
+			/* literal section */
 			if(pos < max) {
 				memcpy(str + pos, fmt + i, min(max - pos, nb));
 				str[min(pos + nb, max)] = '\0';
@@ -125,12 +123,11 @@ int vsnprintf(char *restrict str, size_t size, const char *restrict fmt, va_list
 		}
 		/* accept modifiers */
 		struct fmt_param p = { .pad = ' ', .width = -1, .precision = -1, .is_signed = true };
-		bool dot = false, mod, widtharg = false, precarg = false, fast = false;
-		int longness = 0, bits = 0;
-		char type = ' ', *end;
+		int dot = false, mod, widtharg = false, precarg = false, fast = false, longness = 0, bits = 0, type = ' ';
 		do {
 			mod = true;
 			switch(fmt[i]) {
+				char *end;
 				case 'l': if(longness < 0 || ++longness > 2) return -1; else break;
 				case 'h': if(longness > 0 || --longness < -2) return -1; else break;
 				case '#': p.prefix = true; break;
@@ -158,12 +155,9 @@ int vsnprintf(char *restrict str, size_t size, const char *restrict fmt, va_list
 			if(mod && fmt[++i] == '\0') return -1;
 		} while(mod);
 		if(type == ' ') type = "chdlL"[longness + 2]; else if(longness != 0) return -1;
-		if(widtharg) {
-			p.width = va_arg(ap, int);
-			if(p.width < 0) {
-				p.leftjust = true;
-				p.width = -p.width;
-			}
+		if(widtharg && (p.width = va_arg(ap, int), p.width < 0)) {
+			p.leftjust = true;
+			p.width = -p.width;
 		}
 		if(precarg) {
 			int prec = va_arg(ap, int);
@@ -171,14 +165,14 @@ int vsnprintf(char *restrict str, size_t size, const char *restrict fmt, va_list
 		}
 		/* conversion */
 		switch(fmt[i]) {
+			unsigned long long val;
 			case 'X': p.upper = true; /* FALL THRU */
 			case 'p': if(fmt[i] == 'p') { p.prefix = true; type = 'z'; } /* FALL THRU */
 			case 'x': p.shift = 4;	/* FALL THRU */
 			case 'o': if(fmt[i] == 'o') p.shift = 3;	/* FALL THRU */
 			case 'b': if(fmt[i] == 'b') p.shift = 1;	/* FALL THRU */
 			case 'u': p.is_signed = false; p.forcesign = false; p.spacesign = false; /* FALL THRU */
-			case 'i': case 'd': {
-				unsigned long long val;
+			case 'i': case 'd':
 				if(type == 'w') {
 					if(bits & (bits - 1)) return -1;	/* not power of two */
 					if(bits < 8 || bits > 64) return -1;
@@ -196,7 +190,6 @@ int vsnprintf(char *restrict str, size_t size, const char *restrict fmt, va_list
 				}
 				pos += fmt_ull(pos < max ? str + pos : NULL, max - pos, val, &p);
 				break;
-			}
 			case 'C': longness = 1;	/* FALL THRU */
 			case 'c': {
 				int c = (unsigned char)va_arg(ap, int);
