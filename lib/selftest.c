@@ -1,5 +1,3 @@
-#ifdef BUILD_SELFTEST	/* yeah, the whole module */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -187,4 +185,3 @@ bool selftest_handling(L4_Word_t status)
 		}
 	}
 }
-#endif

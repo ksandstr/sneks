@@ -6,7 +6,10 @@ CFLAGS += -D__SNEKS__=1
 run ./gen-ccan-rules.sh hash autodata likely htable list str bitmap siphash
 run ./gen-lfht-rules.sh epoch nbsl percpu
 
-: foreach *.c |> !cc |> %g.o {lib_objs}
+: foreach *.c ^selftest.c |> !cc |> %g.o {lib_objs}
+ifeq (@(SELFTEST),y)
+: selftest.c |> !cc |> %B.o {lib_objs}
+endif
 : &(muidldir)/share/stritem_support.c |> !cc |> %B.o {lib_objs}
 : foreach *-32.S |> !as |> %g.o {lib_objs}
 
