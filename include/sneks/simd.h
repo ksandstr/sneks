@@ -1,5 +1,5 @@
-#ifndef __SNEKS_SIMD_H__
-#define __SNEKS_SIMD_H__
+#ifndef _SNEKS_SIMD_H
+#define _SNEKS_SIMD_H
 
 #include <limits.h>
 #include <ccan/endian/endian.h>

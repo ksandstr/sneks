@@ -1,5 +1,5 @@
-#ifndef __SNEKS_BITOPS_H__
-#define __SNEKS_BITOPS_H__
+#ifndef _SNEKS_BITOPS_H
+#define _SNEKS_BITOPS_H
 
 #include <limits.h>
 #include <stddef.h>

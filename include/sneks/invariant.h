@@ -1,23 +1,19 @@
-
 #ifdef SEEN_UKERNEL_INVARIANT_H
 #error "trying to include <ukernel/invariant.h> and <sneks/invariant.h> in the same translation unit. don't do this."
 #endif
 
-#ifndef __SNEKS_INVARIANT_H__
-#define __SNEKS_INVARIANT_H__
+/* support for invariant checking. does nothing when NDEBUG is set. */
+#ifndef _SNEKS_INVARIANT_H
+#define _SNEKS_INVARIANT_H
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <setjmp.h>
-
+#include <ccan/compiler/compiler.h>
 #include <ccan/list/list.h>
 #include <ccan/likely/likely.h>
-
-
-
-/* support for invariant checking. does nothing when NDEBUG is set. */
 
 struct _inv_ctx {
 	jmp_buf redo;
@@ -31,22 +27,9 @@ struct _inv_line {
 	char text[];
 };
 
-
-extern void _inv_ctx_push(
-	struct _inv_ctx *ctx,
-	bool stop,
-	const char *fmt, ...)
-		__attribute__((format(printf, 3, 4)));
-
+extern void _inv_ctx_push(struct _inv_ctx *ctx, bool stop, const char *fmt, ...) PRINTF_FMT(3, 4);
 extern void _inv_ctx_pop(struct _inv_ctx *ctx);
-
-extern void _inv_report(
-	struct _inv_ctx *ctx,
-	const char *file, int line,
-	const char *condition,
-	const char *fmt, ...)
-	__attribute__((format(printf, 5, 6)));
-
+extern void _inv_report(struct _inv_ctx *ctx, const char *file, int line, const char *condition, const char *fmt, ...) PRINTF_FMT(5, 6);
 
 #ifndef NDEBUG
 
@@ -93,6 +76,5 @@ extern void _inv_report(
 #define INV_CHILD 0
 
 #endif
-
 
 #endif

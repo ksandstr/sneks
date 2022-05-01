@@ -1,4 +1,3 @@
-
 #ifndef _SNEKS_MM_H
 #define _SNEKS_MM_H
 
@@ -6,7 +5,6 @@
 #include <ccan/minmax/minmax.h>
 #include <l4/types.h>
 #include <sneks/bitops.h>
-
 
 #ifdef __SNEKS__
 
@@ -16,11 +14,8 @@
 
 #define PAGE_CEIL(x) (((x) + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1))
 
-
-
 /* memory attributes for Sysmem::alter_flags */
 #define SMATTR_PIN 1	/* disallows replacement once mapped */
-
 
 /* usage:
  *
@@ -41,19 +36,14 @@
 		(_addr) = (_A += (1 << _S)), \
 			(_sizelog2) = _S = min_t(unsigned, ffsl(_A) - 1, MSB(_E - _A)))
 
-
 /* upper bound of the number of iterations for_page_range() runs for the given
  * range.
  */
 #define page_range_bound(start, end) ((MSB((end) - (start)) - PAGE_BITS) * 2)
 
+#define ADDR_IN_FPAGE(haystack, needle) fpage_overlap((haystack), L4_FpageLog2((needle), 0))
 
-#define ADDR_IN_FPAGE(haystack, needle) \
-	fpage_overlap((haystack), L4_FpageLog2((needle), 0))
-
-
-static inline bool fpage_overlap(L4_Fpage_t a, L4_Fpage_t b)
-{
+static inline bool fpage_overlap(L4_Fpage_t a, L4_Fpage_t b) {
 	L4_Word_t mask = ~((1ul << max_t(int, L4_SizeLog2(a), L4_SizeLog2(b))) - 1);
 	return ((a.raw ^ b.raw) & mask) == 0;
 }

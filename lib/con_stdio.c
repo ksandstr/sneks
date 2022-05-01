@@ -13,6 +13,9 @@ ssize_t sneks_con_write(void *cookie, const char *buf, size_t size)
 	return size;
 }
 
+/* set stdin, stdout, and stderr up to interact with a console over
+ * con_putstr(), which typically goes to the serial port.
+ */
 int sneks_setup_console_stdio(void)
 {
 	FILE *out = fopencookie(NULL, "wb", (cookie_io_functions_t){ .write = &sneks_con_write });

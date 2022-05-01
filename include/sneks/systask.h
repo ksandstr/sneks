@@ -1,4 +1,3 @@
-
 /* this header defines various bits from sys/crt that're available to
  * systasks, i.e. not to root, sysmem, or userspace. if the program at hand is
  * a systask, it shall #include <sneks/systask.h> or rue the day.
@@ -6,28 +5,23 @@
  * note that this header may be too fun for the whole family due to e.g.
  * lumberjacking puns.
  */
-
-#ifndef __SNEKS_SYSTASK_H__
-#define __SNEKS_SYSTASK_H__
+#ifndef _SNEKS_SYSTASK_H
+#define _SNEKS_SYSTASK_H
 
 #include <stdbool.h>
 #include <stdarg.h>
 #include <ccan/compiler/compiler.h>
 #include <l4/types.h>
-
 #include <ukernel/hook.h>
-
 
 /* from threads.c */
 extern L4_ThreadId_t __uapi_tid;
-
 
 /* from log.c.
  *
  * suppress your instinct to fprintf(stderr, "%s: shit done fuckt up!",
  * __func__). follow the white beaver.
  */
-
 extern void log_msgv(int level, const char *fmt, va_list args);
 
 static inline void PRINTF_FMT(2, 3) log_msgf(int level, const char *fmt, ...) {
@@ -35,7 +29,6 @@ static inline void PRINTF_FMT(2, 3) log_msgf(int level, const char *fmt, ...) {
 	log_msgv(level, fmt, al);
 	va_end(al);
 }
-
 
 /* real pain for real friends. pay attention to the interrobang, he is here to
  * help you.
@@ -80,7 +73,6 @@ static inline int PRINTF_FMT(2, 3) asprintf(char **sptr, const char *fmt, ...) {
 	return res;
 }
 
-
 /* from selftest.c */
 #ifdef BUILD_SELFTEST
 #include <sneks/test.h>
@@ -93,7 +85,6 @@ AUTODATA_TYPE(all_systask_selftests, struct utest_spec);
 	}; \
 	AUTODATA(all_systask_selftests, &_STST_ ##test_);
 
-
 /* called to check if an IPC message unhandled by muidl was related to
  * in-systask selftests. returns true if so, false otherwise. may cause such a
  * selftest to run.
@@ -102,6 +93,5 @@ extern bool selftest_handling(L4_Word_t status);
 #else
 #define selftest_handling(x) false
 #endif
-
 
 #endif

@@ -1,9 +1,8 @@
 /* imitation of tap.h from libtap by Nik Clayton, plus some extras. interface
  * for lib/tap.c .
  */
-
-#ifndef __SNEKS_TEST_H__
-#define __SNEKS_TEST_H__
+#ifndef _SNEKS_TEST_H
+#define _SNEKS_TEST_H
 
 #include <stdbool.h>
 #include <stdnoreturn.h>
@@ -12,28 +11,22 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <ccan/autodata/autodata.h>
+#include <ccan/compiler/compiler.h>
 
-
-#define ok(cond, test, ...) \
-	_gen_result(!!(cond), __func__, __FILE__, __LINE__, \
-		test, ##__VA_ARGS__)
-
-#define ok1(cond) \
-	_gen_result(!!(cond), __func__, __FILE__, __LINE__, "%s", #cond)
+#define ok(cond, test, ...) _gen_result(!!(cond), __func__, __FILE__, __LINE__, test, ##__VA_ARGS__)
+#define ok1(cond) _gen_result(!!(cond), __func__, __FILE__, __LINE__, "%s", #cond)
 
 /* >implying implications */
-#define imply_ok1(left, right) \
-	ok(!(left) || (right), "%s --> %s", #left, #right)
-
-#define imply_ok(left, right, test, ...) \
-	ok(!(left) || (right), test, ##__VA_ARGS__)
+#define imply_ok1(left, right) ok(!(left) || (right), "%s --> %s", #left, #right)
+#define imply_ok(left, right, test, ...) ok(!(left) || (right), test, ##__VA_ARGS__)
 
 /* alias for left == right, printed as "iff". */
-#define iff_ok1(left, right) \
-	ok(!!(left) == !!(right), "%s iff %s", #left, #right)
+#define iff_ok1(left, right) ok(!!(left) == !!(right), "%s iff %s", #left, #right)
 
 #define pass(test, ...) ok(true, (test), ##__VA_ARGS__)
 #define fail(test, ...) ok(false, (test), ##__VA_ARGS__)
+
+#define btos(x) (!!(x) ? "true" : "false")
 
 /* (note the unclosed do-while block.) */
 #define skip_start(cond, n, fmt, ...) \
@@ -49,17 +42,10 @@
 	   subtest_end(); \
 	 })
 
-
-/* utility macros. */
-#define btos(x) (!!(x) ? "true" : "false")
-
-
 /* vaguely post-Check-style systemspace unit testing things exported in, and
  * related to, sys/test/check.c .
  */
-
-struct test_info
-{
+struct test_info {
 	void (*test_fn)(int);
 	const char *name;
 	int iter_low, iter_high;
@@ -81,11 +67,9 @@ struct test_info
 		int VAR = _i;
 #define END_TEST }
 
-
 /* brave new world of linker magic test specs. these ones work for systests
  * only, and those have to be in a C source file in a t/ path.
  */
-
 struct systest_spec {
 	const char *path;
 	const struct test_info *test;
@@ -106,18 +90,15 @@ struct systest {
 	void (*fn)(int iter);
 };
 
-
 /* (this should be in sys/test/defs.h or some such.) */
 extern void run_all_systests(void);
 extern void run_systest_by_spec(char **specs, size_t n_specs);
 extern void describe_all_systests(void);
 
-
 /* these work for userspace tests. they're just like the ones for systests,
  * but without the "systest" nomenclature. this turns a class of obscure
  * malfunction into linker errors, which is nice.
  */
-
 struct utest_spec {
 	const char *path;
 	const struct test_info *test;
@@ -130,13 +111,10 @@ AUTODATA_TYPE(all_utest_specs, struct utest_spec);
 	}; \
 	AUTODATA(all_utest_specs, &_UT_ ##test_);
 
-
 /* fail() inherited from the libtap imitation */
-
 #define fail_unless(expr, ...) \
 	_fail_unless((expr), __FILE__, __LINE__, \
 		#expr, "" __VA_ARGS__, NULL)
-
 #define fail_if(expr, ...) \
 	_fail_unless(!(expr), __FILE__, __LINE__, \
 		"!(" #expr ")", "" __VA_ARGS__, NULL)
@@ -151,39 +129,24 @@ extern noreturn void vbail(const char *fmt, va_list args);
 
 #define BAIL_OUT(...) bail("" __VA_ARGS__, NULL)
 
-
 /* same for test from __assert_failure() */
 extern bool in_test(void);
 
-
 /* from util.c */
-
-/* computes x! */
-extern unsigned factorial(unsigned x);
+extern unsigned factorial(unsigned x); /* computes x! */
 
 /* generates a n-permutation of integers [0, n). outputs guaranteed distinct
  * while @perm < n! .
  */
 extern void gen_perm(unsigned *buf, unsigned n, unsigned perm);
 
-
 /* from tap.c */
-
-extern void _fail_unless(
-	int result, const char *file, int line,
-	const char *expr, const char *fmt, ...);
-
-extern int _gen_result(
-	bool ok,
-	const char *func, const char *file, unsigned int line,
-	const char *test_name, ...)
-		__attribute__((format(printf, 5, 6)));
-
+extern void _fail_unless(int result, const char *file, int line, const char *expr, const char *fmt, ...);
+extern int _gen_result(bool ok, const char *func, const char *file, unsigned int line, const char *test_name, ...) PRINTF_FMT(5, 6);
 extern void tap_reset(void);	/* called by the test harness */
 
 extern void plan_no_plan(void);
-extern void plan_skip_all(const char *reason_fmt, ...)
-	__attribute__((format(printf, 1, 2)));
+extern void plan_skip_all(const char *reason_fmt, ...) PRINTF_FMT(1, 2);
 extern void plan_tests(unsigned int num_tests);
 
 /* short-form plan() inspired by libtap. @tests is either the number of tests,
@@ -196,18 +159,17 @@ extern void plan_tests(unsigned int num_tests);
  * the end, which the compiler will whine about.
  */
 extern void planf(int tests, const char *fmt, ...);
-
 #define plan(...) planf(__VA_ARGS__, NULL)
 
 #define NO_PLAN -1
 #define SKIP_ALL -2
 
-extern int diag(const char *fmt, ...);
-extern int skip(unsigned int num_skip, const char *reason, ...);
-extern void todo_start(const char *fmt, ...);
+extern int diag(const char *fmt, ...) PRINTF_FMT(1, 2);
+extern int skip(unsigned int num_skip, const char *reason, ...) PRINTF_FMT(2, 3);
+extern void todo_start(const char *fmt, ...) PRINTF_FMT(1, 2);
 extern void todo_end(void);
 
-extern void subtest_start(const char *fmt, ...);
+extern void subtest_start(const char *fmt, ...) PRINTF_FMT(1, 2);
 extern int subtest_end(void);
 extern char *subtest_pop(int *rc_p, void **freeptr_p);
 
@@ -216,7 +178,7 @@ extern noreturn void done_testing(void);
 
 extern void close_no_plan(void);	/* for harness.c impls */
 
-/* forked subtests. obviously not available under sys/test .
+/* forked subtests. obviously not available in systemspace.
  * #include <sys/wait.h> to make these compile.
  *
  * TODO: fetch test name from child somehow, display in fork_subtest_ok1().
@@ -294,7 +256,6 @@ extern void close_no_plan(void);	/* for harness.c impls */
 
 #define dies_ok1(code) dies_ok((code), #code " dies")
 #define lives_ok1(code) lives_ok((code), #code " lives")
-
 
 #ifndef __sneks__
 /* being nice to hostsuite <3 */

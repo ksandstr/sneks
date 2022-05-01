@@ -1,4 +1,3 @@
-
 /* many syscall interfaces require the caller to take action according to the
  * interface's return data. if the call's receive phase is interrupted (such
  * as due to signal), the return data is lost and the server side should
@@ -11,14 +10,12 @@
  * explicitly; those cases are written out by hand and benefit from no library
  * assistance.
  */
-
-#ifndef __SNEKS_ROLLBACK_H__
-#define __SNEKS_ROLLBACK_H__
+#ifndef _SNEKS_ROLLBACK_H
+#define _SNEKS_ROLLBACK_H
 
 #include <stdbool.h>
 #include <ccan/typesafe_cb/typesafe_cb.h>
 #include <l4/types.h>
-
 
 typedef void (*rollback_fn_t)(L4_Word_t param, void *priv);
 
@@ -53,7 +50,6 @@ extern void _set_rollback(rollback_fn_t fn, L4_Word_t param, const void *priv);
  */
 extern bool check_rollback(L4_Word_t dispatch_status);
 
-
 /* change the per-thread confirm handler. valid when clear or not already set
  * after the most recent call to sync_confirm(). clears when @fn=NULL.
  *
@@ -75,6 +71,5 @@ extern bool check_rollback(L4_Word_t dispatch_status);
 		(param), (priv))
 extern void _set_confirm(rollback_fn_t fn, L4_Word_t param, const void *priv);
 extern void sync_confirm(void);
-
 
 #endif

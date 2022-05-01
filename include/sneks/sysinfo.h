@@ -1,8 +1,6 @@
-
 /* the Sneks system information page, similar in function to the commpage of
  * Mach and suchlike.
  */
-
 #ifndef _SNEKS_SYSINFO_H
 #define _SNEKS_SYSINFO_H
 
@@ -12,9 +10,7 @@
 #include <l4/kip.h>
 #include <sneks/mm.h>
 
-
 #define SNEKS_SYSINFO_MAGIC 0xbadc0de5	/* please send me them */
-
 
 /* no pointers, this should be relocable. */
 struct __sysinfo
@@ -46,20 +42,17 @@ struct __sysinfo
 	} posix;
 } __attribute__((__packed__));
 
-
 #if defined(PAGE_SIZE)
 /* in userspace, sysinfopage is always located after the kernel information
  * page. this makes it easy to find using simple maths. note that the return
  * value is still read-only despite not being marked const.
  */
-static inline struct __sysinfo *__get_sysinfo(L4_KernelInterfacePage_t *kip)
-{
+static inline struct __sysinfo *__get_sysinfo(L4_KernelInterfacePage_t *kip) {
 	uintptr_t base = ((uintptr_t)kip + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 	struct __sysinfo *si = (struct __sysinfo *)(base + L4_KipAreaSize(kip));
 	assert(si->magic == SNEKS_SYSINFO_MAGIC);
 	return si;
 }
 #endif
-
 
 #endif

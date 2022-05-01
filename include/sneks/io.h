@@ -1,15 +1,4 @@
-
-/* interface of libsneks-io.a, aka sys/io.
- *
- * this is a library for implementing Sneks::IO such as for device special
- * files, pipes, sockets, filesystems, and so forth. it performs common
- * functions such as IPC dispatch looping, file entity and handle management,
- * and client lifecycle response.
- *
- * in the future there'll be interfaces for concurrent request processing
- * through multithreading, explicit detach, and/or distributed STM.
- */
-
+/* interface of sys/io. */
 #ifndef _SNEKS_IO_H
 #define _SNEKS_IO_H
 
@@ -19,9 +8,7 @@
 #include <stdarg.h>
 #include <fcntl.h>
 #include <sys/types.h>
-
 #include <ccan/typesafe_cb/typesafe_cb.h>
-
 
 #if defined(__sneks__) || defined(__SNEKS__)
 struct sneks_io_statbuf;
@@ -30,12 +17,9 @@ struct sneks_io_statbuf;
 #error "IO_STAT not specified for this implementation"
 #endif
 
-
-/* defined by the implementor with its size specified to io_run().
- * prevents some void-pointer mistakes in e.g. read and write calls.
- */
 struct io_file_impl;
 typedef struct io_file_impl iof_t;
+extern int io_run(size_t iof_size, int argc, char *argv[]);
 
 enum lifecycle_tag {
 	CLIENT_FORK = 1,
@@ -57,9 +41,6 @@ enum lifecycle_tag {
 #define IO_CONFIRM_CLOSE	0x4
 #define IO_CONFIRM_VALID_MASK 0x7
 
-
-/* main loop. returns like main(). not longjmp() safe. */
-extern int io_run(size_t iof_size, int argc, char *argv[]);
 /* called from a callback to cause io_run() to return @rc. returns negative
  * errno on failure, 0 on success.
  */
@@ -100,7 +81,6 @@ extern int io_add_fd(pid_t pid, iof_t *file, int flags);
  */
 extern iof_t *io_get_file(pid_t pid, int fd);
 
-
 /* callback control. these take effect when the next IPC dispatch occurs after
  * the control function has returned.
  */
@@ -120,8 +100,7 @@ extern iof_t *io_get_file(pid_t pid, int fd);
  * so e.g. a close_func that destroys an auxiliary context of @client should
  * be accounted for regardless of @tag value.
  */
-extern void io_lifecycle_func(
-	void (*fn)(pid_t client, enum lifecycle_tag tag, ...));
+extern void io_lifecycle_func(void (*fn)(pid_t client, enum lifecycle_tag tag, ...));
 
 /* callbacks for operations of Sneks::IO.
  *
@@ -143,18 +122,15 @@ extern void io_close_func(int (*fn)(iof_t *file));
  * significantly shorter block transfers than half the 32-bit address space so
  * native C types are used instead.
  */
-extern void io_read_func(
-	int (*fn)(iof_t *file, uint8_t *buf, unsigned count, off_t offset));
-extern void io_write_func(
-	int (*fn)(iof_t *file, const uint8_t *buf, unsigned count, off_t offset));
+extern void io_read_func(int (*fn)(iof_t *file, uint8_t *buf, unsigned count, off_t offset));
+extern void io_write_func(int (*fn)(iof_t *file, const uint8_t *buf, unsigned count, off_t offset));
 
 /* POSIX ioctl's @request is an int but GNU/Linux specifies unsigned long, and
  * there doesn't seem to be an use case for adding and subtracting an
  * operation tag, so we'll go long for sign compatibility with the former and
  * bit-length compatibility with the latter.
  */
-extern void io_ioctl_func(
-	int (*fn)(iof_t *file, long request, va_list args));
+extern void io_ioctl_func(int (*fn)(iof_t *file, long request, va_list args));
 
 extern void io_stat_func(int (*fn)(iof_t *file, IO_STAT *st));
 
@@ -169,8 +145,7 @@ extern void io_stat_func(int (*fn)(iof_t *file, IO_STAT *st));
  * if not set or set to NULL, sys/io leaves confirm/rollback callbacks
  * entirely alone.
  */
-extern void io_confirm_func(
-	void (*fn)(iof_t *file, unsigned count, off_t offset, bool writing));
+extern void io_confirm_func(void (*fn)(iof_t *file, unsigned count, off_t offset, bool writing));
 
 /* set the fast confirm flags, IO_CONFIRM_*. defaults to all clear.
  *
@@ -187,7 +162,6 @@ extern void io_fast_confirm_flags(int flags);
  * certain ioctls).
  */
 extern void io_set_fast_confirm(void);
-
 
 /* interface of the optional Sneks::Poll module.
  *
@@ -206,15 +180,10 @@ extern void io_get_status_func(int (*fn)(iof_t *file));
  */
 extern void io_notify(iof_t *file, int epoll_mask);
 
-
 /* non-portable parts below. */
 #if defined(__sneks__) || defined(__SNEKS__)
-
 #include <l4/types.h>
-
-/* TODO: import only sneks_io_statbuf using preprocessor methods */
 #include <sneks/api/io-defs.h>
-
 
 /* vtable alteration. FILL_SNEKS_IO() sets all vtable entries for Sneks::IO in
  * @vtab to the corresponding io_impl_{name}() routines.
@@ -232,7 +201,6 @@ extern void io_notify(iof_t *file, int epoll_mask);
 		(vtab)->isatty = &io_impl_isatty; \
 	} while(false)
 
-
 /* dispatcher function. should return what its inner
  * _muidl_sneks_io_dispatch(), or derivative, call does.
  */
@@ -243,7 +211,6 @@ extern void io_notify(iof_t *file, int epoll_mask);
 			L4_Word_t (*)(const void *), (fn)), \
 		(priv))
 extern void _io_dispatch_func(L4_Word_t (*fn)(void *priv), const void *priv);
-
 
 /* implementations of Sneks::IO. these are either used in the implementor's
  * IDL vtable or wrapped through something else.
@@ -259,19 +226,14 @@ extern int io_impl_touch(int);
 extern int io_impl_stat_handle(int fd, struct sneks_io_statbuf *result_ptr);
 extern int io_impl_isatty(int);
 
-
 /* same for Sneks::Poll. */
-
 #define FILL_SNEKS_POLL(vtab) do { \
 		(vtab)->set_notify = &io_impl_set_notify; \
 		(vtab)->get_status = &io_impl_get_status; \
 	} while(false)
 
 extern int io_impl_set_notify(int *, int, int, L4_Word_t);
-extern void io_impl_get_status(
-	const int *, unsigned,
-	const uint16_t *, unsigned,
-	int *, unsigned *);
+extern void io_impl_get_status(const int *, unsigned, const uint16_t *, unsigned, int *, unsigned *);
 
 #endif
 

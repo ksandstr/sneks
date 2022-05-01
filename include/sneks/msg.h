@@ -1,26 +1,16 @@
-
-/* header file wrt the sys/crt stuff for interfacing with sysmsg, i.e. the
- * process lifecycle notification facility. also the bit reservations.
- */
-
-#ifndef __SNEKS_MSG_H__
-#define __SNEKS_MSG_H__
+#ifndef _SNEKS_MSG_H
+#define _SNEKS_MSG_H
 
 #include <stdbool.h>
 #include <l4/types.h>
 
-
-/* bits */
 #define MSGB_PROCESS_LIFECYCLE 0	/* see <sneks/process.h> */
-
 
 /* handlers should return true when the message was either disregarded or
  * processed immediately, and false if the non-filter effect of processing the
  * message was only staged to occur later.
  */
-typedef bool (*sysmsg_handler_fn)(
-	int bit, L4_Word_t *body, int length, void *priv);
-
+typedef bool (*sysmsg_handler_fn)(int bit, L4_Word_t *body, int length, void *priv);
 
 /* listen for broadcasts on 0 <= @bit < WORD_SIZE, delivering the message to
  * all @fn listening in order of listen call. @priv is passed. returns a
@@ -36,15 +26,13 @@ extern int sysmsg_listen(int bit, sysmsg_handler_fn fn, void *priv);
  * filters are not removed from a handle at close. users should do this
  * explicitly.
  */
-extern int sysmsg_add_filter(
-	int handle, const L4_Word_t *labels, int n_labels);
+extern int sysmsg_add_filter(int handle, const L4_Word_t *labels, int n_labels);
 
 /* same but removes from filter. result is undefined and likely very wrong if
  * items weren't previously added. (some subset of such fail is caught by
  * assertions, but other damage is possible.)
  */
-extern int sysmsg_rm_filter(
-	int handle, const L4_Word_t *labels, int n_labels);
+extern int sysmsg_rm_filter(int handle, const L4_Word_t *labels, int n_labels);
 
 /* send @body[0..@length-1] to listeners whose aggregate mask of listeners
  * contains all bits set in @maskp, and doesn't contain any of bits set in
@@ -52,8 +40,7 @@ extern int sysmsg_rm_filter(
  * true, 1 when it returned false, and negative errno if the message could not
  * be sent at all.
  */
-extern int sysmsg_broadcast(
-	int maskp, int maskn, const L4_Word_t *body, int length);
+extern int sysmsg_broadcast(int maskp, int maskn, const L4_Word_t *body, int length);
 
 /* discard @handle. idempotent on failure, returns negative errno or 0 on
  * success. filters are not removed from a handle at close; users should do

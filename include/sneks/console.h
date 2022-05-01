@@ -1,14 +1,7 @@
+#ifndef _SNEKS_CONSOLE_H
+#define _SNEKS_CONSOLE_H
 
-#ifndef __SNEKS_CONSOLE_H__
-#define __SNEKS_CONSOLE_H__
-
-
-extern void con_putstr(const char *string);	/* runtime provides */
-
-
-/* set stdin, stdout, and stderr up to interact with a console over
- * con_putstr(), which typically goes to the serial port.
- */
+extern void con_putstr(const char *string);	/* per runtime */
 extern int sneks_setup_console_stdio(void);
 
 #endif
