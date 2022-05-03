@@ -1,11 +1,10 @@
-/* string.c from mung; relicensed under GPLv2+ for sneks.
- *
- * 32-bit code, not known 64-bit clean; underutilizes a larger wordsize either
- * way. these routines may access extra bytes after end of string or end of
- * buffer, if those bytes do not straddle a page boundary. that's POSIX
- * cromulent, but don't locate volatiles there.
+/* these routines do cool word-at-a-time string processing and as such may
+ * access extra bytes after end of string or end of buffer, if those bytes do
+ * not straddle a page boundary. that's POSIX cromulent, but don't locate
+ * volatiles there.
  */
 #define IN_LIB_IMPL
+#include <stdlib.h>
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -18,11 +17,23 @@
 #include <ccan/array_size/array_size.h>
 #include <sneks/bitops.h>
 
+#if LONG_BIT == 32
+static inline long load_lel(const void *ptr) { return le32_to_cpu(*(const long *)ptr); }
+static inline long load_bel(const void *ptr) { return be32_to_cpu(*(const long *)ptr); }
+#elif LONG_BIT == 64
+static inline long load_lel(const void *ptr) { return le64_to_cpu(*(const long *)ptr); }
+static inline long load_bel(const void *ptr) { return be64_to_cpu(*(const long *)ptr); }
+#else
+#error what accursed evil is this
+#endif
+
+static inline unsigned long broadcast_l(long x) { return ~0ul / 255 * x; }
+
 /* returns nonzero if there are zero bytes in @x. see caveat below.
  * via https://graphics.stanford.edu/~seander/bithacks.html#ZeroInWord &c.
  */
-static inline unsigned haszero(unsigned x) {
-	return (x - 0x01010101u) & ~x & 0x80808080u;
+static inline unsigned long haszero(unsigned long x) {
+	return (x - broadcast_l(0x01)) & ~x & broadcast_l(0x80);
 }
 
 /* sets the high bit for every byte in @x that's zero. generally haszero() is
@@ -30,20 +41,20 @@ static inline unsigned haszero(unsigned x) {
  * that but its/their _location_, so there's a few more cycles of processing
  * afterward to exclude the 0x0100 -> 0x8080 case.
  */
-static inline unsigned zero_mask(unsigned x) {
-	return haszero(x) & (~(x & 0x01010101u) << 7);
+static inline unsigned long zero_mask(unsigned long x) {
+	return haszero(x) & (~(x & broadcast_l(0x01)) << 7);
 }
 
 /* same, but for a given byte. */
-static inline unsigned byte_mask(unsigned x, int c) {
-	return zero_mask(x ^ (~0u / 255 * c));
+static inline unsigned long byte_mask(unsigned long x, int c) {
+	return zero_mask(x ^ broadcast_l(c));
 }
 
 #if defined(__i386__)
 /* via uClibc */
 static void *memcpy_forward(void *restrict dst, const void *restrict src, size_t len)
 {
-	int32_t d0, d1, d2;
+	long d0, d1, d2;
 	if(__builtin_constant_p(len) && (len & 3) == 0) {
 		asm volatile ("rep; movsl\n"
 			: "=&c" (d0), "=&D" (d1), "=&S" (d2)
@@ -67,7 +78,7 @@ static void *memcpy_forward(void *restrict dst, const void *restrict src, size_t
 #else
 static void *memcpy_forward(void *restrict dst, const void *restrict src, size_t len) {
 	void *const start = dst;
-	for(; dst - start < (len & ~(sizeof(int) - 1)); dst += sizeof(int), src += sizeof(int)) *(int *restrict)dst = *(const int *restrict)src;
+	for(; dst - start < (len & ~(sizeof(long) - 1)); dst += sizeof(long), src += sizeof(long)) *(long *restrict)dst = *(const long *restrict)src;
 	for(; dst - start < len; dst++, src++) *(uint8_t *restrict)dst = *(const uint8_t *restrict)src;
 	return start;
 }
@@ -79,8 +90,8 @@ void *memcpy(void *dst, const void *src, size_t len) {
 
 static void *memcpy_backward(uint8_t *restrict d, const uint8_t *restrict s, size_t len) {
 	uint8_t *start = d;
-	for(d += len - 1, s += len - 1; d >= start && ((uintptr_t)d & (sizeof(int) - 1)); *d-- = *s--) /* that's all */ ;
-	for(; d - start >= 0; d -= sizeof(int), s -= sizeof(int)) *(int *restrict)d = *(const int *restrict)s;
+	for(d += len - 1, s += len - 1; d >= start && ((uintptr_t)d & (sizeof(long) - 1)); *d-- = *s--) /* >:3 rawr i'm a lion */ ;
+	for(; d - start >= 0; d -= sizeof(long), s -= sizeof(long)) *(long *restrict)d = *(const long *restrict)s;
 	return start;
 }
 
@@ -90,17 +101,16 @@ void *memmove(void *dst, const void *src, size_t len) {
 
 void *memset(void *p, int c, size_t len) {
 	void *const start = p;
-	for(; p - start < len && ((uintptr_t)p & (sizeof(int) - 1)); p++) *(uint8_t *)p = c;
-	for(int w = 0x01010101 * c; p - start < len; p += sizeof(int)) *(int *)p = w;
+	for(; p - start < len && ((uintptr_t)p & (sizeof(long) - 1)); p++) *(uint8_t *)p = c;
+	for(long w = broadcast_l(c); p - start < len; p += sizeof(long)) *(long *)p = w;
 	return start;
 }
 
 int memcmp(const void *s1, const void *s2, size_t n)
 {
-	size_t major = n & ~3u;
-	for(size_t i = 0, w = major / 4; i < w; i++) {
-		unsigned long a = be32_to_cpu(*(unsigned long *)(s1 + i * 4)), b = be32_to_cpu(*(unsigned long *)(s2 + i * 4));
-		long c = a - b;
+	size_t major = n & ~(sizeof(long) - 1);
+	for(size_t i = 0, w = major / sizeof(long); i < w; i++) {
+		long a = load_bel(s1 + i * sizeof(long)), b = load_bel(s2 + i * sizeof(long)), c = a - b;
 		if(c != 0) return c;
 	}
 	const uint8_t *a = s1, *b = s2;
@@ -130,11 +140,11 @@ void *memchr(const void *ptr, int c, size_t n)
 {
 	const void *p = ptr;
 	for(; p - ptr < n && ((uintptr_t)p & (sizeof(long) - 1)); p++) {
-		if(*(const char *)p == c) return (void *)p;
+		if(*(const unsigned char *)p == c) return (void *)p;
 	}
 	for(; p - ptr < n; p += sizeof(long)) {
-		unsigned long x = le32_to_cpu(*(const unsigned long *)p), found = byte_mask(x, c);
-		if(found) {
+		long found = byte_mask(load_lel(p), c);
+		if(found != 0) {
 			void *spot = (void *)p + ffsl(found) / 8 - 1;
 			return spot - ptr < n ? spot : NULL;
 		}
@@ -151,32 +161,30 @@ int strncmp(const char *a, const char *b, size_t max)
 	if(a == b) return 0;
 	/* the word-at-a-time optimization requires that long loads are valid,
 	 * i.e. that they don't cross a 4k boundary in memory. so the loop
-	 * consists of two parts: the one that runs up to such a boundary in
-	 * either operand, and one that runs over it.
+	 * proceeds in segments that lead up to such a boundary in either operand,
+	 * first doing words and then bytes and not caring about fetch alignment.
 	 */
-	size_t pos = 0;
-	while(pos < max) {
-		int bytes = min_t(int, max - pos, min(until_page(&a[pos]), until_page(&b[pos]))), words = bytes / sizeof(int);
-		for(; words > 0; words--, pos += sizeof(int)) {
-			int la = be32_to_cpu(*(const int *)&a[pos]), lb = be32_to_cpu(*(const int *)&b[pos]);
+	for(size_t pos = 0; pos < max;) {
+		int bytes = min_t(int, max - pos, min(until_page(&a[pos]), until_page(&b[pos]))), words = bytes / sizeof(long);
+		for(; words > 0; words--, pos += sizeof(long)) {
+			long la = load_bel(a + pos), lb = load_bel(b + pos);
 			if((haszero(la) | haszero(lb)) == 0) {
 				if(la - lb != 0) return la - lb; /* by content */
 			} else {
-				unsigned za = zero_mask(la), zb = zero_mask(lb), m = ((1u << MSB(za | zb)) >> 7) * 0xff;
+				long za = zero_mask(la), zb = zero_mask(lb), m = ((1u << MSB(za | zb)) >> 7) * 0xff;
 				m |= m << 8; m |= m << 16;
-				int c = (la & m) - (lb & m);
+				long c = (la & m) - (lb & m);
 				if(c != 0) return c;		/* by content */
 				return (za & m) - (zb & m);	/* by length */
 			}
 		}
 		/* then byte at a time. */
-		for(int tail = bytes % sizeof(int); tail > 0; pos++, tail--) {
+		for(int tail = bytes % sizeof(long); tail > 0; pos++, tail--) {
 			int c = (int)a[pos] - b[pos];
 			if(c != 0) return c;
 			if(a[pos] == '\0') return 0;
 		}
 	}
-
 	return 0;
 }
 
@@ -219,7 +227,7 @@ size_t strnlen(const char *str, size_t max)
 		if(*s == '\0') return s - str;
 	}
 	for(; s - str < max; s += sizeof(long)) {
-		unsigned long x = le32_to_cpu(*(unsigned long *)s);
+		long x = load_lel(s);
 		if(haszero(x)) return min_t(size_t, max, s - str + ffsl(zero_mask(x)) / 8 - 1);
 	}
 	return max;
@@ -245,7 +253,7 @@ char *strchrnul(const char *s, int c)
 		if(*s == c || *s == '\0') return (char *)s;
 	}
 	for(;; s += sizeof(long)) {
-		unsigned long x = le32_to_cpu(*(unsigned long *)s), found = byte_mask(x, c), zero = zero_mask(x);
+		long x = load_lel(s), found = byte_mask(x, c), zero = zero_mask(x);
 		if(found | zero) return (char *)s + ffsl(found | zero) / 8 - 1;
 	}
 }
@@ -283,10 +291,10 @@ char *strstr(const char *haystack, const char *needle)
 				break;
 			}
 		}
-		if(found) return (char *)haystack;
+		if(found) break;
 		haystack = strchr(haystack + 1, needle[0]);
 	} while(haystack != NULL);
-	return NULL;
+	return (char *)haystack;
 }
 
 static char *strscan(const char *s, const char *set, bool accept)
