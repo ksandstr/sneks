@@ -14,7 +14,6 @@ typedef struct __jmp_buf_tag {
 	unsigned long __ss[128 / sizeof(long)];	/* same # as sigset_t size */
 } jmp_buf[1];
 
-
 extern int setjmp(jmp_buf env);
 extern _Noreturn void longjmp(jmp_buf env, int val);
 

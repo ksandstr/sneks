@@ -1,8 +1,6 @@
+/* AT_* values from glibc 2.32, LGPL 2.1+ preserved. */
 #ifndef _SYS_AUXV_H
 #define _SYS_AUXV_H
-
-
-/* AT_* values from glibc 2.32, LGPL 2.1+ preserved. */
 
 /* Legal values for a_type (entry type).  */
 
@@ -78,7 +76,6 @@
 
 #define AT_MINSIGSTKSZ		51 /* Stack needed for signal delivery
 				      (AArch64).  */
-
 
 #ifdef _GNU_SOURCE
 extern unsigned long getauxval(unsigned long name);

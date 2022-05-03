@@ -1,9 +1,7 @@
-
 #ifndef _ERRNO_H
 #define _ERRNO_H
 
-/* pull error codes from wherever, as required... */
-
+/* codes added lazily */
 #define EPERM	1	/* operation not permitted */
 #define ENOENT	2	/* no such file or directory */
 #define ESRCH	3	/* no such process */
@@ -39,7 +37,6 @@
 #define EOVERFLOW 75	/* value too large for defined data type */
 #define ETIMEDOUT 110	/* connection timed out */
 
-
 /* TODO: remove this once CCAN intmap no longer insists that errno belongs to
  * it entirely.
  */
@@ -47,7 +44,7 @@
 extern int *__errno_location(void);
 #define errno (*__errno_location())
 #elif !defined(CCAN_INTMAP_WAS_BORN_TOO_EARLY_NOT_TO_BE_A_PIECE_OF_FRIENDLY_SNOT)
-#error "you done fucked up!"
+#error you done fukt up
 #endif
 
 #ifdef _GNU_SOURCE

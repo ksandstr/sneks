@@ -1,7 +1,5 @@
-
 #ifndef _SYS_POLL_H
 #define _SYS_POLL_H
-
 
 #define POLLIN 0x001
 #define POLLPRI 0x002
@@ -19,6 +17,5 @@ struct pollfd {
 };
 
 extern int poll(struct pollfd *fds, nfds_t nfds, int timeout);
-
 
 #endif

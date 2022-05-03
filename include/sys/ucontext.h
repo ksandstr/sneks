@@ -1,11 +1,9 @@
-
 #ifndef _SYS_UCONTEXT_H
 #define _SYS_UCONTEXT_H
 
 #ifndef __i386__
 #error "sneks <sys/ucontext.h> isn't valid for non-i386"
 #endif
-
 
 /* from musl <arch/i386/bits/signal.h> */
 #ifdef _GNU_SOURCE

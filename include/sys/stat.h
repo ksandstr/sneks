@@ -22,11 +22,6 @@
 #define S_ISLNK(m) (((m) & S_IFMT) == S_IFLNK)
 #define S_ISSOCK(m) (((m) & S_IFMT) == S_IFSOCK)
 
-/* mode bits
- *
- * (TODO: spec these out via path.idl, though for realsies these bits are Unix
- * canon since forever.)
- */
 #define S_IRUSR 0400
 #define S_IWUSR 0200
 #define S_IXUSR 0100
@@ -42,13 +37,8 @@
 #define S_IXOTH 0001	/* beware his fiery breath! */
 #define S_IRWXO (S_IROTH | S_IWOTH | S_IXOTH)
 
-
 struct stat
 {
-	/* TODO: get <struct sneks_io_statbuf> from api/io-defs.h using a "sole
-	 * import" preprocessor method, stick it in here, and #define all st_foo
-	 * fields as "_statbuf.foo".
-	 */
 	dev_t st_dev;
 	ino_t st_ino;
 	mode_t st_mode;
@@ -60,17 +50,14 @@ struct stat
 	blksize_t st_blksize;
 	blkcnt_t st_blocks;
 	struct timespec st_atim, st_mtim, st_ctim;
-
 #define st_atime st_atim.tv_sec
 #define st_mtime st_mtim.tv_sec
 #define st_ctime st_ctim.tv_sec
 };
 
-
 extern int stat(const char *pathname, struct stat *statbuf);
 extern int fstat(int fd, struct stat *statbuf);
 extern int lstat(const char *pathname, struct stat *statbuf);
-
 extern int fstatat(int dirfd, const char *pathname, struct stat *statbuf, int flags);
 
 #endif

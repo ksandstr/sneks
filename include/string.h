@@ -1,5 +1,5 @@
 #ifndef _STRING_H
-#define _STRING_H 1
+#define _STRING_H
 
 #include <stddef.h>
 
@@ -31,10 +31,10 @@ extern __pure size_t strcspn(const char *s, const char *reject);
 extern char *strdup(const char *str);
 extern char *strndup(const char *str, size_t n);
 #ifdef _GNU_SOURCE
-#define strdupa(__str) ({ char *__s = (__str); int __l = strlen(__s); \
-	__t = __builtin_alloca(__l + 1); memcpy(__t, __s, __l + 1); __t; })
-#define strndupa(__str, __n) ({ char *__s = (__str); int __l = strnlen(__s, (__n)); \
-	__t = __builtin_alloca(__l + 1); memcpy(__t, __s, __l + 1); __t; })
+#define strdupa(__str) ({ const char *__s = (__str); int __l = strlen(__s); \
+	char *__t = __builtin_alloca(__l + 1); memcpy(__t, __s, __l + 1); __t; })
+#define strndupa(__str, __n) ({ const char *__s = (__str); int __l = strnlen(__s, (__n)); \
+	char *__t = __builtin_alloca(__l + 1); memcpy(__t, __s, __l); __t[__l] = '\0'; __t; })
 extern int ffsl(long);
 extern int ffsll(long long);
 #define ffsl(__l) __builtin_ffsl((__l))

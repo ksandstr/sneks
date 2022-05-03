@@ -3,9 +3,7 @@
 
 #include <stdint.h>
 #include <sys/types.h>
-
 #include <bits/signal.h>
-
 
 typedef struct __sigset_t {
 	unsigned long __bits[128 / sizeof(long)];
@@ -15,14 +13,11 @@ typedef int sig_atomic_t;
 typedef void (*__sighandler_t)(int);
 typedef __sighandler_t sighandler_t;
 
-
-typedef struct __stack_s
-{
+typedef struct __stack_s {
 	void *ss_sp;
 	size_t ss_size;
 	int ss_flags;
 } stack_t;
-
 
 /* straight outta the Linux sigaction(2) man page, with the "since Linux
  * x.y.z" ones dropped and untested ones if'd out.
@@ -44,15 +39,12 @@ typedef struct __siginfo_s
 #endif
 } siginfo_t;
 
-
-struct sigaction
-{
+struct sigaction {
 	__sighandler_t sa_handler;
 	void (*sa_sigaction)(int, siginfo_t *, void *);
 	sigset_t sa_mask;
 	int sa_flags;
 };
-
 
 #define SA_NOCLDSTOP 1			/* don't send SIGCHLD when children stop. */
 #define SA_NOCLDWAIT 2			/* don't create zombie on child death. */
@@ -82,10 +74,7 @@ struct sigaction
 #define SIG_DFL ((__sighandler_t)0)
 #define SIG_IGN ((__sighandler_t)1)
 
-
-extern int sigaction(int signum,
-	const struct sigaction *act, struct sigaction *oldact);
-
+extern int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
 extern sighandler_t signal(int signum, sighandler_t handler);
 
 extern int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
@@ -95,14 +84,11 @@ extern int sigsuspend(const sigset_t *mask);
 extern int kill(pid_t __pid, int __sig);
 extern int raise(int __sig);
 
-
 /* sigsetops(3) */
-
 extern int sigemptyset(sigset_t *set);
 extern int sigfillset(sigset_t *set);
 extern int sigaddset(sigset_t *set, int signum);
 extern int sigdelset(sigset_t *set, int signum);
 extern int sigismember(sigset_t *set, int signum);
-
 
 #endif

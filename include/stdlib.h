@@ -1,6 +1,3 @@
-
-/* derived from mung fake_stdio/stdlib.h. */
-
 #ifndef _STDLIB_H
 #define _STDLIB_H
 
@@ -9,10 +6,8 @@
 #include <math.h>
 #include <sys/wait.h>
 
-
 #define EXIT_SUCCESS 0
 #define EXIT_FAILURE 1
-
 
 extern void *malloc(size_t size) __attribute__((malloc));
 extern void free(void *ptr);
@@ -26,7 +21,6 @@ static inline void *aligned_alloc(size_t alignment, size_t size) {
 	int n = posix_memalign(&ptr, alignment, size);
 	return n == 0 ? ptr : NULL;
 }
-
 
 extern _Noreturn void abort(void);
 extern _Noreturn void exit(int status);
@@ -60,13 +54,7 @@ extern double strtod(const char *restrict str, char **restrict endptr);
 extern long a64l(const char *str64);
 extern char *l64a(long value);
 
-extern void qsort(
-	void *data, size_t count, size_t size,
-	int (*compare_fn)(const void *, const void *));
-
-extern void *bsearch(
-	const void *needle, const void *haystack, size_t count, size_t size,
-	int (*compare_fn)(const void *, const void *));
-
+extern void qsort(void *data, size_t count, size_t size, int (*compare_fn)(const void *, const void *));
+extern void *bsearch(const void *needle, const void *haystack, size_t count, size_t size, int (*compare_fn)(const void *, const void *));
 
 #endif
