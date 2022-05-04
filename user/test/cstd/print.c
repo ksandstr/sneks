@@ -305,7 +305,7 @@ DECLARE_TEST("cstd:print", truncated_integer);
 /* non-decimal unsigned conversions */
 START_TEST(nondecimal_u)
 {
-	plan_tests(37);
+	plan_tests(41);
 	ok1(test_fmt("0", "%o", 0));
 	ok1(test_fmt("777", "%o", 0777));
 	ok1(test_fmt("0777", "%#o", 0777));
@@ -335,6 +335,10 @@ START_TEST(nondecimal_u)
 	ok1(test_fmt("0", "%#x", 0));
 	ok1(test_fmt("1", "% x", 1));
 	ok1(test_fmt("1", "%+x", 1));
+	ok1(test_fmt("0xffffffff", "%#zx", (size_t)0xfffffffful));
+	ok1(test_fmt("0xffffffff", "%#jx", (uintmax_t)0xfffffffful));
+	ok1(test_fmt("0xffffffff", "%#tx", (ptrdiff_t)0xfffffffful));
+	ok1(test_fmt("0xffffffff", "%#x", 0xffffffffu));
 	skip_start(test_fmt("%b", "%b", 0), 8, "no support for C23 %%b conversion") {
 		ok1(test_fmt("0", "%b", 0));
 		ok1(test_fmt("10010110", "%b", 0x96));

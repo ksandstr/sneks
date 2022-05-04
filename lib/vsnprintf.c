@@ -179,13 +179,10 @@ int vsnprintf(char *restrict str, size_t size, const char *restrict fmt, va_list
 					type = bits < 64 ? 'd' : 'L';
 				}
 				switch(type) {
-					case 'j': val = va_arg(ap, intmax_t); break;
-					case 'z': val = va_arg(ap, ssize_t); break;
-					case 't': val = va_arg(ap, ptrdiff_t); break;
-					case 'c': case 'h': case 'd': case 'l':
+					case 'j': case 'L': val = va_arg(ap, unsigned long long); break;
+					case 't': case 'z': case 'c': case 'h': case 'd': case 'l':
 						if(!p.is_signed) val = va_arg(ap, unsigned int); else val = va_arg(ap, int);
 						break;
-					case 'L': val = va_arg(ap, unsigned long long); break;
 					default: val = -1;
 				}
 				pos += fmt_ull(pos < max ? str + pos : NULL, max - pos, val, &p);
