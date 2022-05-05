@@ -1,8 +1,6 @@
-
 /* bits and bobs of userspace runtime that aren't exported to the programs
  * it's linked to. initializers and so forth.
  */
-
 #ifndef _SNEKS_USER_CRT_PRIVATE_H
 #define _SNEKS_USER_CRT_PRIVATE_H
 
@@ -13,13 +11,10 @@
 #include <errno.h>
 #include <ucontext.h>
 #include <ccan/intmap/intmap.h>
-
 #include <l4/types.h>
 #include <l4/kip.h>
 
-
 #define MAX_FD ((1 << 15) - 1)	/* TODO: get from sysconf(), stash somewhere */
-
 
 struct fd_bits {
 	L4_ThreadId_t server;
@@ -42,14 +37,14 @@ typedef struct {
 	};
 } auxv_t;
 
-
 struct __sysinfo;
-
+typedef SINTMAP(struct fd_bits *) fd_map_t;
 
 extern L4_KernelInterfacePage_t *__the_kip;
 extern struct __sysinfo *__the_sysinfo;
-
 extern L4_ThreadId_t __main_tid;
+extern int __l4_last_errorcode, __cwd_fd;
+extern fd_map_t fd_map;
 
 /* turns a muidl "positive for L4 ErrorCode values, negative for errno, zero
  * for success" style result into a written errno and a {0, -1} return value.
@@ -60,16 +55,7 @@ extern L4_ThreadId_t __main_tid;
 extern int __idl2errno(int n, ...);
 #define NTOERR(...) __idl2errno(__VA_ARGS__, 0)
 
-extern int __l4_last_errorcode;
-
-typedef SINTMAP(struct fd_bits *) fd_map_t;
-extern fd_map_t fd_map;
-
-extern int __cwd_fd;
-
-
 extern void __file_init(const size_t *pp);
-
 
 /* NULL when @fd isn't valid. */
 static inline struct fd_bits *__fdbits(int fd) {
@@ -82,18 +68,12 @@ static inline struct fd_bits *__fdbits(int fd) {
  */
 extern int __create_fd(int fd, L4_ThreadId_t server, int handle, int flags);
 
-
 /* from path.c */
-
-extern int __resolve(
-	struct resolve_out *result,
-	int dirfd, const char *pathname, int flags);
-
+extern int __resolve(struct resolve_out *result, int dirfd, const char *pathname, int flags);
 
 /* from sigaction.c */
 extern void __sig_bottom(void);
-extern void __attribute__((regparm(3))) __sig_invoke(
-	int sig, ucontext_t *uctx);
+extern void __attribute__((regparm(3))) __sig_invoke(int sig, ucontext_t *uctx);
 /* used from syscall wrappers that may wait on a receive phase for an extended
  * period and have an useful rollback path (waitid(2) under ~WNOHANG), or
  * require receive-phase signal interrupts as part of normal operation
@@ -106,25 +86,19 @@ extern void __attribute__((regparm(3))) __sig_invoke(
 extern void __permit_recv_interrupt(void);
 extern void __forbid_recv_interrupt(void);
 
-
 /* from threads.c (see comment in that file) */
 
 /* returns muidl stub return. fills in *@tid_p. */
-extern int __crt_thread_create(
-	L4_ThreadId_t *tid_p, void (*fn)(void *), void *param_ptr);
+extern int __crt_thread_create(L4_ThreadId_t *tid_p, void (*fn)(void *), void *param_ptr);
 extern void __crt_thread_join(L4_ThreadId_t tid);
-
 
 /* from uid.c */
 extern void __init_crt_cached_creds(const size_t *flat_auxv);
 
-
 /* from setjmp-32.S */
 extern noreturn void __longjmp_actual(jmp_buf, int);
 
-
 /* from siginvoke-32.S */
 extern void __attribute__((regparm(3))) __invoke_sig_sync(int);
-
 
 #endif
