@@ -344,7 +344,7 @@ end:
 		L4_ThreadId_t sender;
 		L4_MsgTag_t tag = L4_Wait_Timeout(A_SHORT_NAP, &sender);
 		if(L4_IpcFailed(tag) || pidof_NP(sender) != oth_pid) {
-			diag("%s: child process didn't sync, ec=%lu", L4_ErrorCode());
+			diag("%s: child process didn't sync, ec=%lu", __func__, L4_ErrorCode());
 		} else {
 			int st, dead = wait(&st);
 			if(dead != oth_pid || !WIFEXITED(st) || WEXITSTATUS(st) != EXIT_SUCCESS) {

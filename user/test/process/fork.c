@@ -32,11 +32,7 @@ START_LOOP_TEST(fork_basic, iter, 0, 1)
 		L4_ThreadId_t sender;
 		L4_MsgTag_t tag = L4_Wait_Timeout(L4_TimePeriod(50 * 1000), &sender);
 		L4_Word_t value; L4_StoreMR(1, &value);
-		if(!ok(L4_IpcSucceeded(tag) && value == 666,
-			"correct ipc from child"))
-		{
-			diag("ec=%#lu", L4_ErrorCode());
-		}
+		if(!ok(L4_IpcSucceeded(tag) && value == 666, "correct ipc from child")) diag("ec=%lu", L4_ErrorCode());
 	} skip_end;
 
 	if(!active_exit) L4_Sleep(L4_TimePeriod(10 * 1000));

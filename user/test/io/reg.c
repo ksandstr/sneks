@@ -79,9 +79,7 @@ START_TEST(open_and_seek_test_file)
 	int fd = open(testfile_path, O_RDONLY);
 	skip_start(!ok(fd > 0, "open(2)"), 4, "no file (errno=%d)", errno) {
 		off_t cur = lseek(fd, 10, SEEK_SET);
-		if(!ok(cur == 10, "lseek(2)")) {
-			diag("cur=%d, errno=%d", cur, errno);
-		}
+		if(!ok(cur == 10, "lseek(2)")) diag("cur=%ld, errno=%d", (long)cur, errno);
 
 		char buffer[100];
 		memset(buffer, 0, sizeof buffer);

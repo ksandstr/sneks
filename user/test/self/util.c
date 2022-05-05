@@ -51,7 +51,7 @@ START_TEST(crt_thread_basic)
 
 	L4_ThreadId_t tid;
 	int n = __crt_thread_create(&tid, &set_int_fn, value);
-	if(!ok(n == 0, "__crt_thread_create")) diag("n=%d");
+	if(!ok(n == 0, "__crt_thread_create")) diag("n=%d", n);
 	diag("tid=%lu:%lu", L4_ThreadNo(tid), L4_Version(tid));
 
 	__crt_thread_join(tid);

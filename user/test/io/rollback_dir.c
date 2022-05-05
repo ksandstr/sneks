@@ -97,7 +97,7 @@ START_TEST(rollback_seekdir)
 	if(!ok1(init_error == 0)) {
 		diag("readdir() error %d", init_error);
 	}
-	diag("startpos=%d, testpos=%d", startpos, testpos);
+	diag("startpos=%lld, testpos=%lld", startpos, testpos);
 
 	/* gather reference data */
 	int n = __dir_seekdir(bits->server, bits->handle, &(off_t){ startpos });
@@ -159,7 +159,7 @@ START_LOOP_TEST(rollback_getdents, iter, 0, 1)
 	} else {
 		seekpos = 0;
 	}
-	if(!ok(seekpos >= 0, "valid seekpos")) diag("seekpos=%d", seekpos);
+	if(!ok(seekpos >= 0, "valid seekpos")) diag("seekpos=%lld", seekpos);
 
 	/* gather reference data */
 	int n = __dir_seekdir(bits->server, bits->handle, &(off_t){ seekpos });
