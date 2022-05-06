@@ -1,4 +1,7 @@
 #include <string.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <ccan/str/str.h>
 #include <sneks/test.h>
 
 /* a case of known breakage from mung of yore, iterated over various
@@ -21,3 +24,20 @@ START_LOOP_TEST(strcmp_breakage_TyTiPtva, iter, 0, 7)
 END_TEST
 
 DECLARE_TEST("cstd:str", strcmp_breakage_TyTiPtva);
+
+START_TEST(strscpy_basic)
+{
+	plan_tests(7);
+	char small[10];
+	ok1(strscpy(small, "very large string", sizeof small) == -E2BIG);
+	ok1(small[sizeof small - 1] == '\0');
+	ok1(strlen(small) == sizeof small - 1);
+	ok1(streq(small, "very larg"));
+	char large[64];
+	ok1(strscpy(large, "smaller string", sizeof large) == 14);
+	ok1(large[14] == '\0');
+	ok1(streq(large, "smaller string"));
+}
+END_TEST
+
+DECLARE_TEST("cstd:str", strscpy_basic);
