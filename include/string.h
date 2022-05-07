@@ -59,6 +59,7 @@ extern int ffsll(long long);
 #endif
 
 /* such nonstandard, very clever, wow. */
+extern void *memdup(const void *, size_t);
 /* returns @l. undefined results when @l[0..n-1] and @r[0..n-1] overlap. */
 extern void *memswap(void *l, void *r, size_t n);
 

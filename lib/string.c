@@ -103,6 +103,12 @@ void *memswap(void *left, void *right, size_t n)
 	return left;
 }
 
+void *memdup(const void *mem, size_t sz) {
+	void *ptr = malloc(sz);
+	if(ptr != NULL) memcpy(ptr, mem, sz);
+	return ptr;
+}
+
 void *memchr(const void *ptr, int c, size_t n)
 {
 	const void *p = ptr;
