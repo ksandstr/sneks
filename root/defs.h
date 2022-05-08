@@ -95,13 +95,9 @@ extern void send_phys_to_sysmem(
 
 extern L4_ThreadId_t spawn_systask_from_initrd(const char *path, ...);
 
-
 /* from thrd.c */
-extern L4_ThreadId_t tidof_NP(thrd_t t);
-extern void init_root_thrd(void);
 extern void rt_thrd_tests(void);
-extern int next_early_utcb_slot;	/* for add_systask() */
-
+extern int next_early_utcb_slot;
 
 /* from random.c */
 extern void random_init(uint64_t x);

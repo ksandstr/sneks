@@ -11,7 +11,7 @@ __return_from_main:
 	int $1
 	jmp __return_from_main
 
-# NOTE: same as STACK_SIZE in root/thrd.c
+# NOTE: same as 1 << __thrd_stksize_log2 in root/thrd.c; keep in sync!
 	.bss
 	.align 8192
 	.space 8192

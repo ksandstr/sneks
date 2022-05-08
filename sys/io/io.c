@@ -30,7 +30,6 @@
 #include <sneks/bitops.h>
 #include <sneks/systask.h>
 #include <sneks/rollback.h>
-#include <sneks/thread.h>
 #include <sneks/msg.h>
 #include <sneks/api/io-defs.h>
 #include <sneks/io.h>
@@ -1013,7 +1012,7 @@ static void spawn_poke_thrd(void)
 	L4_Accept(L4_UntypedWordsAcceptor);
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xbe7a, .X.u = 1 }.raw);
 	L4_LoadMR(1, L4_MyLocalId().raw);
-	L4_MsgTag_t tag = L4_Lcall(thrd_to_tid(poke_thrd));
+	L4_MsgTag_t tag = L4_Lcall(tidof(poke_thrd));
 	if(L4_IpcFailed(tag)) {
 		log_crit("can't sync with poke thread, ec=%lu", L4_ErrorCode());
 		abort();
@@ -1132,7 +1131,7 @@ static bool lifecycle_handler_fn(
 	if(poke) {
 		L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1, .X.label = 0xbaab }.raw);
 		L4_LoadMR(1, main_tid.raw);
-		L4_MsgTag_t tag = L4_Reply(thrd_to_tid(poke_thrd));
+		L4_MsgTag_t tag = L4_Reply(tidof(poke_thrd));
 		if(L4_IpcFailed(tag) && L4_ErrorCode() != 2) {
 			log_err("failed lifecycle poke, ec=%lu", L4_ErrorCode());
 			/* causes delayed exit processing, i.e. SIGPIPE etc. are only
@@ -1156,7 +1155,7 @@ void io_set_fast_confirm(void)
 	/* it'd be nice if there were (say) a muidl interface for replying
 	 * once and returning to confirm immediately. for now this'll do.
 	 */
-	L4_ThreadId_t poke_tid = thrd_to_tid(poke_thrd);
+	L4_ThreadId_t poke_tid = tidof(poke_thrd);
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xbaab, .X.u = 1 }.raw);
 	L4_LoadMR(1, main_tid.raw);
 	L4_Reply(poke_tid);
@@ -1249,7 +1248,7 @@ int io_quit(int rc)
 	/* utilize the poke thread. */
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xff00 | (rc & 0xff), .X.u = 1 }.raw);
 	L4_LoadMR(1, main_tid.raw);
-	L4_MsgTag_t tag = L4_Reply(thrd_to_tid(poke_thrd));
+	L4_MsgTag_t tag = L4_Reply(tidof(poke_thrd));
 	if(L4_IpcSucceeded(tag)) return 0;
 	else {
 		L4_Word_t ec = L4_ErrorCode();

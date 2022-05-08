@@ -32,6 +32,7 @@
 #include <sneks/ipc.h>
 #include <sneks/mm.h>
 #include <sneks/hash.h>
+#include <sneks/thrd.h>
 #include <sneks/bitops.h>
 #include <sneks/process.h>
 #include <sneks/systask.h>
@@ -1563,7 +1564,7 @@ int main(void)
 	printf("hello, world!\n");
 	the_kip = L4_GetKernelInterface();
 	sigma0_tid = L4_Pager();
-	init_root_thrd();
+	__thrd_init();
 	rename_first_threads();
 	random_init(rdtsc());
 

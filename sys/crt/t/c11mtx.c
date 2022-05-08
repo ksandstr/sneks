@@ -1,18 +1,13 @@
-
 /* basic tests on the C11 mtx_*() interfaces. many of these tests were adapted
  * near-verbatim from self_suite in mung's testbench; copypasta warnings
  * apply.
  */
-
 #include <threads.h>
 #include <l4/types.h>
 #include <l4/ipc.h>
-#include <sneks/thread.h>
 #include <sneks/test.h>
 
-
 #define QUIT_LABEL 0xdead
-
 
 START_TEST(init_plain_mutex)
 {
@@ -122,7 +117,7 @@ START_LOOP_TEST(conflict_plain_mutex, iter, 0, 1)
 	thrd_t oth_thrd;
 	n = thrd_create(&oth_thrd, &lock_and_hold_fn, (void *)mtx);
 	fail_unless(n == thrd_success);
-	L4_ThreadId_t oth = thrd_to_tid(oth_thrd);
+	L4_ThreadId_t oth = tidof_NP(oth_thrd);
 	bool quit_ok = send_quit(oth);
 	ok(!quit_ok, "other thread blocks");
 

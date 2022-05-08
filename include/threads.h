@@ -32,18 +32,21 @@ typedef void (*tss_dtor_t)(void *);
 typedef int tss_t;	/* may as well. */
 
 typedef int (*thrd_start_t)(void *);
-typedef int thrd_t;
+typedef long thrd_t;
 
 #define ONCE_FLAG_INIT 0
 
 typedef _Atomic int once_flag;
 extern void call_once(once_flag *flag, void (*func)(void));
 
-typedef int thrd_t;
 extern thrd_t thrd_current(void);
 extern int thrd_create(thrd_t *thr, thrd_start_t fn, void *arg);
 extern _Noreturn void thrd_exit(int res);
 extern int thrd_join(thrd_t thr, int *res_p);
+extern int thrd_equal(thrd_t, thrd_t);
+extern int thrd_sleep(const struct timespec *, struct timespec *);
+extern void thrd_yield(void);
+extern int thrd_detach(thrd_t);
 
 extern int mtx_init(mtx_t *mtx, int type);
 extern void mtx_destroy(mtx_t *mtx);
@@ -63,5 +66,11 @@ extern int tss_create(tss_t *key, tss_dtor_t dtor);
 extern void tss_delete(tss_t key);
 extern void *tss_get(tss_t key);
 extern void tss_set(tss_t key, void *ptr);
+
+#if defined(__sneks__) || defined(__SNEKS__)
+#include <l4/types.h>
+extern L4_ThreadId_t tidof_NP(thrd_t);
+#define tidof(thrd) tidof_NP((thrd))
+#endif
 
 #endif

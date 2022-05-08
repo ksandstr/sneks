@@ -11,7 +11,6 @@
 #include <l4/thread.h>
 #include <l4/ipc.h>
 #include <sneks/systask.h>
-#include <sneks/thread.h>
 #include <sneks/msg.h>
 #include <sneks/sys/msg-defs.h>
 #include <sneks/sys/info-defs.h>
@@ -59,7 +58,7 @@ static COLD void initialize(void)
 	}
 	L4_Accept(L4_UntypedWordsAcceptor);
 	L4_LoadMR(0, 0);
-	L4_MsgTag_t tag = L4_Lcall(thrd_to_tid(receiver));
+	L4_MsgTag_t tag = L4_Lcall(tidof_NP(receiver));
 	if(L4_IpcFailed(tag)) {
 		log_crit("can't sync with receiver, ec=%lu", L4_ErrorCode());
 		abort();

@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdnoreturn.h>
@@ -15,6 +14,7 @@
 #include <l4/kdebug.h>
 
 #include <sneks/mm.h>
+#include <sneks/thrd.h>
 #include <sneks/process.h>
 #include <sneks/console.h>
 #include <sneks/systask.h>
@@ -25,10 +25,11 @@
 
 #include "private.h"
 
-
 static tss_t errno_key;
 static uintptr_t current_brk = 0, heap_bottom = 0;
 
+const int __thrd_stksize_log2 = 16;
+L4_ThreadId_t __uapi_tid = L4_anythread;
 
 void __assert_failure(
 	const char *cond, const char *file, unsigned int line, const char *fn)
@@ -68,6 +69,13 @@ int *__errno_location(void)
 	return val;
 }
 
+int __thrd_new(L4_ThreadId_t *res) {
+	return __proc_create_thread(__uapi_tid, &res->raw);
+}
+
+int __thrd_destroy(L4_ThreadId_t tid) {
+	return __proc_remove_thread(__uapi_tid, tid.raw, L4_LocalIdOf(tid).raw);
+}
 
 noreturn void panic(const char *msg)
 {
@@ -233,35 +241,26 @@ int __crt1_entry(void)
 {
 	void *kip = L4_GetKernelInterface();
 	int32_t *argc_p = (int32_t *)(kip - PAGE_SIZE), argc = *argc_p;
-	char *argbase = (char *)&argc_p[1], *argmem = argbase;
-	char *argv[argc + 1];
-	for(int i=0; i <= argc; i++) {
+	char *argbase = (char *)&argc_p[1], *argmem = argbase, *argv[argc + 1];
+	for(int i = 0; i <= argc; i++) {
 		argv[i] = argmem;
 		argmem += strlen(argmem) + 1;
 	}
 	int arglen = argmem - argbase;
 	char copy[arglen + 1];
 	memcpy(copy, argbase, arglen + 1);
-	for(int i=0; i <= argc; i++) argv[i] += &copy[0] - argbase;
-
-	/* throw away argmem */
-	for(uintptr_t addr = (uintptr_t)argc_p;
-		addr <= (uintptr_t)argmem;
-		addr += PAGE_SIZE)
-	{
-		uint16_t rv;
-		__sysmem_send_virt(L4_Pager(), &rv, addr, L4_nilthread.raw, 0);
-		/* disregard errors. */
+	for(int i = 0; i <= argc; i++) argv[i] += &copy[0] - argbase;
+	/* throw away argmem, disregarding errors */
+	for(uintptr_t addr = (uintptr_t)argc_p; addr <= (uintptr_t)argmem; addr += PAGE_SIZE) {
+		__sysmem_send_virt(L4_Pager(), &(uint16_t){ 0 }, addr, L4_nilthread.raw, 0);
 	}
-
 	int n = sneks_setup_console_stdio();
-	if(n < 0) {
-		/* blind dumb dead! */
-		return -n;
-	}
-
+	if(n < 0) return -n;
+	struct sneks_uapi_info ui;
+	if(__info_uapi_block(L4_Pager(), &ui) != 0) abort();
+	__uapi_tid.raw = ui.service;
+	assert(!L4_IsNilThread(__uapi_tid) && L4_IsGlobalId(__uapi_tid));
 	__thrd_init();
-
 	extern int main(int argc, char *const argv[], char *const envp[]);
 	return main(argc, argv, NULL);
 }

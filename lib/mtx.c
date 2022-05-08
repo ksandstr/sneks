@@ -13,13 +13,6 @@
 #include <ccan/likely/likely.h>
 #include <ccan/list/list.h>
 
-/* TODO: remove w/ <threads.h> update */
-#ifndef tidof
-#include <sneks/thread.h>
-#define tidof(t) tidof_NP((t))
-static int thrd_detach(thrd_t t) { return thrd_success; }
-#endif
-
 /* flags (the low six bits) */
 #define LOCKED 1
 #define CONFLICT 2

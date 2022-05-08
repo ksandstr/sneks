@@ -10,11 +10,11 @@
  */
 
 #include <stdlib.h>
+#include <assert.h>
 #include <threads.h>
 #include <l4/types.h>
 #include <l4/ipc.h>
 #include <l4/syscall.h>
-#include <sneks/thread.h>
 #include <sneks/test.h>
 
 
@@ -82,12 +82,12 @@ START_TEST(signal)
 	assert(n == thrd_success);
 	mtx_unlock(&p->m);
 
-	L4_MsgTag_t tag = L4_Receive_Timeout(thrd_to_tid(t),
+	L4_MsgTag_t tag = L4_Receive_Timeout(tidof_NP(t),
 		L4_TimePeriod(5 * 1000));
 	ok(L4_IpcFailed(tag) && L4_ErrorCode() == 3,
 		"before signal, receive times out");
 	cnd_signal(&p->c);
-	tag = L4_Receive_Timeout(thrd_to_tid(t), L4_TimePeriod(5 * 1000));
+	tag = L4_Receive_Timeout(tidof_NP(t), L4_TimePeriod(5 * 1000));
 	L4_Word_t status; L4_StoreMR(1, &status);
 	ok(L4_IpcSucceeded(tag), "after signal, receive completes");
 	ok(status == thrd_success, "partner status is thrd_success");
@@ -166,7 +166,7 @@ START_TEST(broadcast)
 		for(int i=0; i < n_threads; i++) {
 			if(!L4_IsNilThread(ps[i]->parent)
 				&& ps[i]->cp != NULL
-				&& L4_SameThreads(thrd_to_tid(ts[i]), from))
+				&& L4_SameThreads(tidof_NP(ts[i]), from))
 			{
 				ps[i]->cp = NULL;
 				n_got++;

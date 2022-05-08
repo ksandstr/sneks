@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <assert.h>
 #include <stdbool.h>
 #include <threads.h>
 #include <errno.h>
@@ -15,7 +16,6 @@
 #include <l4/thread.h>
 #include <l4/ipc.h>
 
-#include <sneks/thread.h>
 #include <sneks/test.h>
 #include <sneks/rollback.h>
 #include <sneks/api/io-defs.h>
@@ -119,7 +119,7 @@ START_LOOP_TEST(broken_write, iter, 0, 1)
 
 	uint16_t written = 0;
 	const char sixteen[] = "01234567890abcdef";
-	n = __io_write(thrd_to_tid(iolimit), &written, 0, -1,
+	n = __io_write(tidof_NP(iolimit), &written, 0, -1,
 		(const void *)sixteen, 16);
 	diag("n=%d, written=%u", n, written);
 	ok(n == 0, "IO::write");
@@ -131,7 +131,7 @@ START_LOOP_TEST(broken_write, iter, 0, 1)
 		fail_if(n != thrd_success, "thrd_create: n=%d", n);
 	}
 	written = 0;
-	n = __io_write(thrd_to_tid(iolimit), &written, 0, -1,
+	n = __io_write(tidof_NP(iolimit), &written, 0, -1,
 		(const void *)sixteen, 16);
 	diag("n=%d, written=%u", n, written);
 	imply_ok1(!do_cancel, n == 0 && written == 4);
@@ -148,7 +148,7 @@ START_LOOP_TEST(broken_write, iter, 0, 1)
 	} skip_end;
 
 	written = 0;
-	n = __io_write(thrd_to_tid(iolimit), &written, 0, -1,
+	n = __io_write(tidof_NP(iolimit), &written, 0, -1,
 		(const void *)sixteen, 16);
 	diag("n=%d, written=%u", n, written);
 	imply_ok1(!do_cancel, n == -EPIPE);
@@ -156,7 +156,7 @@ START_LOOP_TEST(broken_write, iter, 0, 1)
 
 	/* clean up */
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 0xdead }.raw);
-	L4_MsgTag_t tag = L4_Send(thrd_to_tid(iolimit));
+	L4_MsgTag_t tag = L4_Send(tidof_NP(iolimit));
 	fail_if(L4_IpcFailed(tag), "ec=%lu", L4_ErrorCode());
 	int res;
 	n = thrd_join(iolimit, &res);
