@@ -1,13 +1,14 @@
-#ifndef _SNEKS_DEVCOOKIE_H
-#define _SNEKS_DEVCOOKIE_H
+#ifndef _SNEKS_COOKIE_H
+#define _SNEKS_COOKIE_H
 
 #include <stdint.h>
 #include <stdbool.h>
 #include <l4/types.h>
 
-/* timeslices shouldn't exceed 32767 µs; and that shouldn't be enough time to
- * brute force more than (say) 20 bits' worth of the cookie space, IPC
- * roundtrip cost being some 1000 cycles already.
+/* cookies change every 2**15 µs (~32 ms) and remain valid into the next
+ * period. consumers should prevent bruteforcing by generational invalidation
+ * once at least 6 bits of the cookie space have been covered, i.e. after 64
+ * failing attempts within a given period.
  */
 #define COOKIE_PERIOD_US ((1 << 15) - 1)
 

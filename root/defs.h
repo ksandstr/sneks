@@ -16,7 +16,7 @@
 #include <l4/types.h>
 #include <l4/kip.h>
 
-#include <sneks/devcookie.h>
+#include <sneks/cookie.h>
 
 
 /* flags in <struct process>. comment describes behaviour when set. */

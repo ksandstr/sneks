@@ -35,7 +35,7 @@
 #include <sneks/bitops.h>
 #include <sneks/process.h>
 #include <sneks/systask.h>
-#include <sneks/devcookie.h>
+#include <sneks/cookie.h>
 #include <sneks/rollback.h>
 #include <sneks/io.h>
 

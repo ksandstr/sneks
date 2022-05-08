@@ -16,7 +16,7 @@
 #include <l4/ipc.h>
 
 #include <sneks/hash.h>
-#include <sneks/devcookie.h>
+#include <sneks/cookie.h>
 #include <sneks/api/dev-defs.h>
 
 #include "defs.h"
