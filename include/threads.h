@@ -1,11 +1,15 @@
 #ifndef _THREADS_H
 #define _THREADS_H
 
+#include <stddef.h>
 #include <stdbool.h>
 #include <stdatomic.h>
 #include <stdint.h>
 
-typedef _Atomic uintptr_t mtx_t;
+typedef struct __mtx_t_public {
+	size_t __private[8];
+} mtx_t;
+
 typedef _Atomic uintptr_t cnd_t;
 
 enum {
