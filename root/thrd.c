@@ -29,14 +29,8 @@ struct rt_thread {
 	void *stkbase;
 };
 
-struct epoch_data {
-	void (*dtor)(void *);
-	char data[];
-};
-
 static size_t rehash_rt_thread(const void *, void *);
 
-static tss_t epoch_tss;
 /* TODO: put a spinlock around all_threads */
 static struct htable all_threads = HTABLE_INITIALIZER(all_threads, &rehash_rt_thread, NULL);
 int next_early_utcb_slot = 1;
@@ -176,31 +170,11 @@ int thrd_join(thrd_t thrd, int *res_p)
 	return thrd_success;
 }
 
-/* for epoch.c of lfht */
-void *e_ext_get(size_t size, void (*dtor_fn)(void *ptr))
-{
-	struct epoch_data *data = tss_get(epoch_tss);
-	if(data == NULL) {
-		data = calloc(1, sizeof(struct epoch_data) + size);
-		data->dtor = dtor_fn;
-		tss_set(epoch_tss, data);
-	}
-	return data->data;
-}
-
-static void epoch_first_dtor(void *ptr) {
-	struct epoch_data *data = ptr;
-	(*data->dtor)(data->data);
-	free(data);
-}
-
 void init_root_thrd(void)
 {
 	int stack_dummy;	/* thicc */
 	struct rt_thread *self = rt_thread_in(&stack_dummy);
 	*self = (struct rt_thread){ .magic = MAGIC, .tid = L4_Myself(), .alive = true };
-	int n = tss_create(&epoch_tss, &epoch_first_dtor);
-	assert(n == thrd_success);
 }
 
 #ifdef BUILD_SELFTEST
