@@ -521,19 +521,12 @@ MAX_RELEASE_CHECK_RATE   default: 4095 unless not HAVE_MMAP
   improvement at the expense of carrying around more memory.
 */
 
-/* local customizations */
-
+/* local customization */
 #include <stddef.h>
 #include <string.h>
 
-#define LACKS_SYS_TYPES_H
-#define LACKS_ERRNO_H
 #define LACKS_TIME_H
-#define LACKS_STDLIB_H
-#define LACKS_STRING_H
 #define LACKS_SYS_MMAN_H
-#define LACKS_FCNTL_H
-#define LACKS_UNISTD_H
 #define LACKS_SYS_PARAM_H
 #define HAVE_MMAP 0
 #define HAVE_MORECORE 1
@@ -546,17 +539,11 @@ MAX_RELEASE_CHECK_RATE   default: 4095 unless not HAVE_MMAP
 extern void malloc_panic(void);
 #define ABORT malloc_panic()
 #define MALLOC_FAILURE_ACTION	/* nothing */
-
-#include <errno.h>
-
-/* for when USE_LOCKS is defined */
-extern int sched_yield(void);
-
 /* (quiet the compiler warning about _GNU_SOURCE getting redefined.) */
 #ifdef _GNU_SOURCE
 #undef _GNU_SOURCE
 #endif
-
+/* end local customization */
 
 /* Version identifier to allow people to support multiple versions */
 #ifndef DLMALLOC_VERSION
