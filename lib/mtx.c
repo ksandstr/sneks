@@ -32,8 +32,10 @@ struct wait {
 	L4_ThreadId_t ltid;
 };
 
+static once_flag init_flag = ONCE_FLAG_INIT;
 static thrd_t ser_thrd;
 static tss_t w_key;
+static L4_ThreadId_t ser_ltid = { .raw = 0 };
 
 /* what the serializer doin */
 static bool ser_lock_op(L4_ThreadId_t *sender_p, mtx_t *mptr, struct wait *w)
@@ -98,17 +100,18 @@ static noreturn int ser_fn(void *param_ptr)
 	}
 }
 
-static void __mtx_init(void) {
+static void __mtx_init(void)
+{
 	static_assert(sizeof(struct __mtx_gubbins) == sizeof(mtx_t));
 	if(tss_create(&w_key, &free) != thrd_success) abort();
 	if(thrd_create(&ser_thrd, &ser_fn, NULL) != thrd_success) abort();
 	if(thrd_detach(ser_thrd) != thrd_success) abort();
+	ser_ltid = L4_LocalIdOf(tidof(ser_thrd));
 }
 
 int mtx_init(mtx_t *mptr, int type)
 {
 	if(type != mtx_plain) return thrd_error;
-	static once_flag of = ONCE_FLAG_INIT; call_once(&of, &__mtx_init);
 	struct __mtx_gubbins *m = (void *)mptr;
 	*m = (struct __mtx_gubbins){ .magic = MAGIC };
 	list_head_init(&m->waits);
@@ -144,6 +147,7 @@ int mtx_lock(mtx_t *mptr)
 		next = prev | CONFLICT;
 		if(!atomic_compare_exchange_weak(&m->s, &prev, next)) return mtx_lock(mptr);
 	}
+	if(unlikely(ser_ltid.raw == 0)) call_once(&init_flag, &__mtx_init);
 	struct wait *w = tss_get(w_key);
 	if(w == NULL) {
 		if(w = malloc(sizeof *w), w == NULL) return thrd_error;
@@ -152,7 +156,7 @@ int mtx_lock(mtx_t *mptr)
 	*w = (struct wait){ .mutex = mptr, .ltid = L4_MyLocalId() };
 	L4_Accept(L4_UntypedWordsAcceptor);
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 2, .X.label = 'L' }.raw); L4_LoadMR(1, (L4_Word_t)mptr); L4_LoadMR(2, (L4_Word_t)w);
-	if(L4_IpcFailed(L4_Lcall(tidof(ser_thrd)))) {
+	if(L4_IpcFailed(L4_Lcall(ser_ltid))) {
 		fprintf(stderr, "%s: ipc-serialized lock failed, ec=%#lx\n", __func__, L4_ErrorCode());
 		return thrd_error;
 	}
@@ -177,9 +181,10 @@ int mtx_unlock(mtx_t *mptr)
 	L4_Word_t prev = L4_MyLocalId().raw | LOCKED;
 	if(atomic_compare_exchange_strong(&m->s, &prev, 0)) return thrd_success;
 	assert(prev == (L4_MyLocalId().raw | LOCKED | CONFLICT));
+	if(unlikely(ser_ltid.raw == 0)) call_once(&init_flag, &__mtx_init);
 	L4_Accept(L4_UntypedWordsAcceptor);
 	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 1, .X.label = 'U' }.raw); L4_LoadMR(1, (L4_Word_t)mptr);
-	if(L4_IpcFailed(L4_Lcall(tidof(ser_thrd)))) {
+	if(L4_IpcFailed(L4_Lcall(ser_ltid))) {
 		fprintf(stderr, "%s: ipc-serialized unlock failed, ec=%#lx\n", __func__, L4_ErrorCode());
 		return thrd_error;
 	}
