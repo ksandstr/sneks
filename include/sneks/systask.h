@@ -12,10 +12,14 @@
 #include <stdarg.h>
 #include <ccan/compiler/compiler.h>
 #include <l4/types.h>
+#include <l4/kip.h>
 #include <ukernel/hook.h>
 
 /* from threads.c */
 extern L4_ThreadId_t __uapi_tid;
+
+/* from crt1.c */
+extern L4_KernelInterfacePage_t *__the_kip;
 
 /* from log.c.
  *

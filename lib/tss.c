@@ -6,6 +6,7 @@
 #include <assert.h>
 #include <l4/types.h>
 #include <l4/thread.h>
+#include <sneks/spin.h>
 
 #define MAX_TSS 15
 
@@ -58,7 +59,8 @@ again:
 	} else {
 		assert(old == 1);
 		/* wait until concurrent @func completes. */
-		while(atomic_load_explicit(flag, memory_order_acquire) <= 1) asm volatile ("pause");
+		spinner_t s = { };
+		while(atomic_load_explicit(flag, memory_order_acquire) <= 1) spin(&s);
 	}
 }
 

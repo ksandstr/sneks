@@ -85,9 +85,9 @@ extern void mm_enable_sysmem(L4_ThreadId_t sysmem_tid);
 
 
 /* from main.c */
-
 extern L4_ThreadId_t vm_tid, sysmsg_tid, initrd_tid;
-extern L4_KernelInterfacePage_t *the_kip;
+extern L4_KernelInterfacePage_t *__the_kip;
+#define the_kip __the_kip
 extern struct cookie_key device_cookie_key;
 
 extern void send_phys_to_sysmem(

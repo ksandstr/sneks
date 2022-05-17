@@ -62,7 +62,7 @@ struct root_arg {
 
 static size_t hash_raw_word(const void *ptr, void *priv);
 
-L4_KernelInterfacePage_t *the_kip;
+L4_KernelInterfacePage_t *__the_kip;
 L4_ThreadId_t vm_tid = { .raw = 0 }, sysmsg_tid = { .raw = 0 },
 	initrd_tid = { .raw = 0 };
 

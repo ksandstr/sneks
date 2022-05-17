@@ -30,6 +30,7 @@ static uintptr_t current_brk = 0, heap_bottom = 0;
 
 const int __thrd_stksize_log2 = 16;
 L4_ThreadId_t __uapi_tid = L4_anythread;
+L4_KernelInterfacePage_t *__the_kip;
 
 void __assert_failure(
 	const char *cond, const char *file, unsigned int line, const char *fn)
@@ -211,18 +212,15 @@ void exit(int status)
 	for(;;) L4_Sleep(L4_Never);
 }
 
-
-/* for dlmalloc (maybe?) */
 long sysconf(int name)
 {
 	switch(name) {
 		case _SC_PAGESIZE: return PAGE_SIZE;
-		case _SC_NPROCESSORS_ONLN: return 1;	/* FIXME: get from KIP! */
-		case _SC_OPEN_MAX: return 0;			/* systasks don't have fds */
+		case _SC_NPROCESSORS_ONLN: return __the_kip->ProcessorInfo.X.processors + 1;
+		case _SC_OPEN_MAX: return 0; /* systasks don't get fds */
 		default: errno = EINVAL; return -1;
 	}
 }
-
 
 L4_ThreadId_t __get_rootfs(bool *root_mounted_p)
 {
@@ -239,8 +237,8 @@ L4_ThreadId_t __get_rootfs(bool *root_mounted_p)
 
 int __crt1_entry(void)
 {
-	void *kip = L4_GetKernelInterface();
-	int32_t *argc_p = (int32_t *)(kip - PAGE_SIZE), argc = *argc_p;
+	__the_kip = L4_GetKernelInterface();
+	int *argc_p = (int *)((uintptr_t)__the_kip - PAGE_SIZE), argc = *argc_p;
 	char *argbase = (char *)&argc_p[1], *argmem = argbase, *argv[argc + 1];
 	for(int i = 0; i <= argc; i++) {
 		argv[i] = argmem;

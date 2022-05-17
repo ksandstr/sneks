@@ -8,6 +8,7 @@
 #include <l4/thread.h>
 #include <l4/ipc.h>
 #include <l4/syscall.h>
+#include <sneks/spin.h>
 
 struct cnd_waiter {
 	L4_Word_t next;
@@ -76,7 +77,8 @@ int cnd_wait(cnd_t *cond, mtx_t *mutex)
 	}
 	w->next = atomic_load_explicit(cond, memory_order_relaxed);
 	if(w->next == ~0ul) return thrd_error;
-	while(!atomic_compare_exchange_strong_explicit(cond, &w->next, (L4_Word_t)w, memory_order_release, memory_order_relaxed)) /* revise until done */ ;
+	spinner_t s = { };
+	while(!atomic_compare_exchange_strong_explicit(cond, &w->next, (L4_Word_t)w, memory_order_release, memory_order_relaxed)) spin(&s);
 	mtx_unlock(mutex);
 	L4_ThreadId_t sender;
 	L4_MsgTag_t tag;
