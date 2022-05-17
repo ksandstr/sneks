@@ -25,7 +25,6 @@
 
 #include "private.h"
 
-static tss_t errno_key;
 static uintptr_t current_brk = 0, heap_bottom = 0;
 
 const int __thrd_stksize_log2 = 16;
@@ -37,37 +36,6 @@ void __assert_failure(
 {
 	printf("!!! assert(%s) failed in `%s' [%s:%u]\n", cond, fn, file, line);
 	abort();
-}
-
-
-static void init_errno_tss(void)
-{
-	int n = tss_create(&errno_key, &free);
-	if(n != thrd_success) {
-		printf("!!! %s can't initialize\n", __func__);
-		abort();
-	}
-}
-
-
-int *__errno_location(void)
-{
-	/* FIXME: slow and shitty. replace with _Thread int errno because the
-	 * systask runtime is always multithreaded.
-	 */
-	static once_flag errno_init_flag = ONCE_FLAG_INIT;
-	call_once(&errno_init_flag, &init_errno_tss);
-	int *val = tss_get(errno_key);
-	if(val == NULL) {
-		val = malloc(sizeof *val);
-		if(val == NULL) {
-			printf("!!! %s can't initialize\n", __func__);
-			abort();
-		}
-		*val = 0;
-		tss_set(errno_key, val);
-	}
-	return val;
 }
 
 int __thrd_new(L4_ThreadId_t *res) {

@@ -63,17 +63,6 @@ void con_putstr(const char *string) {
 }
 
 
-/* FIXME: this is stupid and dangerous, however, errno doesn't actually get
- * used for much inside roottask so it's probably fine. this should properly
- * be allocated per thread, see sys/crt/crt1.c for example.
- */
-int *__errno_location(void)
-{
-	static int the_errno = 0;
-	return &the_errno;
-}
-
-
 /* TODO: this is better than the one in the two C runtimes. copy it over, or
  * move into lib/ .
  */
