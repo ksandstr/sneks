@@ -95,12 +95,3 @@ long sysconf(int name)
 int sched_getcpu(void) {
 	return L4_ProcessorNo();
 }
-
-
-int sched_yield(void) {
-	/* TODO: drop priority to that of the lowest-priority root thread around
-	 * ThreadSwitch?
-	 */
-	L4_ThreadSwitch(L4_nilthread);
-	return 0;
-}

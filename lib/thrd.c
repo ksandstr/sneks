@@ -49,10 +49,10 @@ int thrd_sleep(const struct timespec *dur, struct timespec *rem) {
 	return -2;
 }
 
-void thrd_yield(void) { L4_Yield(); }
-
 int __thrd_sched_yield(void) { L4_Yield(); return 0; }
 int sched_yield(void) __attribute__((weak, alias("__thrd_sched_yield")));
+
+void thrd_yield(void) { sched_yield(); }
 
 int thrd_detach(thrd_t thrd) {
 	return thrd_success; /* NB: fine: userspace exits with main, systemspace is wonky anyway */
