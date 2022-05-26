@@ -40,12 +40,10 @@ static void __mtx_init(void) {
 
 static bool ser_lock_op(L4_ThreadId_t *sender_p, struct __mtx_gubbins *m, struct thrd_wait *w)
 {
-	L4_Word_t prev = atomic_load(&m->s), next = sender_p->raw | LOCKED;
-	if(prev == 0 && atomic_compare_exchange_strong(&m->s, &prev, next)) return true;
-	if(~prev & CONFLICT) {
-		next = prev | CONFLICT;
-		if(!atomic_compare_exchange_weak(&m->s, &prev, next)) return ser_lock_op(sender_p, m, w);
-	}
+	L4_Word_t prev = atomic_load(&m->s);
+	do {
+		if(prev == 0 && atomic_compare_exchange_strong(&m->s, &prev, sender_p->raw | LOCKED)) return true;
+	} while((~prev & CONFLICT) && !atomic_compare_exchange_strong(&m->s, &prev, prev | CONFLICT));
 	assert(w->tid.raw == sender_p->raw);
 	list_add_tail(&m->waits, &w->mtx.link);
 	return false;
@@ -128,12 +126,10 @@ int mtx_lock(mtx_t *mptr)
 {
 	struct __mtx_gubbins *m = (void *)mptr;
 	if(unlikely(m->magic != MAGIC)) return thrd_error;
-	L4_Word_t prev = atomic_load(&m->s), next = L4_MyLocalId().raw | LOCKED;
-	if(likely(prev == 0 && atomic_compare_exchange_strong(&m->s, &prev, next))) return thrd_success;
-	if(~prev & CONFLICT) {
-		next = prev | CONFLICT;
-		if(!atomic_compare_exchange_weak(&m->s, &prev, next)) return mtx_lock(mptr);
-	}
+	L4_Word_t prev = atomic_load(&m->s);
+	do {
+again:	if(prev == 0 && atomic_compare_exchange_strong(&m->s, &prev, L4_MyLocalId().raw | LOCKED)) return thrd_success;
+	} while((~prev & CONFLICT) && !atomic_compare_exchange_strong(&m->s, &prev, prev | CONFLICT));
 	if(unlikely(ser_ltid.raw == 0)) call_once(&init_flag, &__mtx_init);
 	struct thrd_wait *w = __thrd_get_wait();
 	L4_Accept(L4_UntypedWordsAcceptor);
@@ -141,8 +137,9 @@ int mtx_lock(mtx_t *mptr)
 	L4_MsgTag_t tag = L4_Lcall(ser_ltid);
 	__thrd_put_wait(w);
 	if(L4_IpcFailed(tag)) {
-		fprintf(stderr, "%s: ipc-serialized lock failed, ec=%#lx\n", __func__, L4_ErrorCode());
-		return mtx_lock(mptr);
+		fprintf(stderr, "%s: ipc-serialized lock failed: %s\n", __func__, stripcerr(L4_ErrorCode()));
+		prev = atomic_load(&m->s);
+		goto again;
 	}
 	assert((m->s & ~0x3ful) == L4_MyLocalId().raw);
 	return thrd_success;

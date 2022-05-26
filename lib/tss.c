@@ -49,19 +49,11 @@ void tss_set(tss_t key, void *value)
 	tss->ptrs[key] = value;
 }
 
-void call_once(once_flag *flag, void (*func)(void))
-{
+void call_once(once_flag *flag, void (*func)(void)) {
 	int old = atomic_load(flag);
-again:
-	if(old > 1) return; /* done */
-	if(old == 0) { /* try to run @func. */
-		if(!atomic_compare_exchange_strong(flag, &old, 1)) goto again;
-		(*func)();
-		atomic_store(flag, 2);
-	} else {
-		assert(old == 1); /* wait until concurrent @func completes. */
-		spinner_t s = { }; while(atomic_load_explicit(flag, memory_order_acquire) <= 1) spin(&s);
-	}
+	while(old == 0 && !atomic_compare_exchange_strong(flag, &old, 1)) /* someone else's progress */ ;
+	if(old == 0) { (*func)(); atomic_store(flag, 2); }
+	if(old == 1) { spinner_t s = { }; while(old = atomic_load(flag), old == 1) spin(&s); }
 }
 
 void __tss_on_exit(void *tssptr)
