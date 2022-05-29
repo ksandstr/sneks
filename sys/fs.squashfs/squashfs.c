@@ -1,5 +1,6 @@
 #define SQUASHFSIMPL_IMPL_SOURCE
 #define WANT_SNEKS_PATH_LABELS
+#define WANT_SNEKS_FILE_LABELS
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +17,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/mount.h>
+#include <sys/sysmacros.h>
 #include <ccan/opt/opt.h>
 #include <ccan/endian/endian.h>
 #include <ccan/array_size/array_size.h>
@@ -477,6 +479,24 @@ static struct inode *get_inode(ino_t ino)
 	return nod;
 }
 
+/* fetch or synthesize an inode for a virtual /dev entry. */
+static struct inode *dev_inode(struct dev *d)
+{
+	ino_t ino = fs_super->inodes + ((d->is_chr ? 2 : 0) << 30 | (ino_t)(d->major & 0x7fff) << 15 | (ino_t)(d->minor & 0x7fff));
+	assert(ino > fs_super->inodes);
+	size_t hash = int_hash(ino);
+	struct inode *nod = htable_get(&inode_cache, hash, &cmp_inode_ino, &ino);
+	if(nod != NULL) return nod;
+	struct inode_ext *ext = malloc(sizeof *ext + sizeof(struct squashfs_dev_inode) - sizeof(struct squashfs_base_inode)); if(ext == NULL) abort();
+	*ext = (struct inode_ext){
+		.fs_inode = { .ino = ino },
+		.X.dev = { .inode_type = d->is_chr ? SQUASHFS_CHRDEV_TYPE : SQUASHFS_BLKDEV_TYPE,
+			.rdev = makedev(d->major, d->minor), .mode = 0777, .inode_number = ino, .nlink = 1 },
+	};
+	nod = &ext->fs_inode;
+	if(!htable_add(&inode_cache, hash, nod)) abort();
+	return nod;
+}
 
 static void rewind_directory(iof_t *file,
 	const struct squashfs_dir_inode *dir)
@@ -717,6 +737,24 @@ static ssize_t lookup(int *type, ino_t dir_ino, const char *name)
 	return n == 0 ? -ENOENT : n;
 }
 
+/* TODO: move this into an utility module, next to propagate_resolve()? */
+static int propagate_open(L4_ThreadId_t dest, L4_ThreadId_t vs, unsigned object, L4_Word_t cookie, int flags)
+{
+	L4_MsgTag_t tag = { .X.label = SNEKS_FILE_OPEN_LABEL, .X.u = 4 };
+	L4_Set_Propagation(&tag);
+	L4_LoadMR(0, tag.raw);
+	L4_LoadMR(1, SNEKS_FILE_OPEN_SUBLABEL);
+	L4_LoadMR(2, object);
+	L4_LoadMR(3, cookie);
+	L4_LoadMR(4, flags);
+	L4_Set_VirtualSender(vs);
+	tag = L4_Send(dest);
+	if(L4_IpcFailed(tag)) {
+		if(L4_ErrorCode() == 4) return -ESRCH; else return L4_ErrorCode();
+	}
+	muidl_raise_no_reply();
+	return 0;
+}
 
 /* propagate path resolution to the given filesystem on behalf of the previous
  * IDL sender. parameter list is complex to support symlink propagation;
@@ -980,7 +1018,6 @@ static int squashfs_resolve(
 	if(path[0] == '/') return -EINVAL;
 	int type = DT_DIR;
 	ino_t final_ino = dir_ino;
-	L4_ThreadId_t server = L4_Myself();
 	while(*path != '\0') {
 		char *slash = strchr(path, '/'), comp[SQUASHFS_NAME_LEN + 1];
 		const bool is_last = slash == NULL && path_stack_pos == 0;
@@ -1014,28 +1051,18 @@ static int squashfs_resolve(
 			path = slash + 1;
 			part = comp;
 		}
+		//log_info("part=`%s', is_last=%s", part, is_last ? "true" : "false");
 
-		if(is_last && device_nodes_enabled && !L4_IsNilThread(dev_tid)
-			&& dir_ino == dev_ino && !streq(part, ".device-nodes"))
-		{
+		struct inode *nod = NULL;
+		if(is_last && device_nodes_enabled && dir_ino == dev_ino && !streq(part, ".device-nodes")) {
 			struct dev *dev = htable_get(&device_nodes, hash_string(part), &cmp_dev_name, part);
-			if(dev == NULL) {
-				/* NOTE: should we support subdirectories of /dev? currently
-				 * this does not.
-				 */
-				return -ENOENT;
-			}
-			server = dev_tid;
-			final_ino = (dev->is_chr ? 0x80000000 : 0)
-				| (dev->major & 0x7fff) << 15 | (dev->minor & 0x7fff);
+			if(dev == NULL) return -ENOENT;
+			final_ino = dev_inode(dev)->ino;
 			type = dev->is_chr ? DT_CHR : DT_BLK;
 			break;
 		}
-
 		ssize_t ino = lookup(&type, dir_ino, part);
 		if(ino < 0 && ino > -1000) return ino;
-
-		struct inode *nod = NULL;
 		if(type == DT_LNK && (!is_last || (~flags & AT_SYMLINK_NOFOLLOW))) {
 			nod = get_inode(ino);
 			if(nod == NULL) {
@@ -1078,7 +1105,6 @@ static int squashfs_resolve(
 			} else {
 				/* success! */
 				final_ino = ino;
-				server = L4_Myself();
 				break;
 			}
 		}
@@ -1099,23 +1125,15 @@ static int squashfs_resolve(
 		}
 	}
 
-	if(true || type == DT_CHR || type == DT_BLK) {
-		*cookie_ptr = gen_cookie(&device_cookie_key, L4_SystemClock(),
-			final_ino, caller_pid);
-	} else {
-		/* TODO: use a different algorithm and a different cookie key for
-		 * non-devices here once actual access control comes about. filesystem
-		 * cookies should have properties that cross-systask device cookies
-		 * don't, such as a limited number of uses per process,
-		 * anti-bruteforcing, etc.
-		 */
-		*cookie_ptr = 0xdeadbeef;	/* plainly improper */
-	}
-
+	/* TODO: use a different algorithm and a different cookie key for
+	 * non-devices here once actual access control comes about. filesystem
+	 * cookies should have properties that cross-systask device cookies don't,
+	 * such as a limited number of uses per process, anti-bruteforcing, etc.
+	 */
+	*cookie_ptr = gen_cookie(&device_cookie_key, L4_SystemClock(), final_ino, caller_pid);
 	*object_ptr = final_ino;
-	*server_ptr = server.raw;
+	*server_ptr = L4_MyGlobalId().raw;
 	*ifmt_ptr = type << 12;	/* deliberate correspondence to S_IFMT */
-
 	return 0;
 }
 
@@ -1222,47 +1240,44 @@ static int squashfs_get_path(char *path, int fd, const char *suffix)
 	return 0;
 }
 
-
-static void fill_statbuf(struct sneks_io_statbuf *st, const struct inode_ext *nod)
+static void fill_statbuf(struct sneks_path_statbuf *st, const struct inode_ext *nod)
 {
 	const struct squashfs_base_inode *base = &nod->X.base;
 	int access_bits = base->mode & 0777, t = base->inode_type,
 		type = t < ARRAY_SIZE(sfs_type_table) ? sfs_type_table[t] << 12 : 0;
-	*st = (struct sneks_io_statbuf){
+	*st = (struct sneks_path_statbuf){
 		.st_mode = access_bits | type,
 		/* TODO: the rest of the owl */
 	};
+	if(S_ISBLK(st->st_mode) || S_ISCHR(st->st_mode)) st->st_rdev = nod->X.dev.rdev;
 }
 
-
-static int squashfs_stat_object(
-	unsigned object, L4_Word_t cookie, struct sneks_io_statbuf *st)
+static int squashfs_stat_object(unsigned object, L4_Word_t cookie, struct sneks_path_statbuf *st)
 {
 	sync_confirm();
-
-	pid_t caller_pid = CALLER_PID;
 	/* TODO: same as in squashfs_open() about validating cookies */
-	if(!validate_cookie(cookie, &device_cookie_key, L4_SystemClock(),
-		object, caller_pid))
-	{
-		return -EINVAL;
-	}
-
+	if(!validate_cookie(cookie, &device_cookie_key, L4_SystemClock(), object, CALLER_PID)) return -EINVAL;
 	struct inode *nod = get_inode(object);
 	if(nod == NULL) return -EINVAL;
-
 	fill_statbuf(st, squashfs_i(nod));
 	return 0;
 }
 
+static int squashfs_stat_handle(int handle, struct sneks_path_statbuf *st)
+{
+	sync_confirm();
+	iof_t *file = io_get_file(CALLER_PID, handle);
+	if(file == NULL) return -EBADF;
+	fill_statbuf(st, squashfs_i(file->i));
+	return 0;
+}
 
 static int squashfs_open(int *handle_p, unsigned object, L4_Word_t cookie, int flags)
 {
 	sync_confirm();
 	pid_t caller_pid = CALLER_PID;
 	/* TODO: see comment above gen_cookie() call in squashfs_resolve(). */
-	/* TODO: remove systask special casing, that compromises "security". */
-	if(!validate_cookie(cookie, &device_cookie_key, L4_SystemClock(), object, caller_pid) && caller_pid < SNEKS_MIN_SYSID) return -EINVAL;
+	if(!validate_cookie(cookie, &device_cookie_key, L4_SystemClock(), object, caller_pid)) return -EINVAL;
 	struct inode *nod = get_inode(object); if(nod == NULL) return -EINVAL;
 	int typ = squashfs_i(nod)->X.base.inode_type;
 	switch(typ) {
@@ -1282,13 +1297,20 @@ static int squashfs_open(int *handle_p, unsigned object, L4_Word_t cookie, int f
 				*handle_p = n;
 				return 0;
 			}
-		case SQUASHFS_SYMLINK_TYPE: return -ELOOP; /* to dereference, use resolve() */
-		default:
-			/* TODO: propagate to other entry types */
-			return -EINVAL;
+		case SQUASHFS_BLKDEV_TYPE: case SQUASHFS_CHRDEV_TYPE:
+			if(object <= fs_super->inodes) return -EINVAL;
+			object -= fs_super->inodes;
+			cookie = gen_cookie(&device_cookie_key, L4_SystemClock(), object, caller_pid);
+			if(n = propagate_open(dev_tid, muidl_get_sender(), object, cookie, flags), n != 0) {
+				log_info("propagate_open: %s", stripcerr(n));
+				return n < 0 ? n : EIO;
+			}
+			muidl_raise_no_reply();
+			return 0;
+		case SQUASHFS_SYMLINK_TYPE: return -ELOOP; /* deref w/ resolve, or use readlink */
+		default: return -EINVAL; /* TODO: propagate for fifos, sockets */
 	}
 }
-
 
 static int squashfs_seek(int handle, off_t *offset_p, int whence)
 {
@@ -1334,12 +1356,6 @@ static int squashfs_io_close(iof_t *file)
 	return 0;
 }
 
-
-static int squashfs_io_stat(iof_t *file, IO_STAT *st)
-{
-	fill_statbuf(st, squashfs_i(file->i));
-	return 0;
-}
 
 static void rollback_open(L4_Word_t x, iof_t *f) {
 	squashfs_io_close(f);
@@ -1575,6 +1591,7 @@ static int squashfs_ipc_loop(int argc, char *argv[])
 		.get_path = &squashfs_get_path,
 		.get_path_fragment = &squashfs_get_path_fragment,
 		.stat_object = &squashfs_stat_object,
+		.stat_handle = &squashfs_stat_handle,
 		/* Sneks::File */
 		.open = &squashfs_open,
 		.seek = &squashfs_seek,
@@ -1590,7 +1607,6 @@ static int squashfs_ipc_loop(int argc, char *argv[])
 	io_read_func(&squashfs_io_read);
 	io_write_func(&squashfs_io_write);
 	io_close_func(&squashfs_io_close);
-	io_stat_func(&squashfs_io_stat);
 	io_confirm_func(&squashfs_wr_confirm);
 
 	io_dispatch_func(&_muidl_squashfs_impl_dispatch, &vtab);
@@ -1665,20 +1681,13 @@ static void read_device_nodes(unsigned long ino)
 {
 	struct inode *nod = get_inode(ino);
 	if(nod == NULL) abort();
-	char buf[200];
-	int pos = 0, done = 0, n;
+	char buf[200], *lf;
+	int pos = 0, done = 0, n, len;
 	do {
-		n = read_from_inode(nod, buf + pos, sizeof buf - pos - 1, done);
-		if(n < 0) {
-			log_crit("read error n=%d", n);
-			abort();
-		}
-		done += n;
-		pos += n;
+		if(n = read_from_inode(nod, buf + pos, sizeof buf - pos - 1, done), n < 0) { log_crit("read error n=%d", n); abort(); }
+		done += n; pos += n;
 		buf[pos] = '\0';
-		int len;
-		char *lf = strchr(buf, '\n');
-		if(lf == NULL) len = strlen(buf);
+		if(lf = strchr(buf, '\n'), lf == NULL) len = strlen(buf);
 		else {
 			*lf = '\0';
 			len = lf - buf;
@@ -1691,7 +1700,7 @@ static void read_device_nodes(unsigned long ino)
 			pos -= len + 1;
 		}
 	} while(n > 0 || pos > 0);
-	log_info("have %d device nodes", (int)htable_count(&device_nodes));
+	log_info("have %zu device nodes", htable_count(&device_nodes));
 }
 
 static int attach_super(L4_ThreadId_t dir_tid, unsigned dir_handle) /* TODO: robustness? */
@@ -1719,6 +1728,10 @@ static int attach_super(L4_ThreadId_t dir_tid, unsigned dir_handle) /* TODO: rob
 
 static int fs_initialize(void)
 {
+	/* TODO: it'd be nicer to use the mksquashfs pseudofile facility, but as
+	 * it's undocumented it cannot be relied upon. so we have this, an
+	 * equivalent hack, and no tested support for actual device inodes.
+	 */
 	if(device_nodes_enabled) {
 		int typ = 0; ino_t ino = lookup(&typ, root_ino, "dev");
 		if(ino >= 0 && typ == DT_DIR) {

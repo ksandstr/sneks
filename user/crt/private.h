@@ -10,6 +10,7 @@
 #include <setjmp.h>
 #include <errno.h>
 #include <ucontext.h>
+#include <sys/stat.h>
 #include <ccan/intmap/intmap.h>
 #include <l4/types.h>
 #include <l4/kip.h>
@@ -19,6 +20,10 @@
 struct fd_bits {
 	L4_ThreadId_t server;
 	int handle, flags;
+};
+
+struct fd_ext {
+	struct stat st;
 };
 
 struct resolve_out {
@@ -38,13 +43,16 @@ typedef struct {
 } auxv_t;
 
 struct __sysinfo;
+struct sneks_path_statbuf;
 typedef SINTMAP(struct fd_bits *) fd_map_t;
+typedef SINTMAP(struct fd_ext *) fdext_map_t;
 
 extern L4_KernelInterfacePage_t *__the_kip;
 extern struct __sysinfo *__the_sysinfo;
 extern L4_ThreadId_t __main_tid;
 extern int __l4_last_errorcode, __cwd_fd;
 extern fd_map_t fd_map;
+extern fdext_map_t __fdext_map;
 
 /* turns a muidl "positive for L4 ErrorCode values, negative for errno, zero
  * for success" style result into a written errno and a {0, -1} return value.
@@ -62,14 +70,21 @@ static inline struct fd_bits *__fdbits(int fd) {
 	return fd < 0 || fd > MAX_FD ? NULL : sintmap_get(&fd_map, fd);
 }
 
+static inline struct fd_ext *__fdext(int fd) { return sintmap_get(&__fdext_map, fd); }
+
 /* creation. if @fd < 0, allocates the lowest available file descriptor.
  * otherwise if @fd is already valid, returns -EEXIST. @flags may contain
- * FD_CLOEXEC, returns -EINVAL for invalid flags set.
+ * FD_CLOEXEC, returns -EINVAL for invalid flags set. _ext variant adds
+ * __fdext() values as well iff @fs != nil.
  */
 extern int __create_fd(int fd, L4_ThreadId_t server, int handle, int flags);
+extern int __create_fd_ext(int fd, L4_ThreadId_t server, intptr_t handle, int flags, const struct stat *st);
 
 /* from path.c */
 extern int __resolve(struct resolve_out *result, int dirfd, const char *pathname, int flags);
+
+/* from stat.c */
+extern void __convert_statbuf(struct stat *dst, const struct sneks_path_statbuf *src);
 
 /* from sigaction.c */
 extern void __sig_bottom(void);

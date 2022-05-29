@@ -10,13 +10,6 @@
 #include <sys/types.h>
 #include <ccan/typesafe_cb/typesafe_cb.h>
 
-#if defined(__sneks__) || defined(__SNEKS__)
-struct sneks_io_statbuf;
-#define IO_STAT struct sneks_io_statbuf
-#else
-#error "IO_STAT not specified for this implementation"
-#endif
-
 struct io_file_impl;
 typedef struct io_file_impl iof_t;
 extern int io_run(size_t iof_size, int argc, char *argv[]);
@@ -132,8 +125,6 @@ extern void io_write_func(int (*fn)(iof_t *file, const uint8_t *buf, unsigned co
  */
 extern void io_ioctl_func(int (*fn)(iof_t *file, long request, va_list args));
 
-extern void io_stat_func(int (*fn)(iof_t *file, IO_STAT *st));
-
 /* I/O confirmation callback.
  *
  * if set and not NULL after a read/write callback returns, sys/io sets the
@@ -197,7 +188,6 @@ extern void io_notify(iof_t *file, int epoll_mask);
 		(vtab)->dup = &io_impl_dup; \
 		(vtab)->dup_to = &io_impl_dup_to; \
 		(vtab)->touch = &io_impl_touch; \
-		(vtab)->stat_handle = &io_impl_stat_handle; \
 		(vtab)->isatty = &io_impl_isatty; \
 	} while(false)
 
@@ -223,7 +213,6 @@ extern int io_impl_close(int);
 extern int io_impl_dup(int *, int, int);
 extern int io_impl_dup_to(int *, int, pid_t);
 extern int io_impl_touch(int);
-extern int io_impl_stat_handle(int fd, struct sneks_io_statbuf *result_ptr);
 extern int io_impl_isatty(int);
 
 /* same for Sneks::Poll. */

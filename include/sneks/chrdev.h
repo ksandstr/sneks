@@ -29,7 +29,6 @@ extern int chrdev_run(size_t sizeof_chrdev_file, int argc, char *argv[]);
 #define chrdev_confirm_func(fn) io_confirm_func((fn))
 extern void chrdev_close_func(int (*fn)(chrfile_t *));
 #define chrdev_ioctl_func(fn) io_ioctl_func((fn))
-#define chrdev_stat_func(fn) io_stat_func((fn))
 
 /* Sneks::Pipe/pipe. creation of a pipe buffer and its two endpoints
  * associated with the same client process.

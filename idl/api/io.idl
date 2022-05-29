@@ -15,19 +15,6 @@ interface IO
 {
 	typedef long handle;
 
-	struct statbuf {
-		Posix::dev_t st_dev;
-		Posix::ino_t st_ino;
-		Posix::mode_t st_mode;
-		Posix::nlink_t st_nlink;
-		Posix::id_t st_uid, st_gid;
-		Posix::dev_t st_rdev;
-		Posix::off_t st_size;
-		Posix::blksize_t st_blksize;
-		Posix::blkcnt_t st_blocks;
-		Posix::timespec st_atim, st_mtim, st_ctim;
-	};
-
 	/* bits for set_file_flags(). follows Linux. */
 	const long O_NONBLOCK = 04000;
 
@@ -79,10 +66,6 @@ interface IO
 	/* raises like POSIX close(2) */
 	[Label(0xabcd)]	/* provisional, for epoll's use */
 	void close([MR(2)] in handle fd)
-		raises(Posix::Errno);
-
-	/* for implementing fstat(2). returns like it, but never EFAULT. */
-	void stat_handle(in handle fd, out statbuf result)
 		raises(Posix::Errno);
 
 	/* dup3(2) analogue, except @newfd is out-only and @fd_flags is FD_*

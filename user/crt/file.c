@@ -26,16 +26,23 @@
 int __l4_last_errorcode = 0;	/* TODO: TSS ma bitch up */
 
 fd_map_t fd_map;
+fdext_map_t __fdext_map;
 static int first_free = 0, last_alloc = -1;
 
 
-static bool invariants(void) {
+static bool invariants(void)
+{
 	assert(first_free <= last_alloc + 1);
 	assert(sintmap_empty(&fd_map) || last_alloc >= 0);
 	assert(!sintmap_empty(&fd_map) || first_free == 0);
 	assert(!sintmap_empty(&fd_map) || last_alloc == -1);
 	assert(sintmap_get(&fd_map, first_free) == NULL);
 	assert(last_alloc < 0 || sintmap_get(&fd_map, last_alloc) != NULL);
+	/* dom __fdext_map ∈ dom fd_map */
+	sintmap_index_t it;
+	for(struct fd_ext *ext = sintmap_first(&__fdext_map, &it); ext != NULL; ext = sintmap_after(&__fdext_map, &it)) {
+		assert(sintmap_get(&fd_map, it) != NULL);
+	}
 	return true;
 }
 
@@ -103,7 +110,6 @@ static int next_free_fd(int low)
 	}
 }
 
-
 int __create_fd(int fd, L4_ThreadId_t server, intptr_t handle, int flags)
 {
 	assert(invariants());
@@ -140,10 +146,21 @@ int __create_fd(int fd, L4_ThreadId_t server, intptr_t handle, int flags)
 	return fd;
 }
 
+int __create_fd_ext(int reqfd, L4_ThreadId_t server, intptr_t handle, int flags, const struct stat *st)
+{
+	int fd = __create_fd(reqfd, server, handle, flags);
+	if(st == NULL) return fd;
+	struct fd_ext *ext = malloc(sizeof *ext); if(ext == NULL) goto Enomem;
+	*ext = (struct fd_ext){ .st = *st };
+	if(!sintmap_add(&__fdext_map, fd, ext)) goto Enomem;
+	return fd;
+Enomem: abort(); /* FIXME: don't IO/close @fd, just undo the structures */
+}
 
-COLD void __file_init(const size_t *pp)
+void __file_init(const size_t *pp)
 {
 	sintmap_init(&fd_map);
+	sintmap_init(&__fdext_map);
 	assert(invariants());
 
 	int n;
@@ -172,7 +189,6 @@ fail:
 	abort();
 }
 
-
 int close(int fd)
 {
 	struct fd_bits *b = __fdbits(fd);
@@ -190,6 +206,8 @@ int close(int fd)
 		}
 		first_free = min(first_free, last_alloc + 1);
 	}
+	struct fd_ext *ext = __fdext(fd);
+	if(ext != NULL) { sintmap_del(&__fdext_map, fd); free(ext); }
 
 	assert(invariants());
 	return NTOERR(n);
@@ -260,24 +278,20 @@ int dup2(int oldfd, int newfd)
 /* TODO: make this signal-safe */
 int dup3(int oldfd, int newfd, int flags)
 {
-	if(oldfd == newfd) goto Einval;
-	if(flags & ~O_CLOEXEC) goto Einval;
+	if(oldfd == newfd || (flags & ~O_CLOEXEC)) goto Einval;
 	flags = (flags & O_CLOEXEC) ? SNEKS_IO_FD_CLOEXEC : 0;
-
 	struct fd_bits *bits = __fdbits(oldfd);
 	if(bits == NULL) return -1;
-	int new_handle = -1,
-		n = __io_dup(bits->server, &new_handle, bits->handle, flags);
+	int new_handle = -1, n = __io_dup(bits->server, &new_handle, bits->handle, flags);
 	if(n != 0) return NTOERR(n);
-
 	if(newfd >= 0 && __fdbits(newfd) != NULL) close(newfd);
-	n = __create_fd(newfd, bits->server, new_handle, flags);
-	if(n >= 0) return n;
-	else {
+	struct fd_ext *oe = __fdext(oldfd);
+	if(n = __create_fd_ext(newfd, bits->server, new_handle, flags, oe != NULL ? &oe->st : NULL), n < 0) {
 		__io_close(bits->server, new_handle);
 		errno = -n;
 		return -1;
 	}
+	return n;
 
 Einval: errno = EINVAL; return -1;
 }

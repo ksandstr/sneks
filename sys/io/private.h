@@ -103,7 +103,6 @@ struct io_callbacks
 	void (*lifecycle)(pid_t, enum lifecycle_tag, ...);
 	void (*confirm)(iof_t *, unsigned, off_t, bool);
 	int (*ioctl)(iof_t *, long, va_list args);
-	int (*stat)(iof_t *, IO_STAT *);
 
 	void *dispatch_priv;
 	L4_Word_t (*dispatch)(void *priv);

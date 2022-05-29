@@ -23,8 +23,21 @@ interface Path
 	typedef unsigned long object;
 	typedef L4X2::word cookie;
 
-	/* values of resolve/@ifmt. deliberately assigned as the corresponding
-	 * DT_* for Sneks::Directory shifted left by 12.
+	struct statbuf {
+		Posix::dev_t st_dev;
+		Posix::ino_t st_ino;
+		Posix::mode_t st_mode;
+		Posix::nlink_t st_nlink;
+		Posix::id_t st_uid, st_gid;
+		Posix::dev_t st_rdev;
+		Posix::off_t st_size;
+		Posix::blksize_t st_blksize;
+		Posix::blkcnt_t st_blocks;
+		Posix::timespec st_atim, st_mtim, st_ctim;
+	};
+
+	/* values of resolve.ifmt and four bits of statbuf/st_mode. assigned in
+	 * sync with DT_* for Sneks::Directory, times 2**12.
 	 */
 	const long S_IFMT = 0xf000;	/* format mask */
 	const long S_IFDIR = 0x4000;
@@ -75,8 +88,12 @@ interface Path
 		in IO::handle desc)
 			raises(Posix::Errno, muidl::NoReply);
 
-	/* for implementing stat(2) and fstatat(2) as a resolve-stat pair */
-	void stat_object(in object obj, in cookie cookie, out IO::statbuf result)
+	/* stat(2) and fstatat(2), paired with resolve. */
+	void stat_object(in object obj, in cookie cookie, out statbuf result)
+		raises(Posix::Errno);
+
+	/* fstat(2) an open handle assigned to the same server. */
+	void stat_handle(in IO::handle fd, out statbuf result)
 		raises(Posix::Errno);
 };
 

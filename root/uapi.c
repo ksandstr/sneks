@@ -1288,9 +1288,8 @@ static int accept_exec_file(FILE **fp, L4_ThreadId_t fd_serv, int ffd)
 	int n = __io_touch(fd_serv, ffd);
 	if(n != 0) return n < 0 ? n : -EBADF;
 
-	struct sneks_io_statbuf st;
-	n = __io_stat_handle(fd_serv, ffd, &st);
-	if(n != 0) goto fail;
+	struct sneks_path_statbuf st;
+	if(n = __path_stat_handle(fd_serv, ffd, &st), n != 0) goto fail;
 	const int x_any = S_IXUSR | S_IXGRP | S_IXOTH;
 	if((st.st_mode & S_IFMT) != S_IFREG || !(st.st_mode & x_any)) {
 		n = -EACCES;

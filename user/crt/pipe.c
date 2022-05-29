@@ -1,19 +1,14 @@
-
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
-
 #include <sneks/sysinfo.h>
 #include <sneks/api/pipe-defs.h>
 #include <sneks/api/io-defs.h>
-
 #include "private.h"
-
 
 int pipe(int pipefd[2]) {
 	return pipe2(pipefd, 0);
 }
-
 
 int pipe2(int pipefd[2], int flags)
 {
@@ -24,7 +19,8 @@ int pipe2(int pipefd[2], int flags)
 	int fd_flags = 0;
 	if(flags & O_CLOEXEC) fd_flags |= FD_CLOEXEC;
 	for(int i=0; i < 2; i++) {
-		pipefd[i] = __create_fd(-1, server, rdwr[i], fd_flags);
+		static const struct stat pipest = { .st_mode = S_IFIFO };
+		pipefd[i] = __create_fd_ext(-1, server, rdwr[i], fd_flags, &pipest);
 		if(pipefd[i] < 0) {
 			if(i > 0) close(pipefd[0]);
 			__io_close(server, rdwr[0]);
@@ -33,6 +29,5 @@ int pipe2(int pipefd[2], int flags)
 			return -1;
 		}
 	}
-
 	return 0;
 }

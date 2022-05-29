@@ -10,9 +10,7 @@
 
 #include "private.h"
 
-
-static void convert_statbuf(struct stat *dst,
-	const struct sneks_io_statbuf *src)
+void __convert_statbuf(struct stat *dst, const struct sneks_path_statbuf *src)
 {
 #define F(name) .st_##name = src->st_##name
 	*dst = (struct stat){
@@ -25,23 +23,27 @@ static void convert_statbuf(struct stat *dst,
 	};
 #undef F
 }
-
+#define convert_statbuf(a, b) __convert_statbuf((a), (b))
 
 int stat(const char *pathname, struct stat *statbuf) {
 	return fstatat(AT_FDCWD, pathname, statbuf, 0);
 }
 
-
 int fstat(int fd, struct stat *statbuf)
 {
 	struct fd_bits *bits = __fdbits(fd);
 	if(bits == NULL) { errno = EBADF; return -1; }
-	struct sneks_io_statbuf st;
-	int n = __io_stat_handle(bits->server, bits->handle, &st);
-	if(n == 0) convert_statbuf(statbuf, &st);
-	return NTOERR(n);
+	struct fd_ext *ext = __fdext(fd);
+	if(ext != NULL) {
+		*statbuf = ext->st;
+		return 0;
+	} else {
+		struct sneks_path_statbuf st;
+		int n = __path_stat_handle(bits->server, bits->handle, &st);
+		if(n == 0) convert_statbuf(statbuf, &st);
+		return NTOERR(n);
+	}
 }
-
 
 int lstat(const char *pathname, struct stat *statbuf) {
 	return fstatat(AT_FDCWD, pathname, statbuf, AT_SYMLINK_NOFOLLOW);
@@ -55,7 +57,7 @@ int fstatat(int dirfd, const char *pathname, struct stat *statbuf, int flags)
 	struct resolve_out r;
 	int n = __resolve(&r, dirfd, pathname, flags);
 	if(n == 0) {
-		struct sneks_io_statbuf st;
+		struct sneks_path_statbuf st;
 		n = __path_stat_object(r.server, r.object, r.cookie, &st);
 		if(n == 0) convert_statbuf(statbuf, &st);
 	}

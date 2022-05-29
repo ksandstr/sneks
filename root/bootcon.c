@@ -71,13 +71,6 @@ static int bootcon_dup_to(int *new_p, int old, pid_t receiver_pid) {
 }
 
 
-static int bootcon_stat_handle(int fd, struct sneks_io_statbuf *st) {
-	if(!valid(fd)) return -EBADF;
-	*st = (struct sneks_io_statbuf){ };
-	return 0;
-}
-
-
 static int bootcon_isatty(int fd) {
 	return valid(fd) ? 1 : -EBADF;
 }
@@ -99,7 +92,6 @@ static int bootcon_thread_fn(void *param_ptr UNUSED)
 		.set_handle_flags = &bootcon_ignore_flags,
 		.dup = &bootcon_dup,
 		.dup_to = &bootcon_dup_to,
-		.stat_handle = &bootcon_stat_handle,
 		.isatty = &bootcon_isatty,
 	};
 	for(;;) {

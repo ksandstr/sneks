@@ -277,9 +277,6 @@ START_TEST(device_node)
 	const char *testdev = "/dev/zero";
 	diag("testdev=`%s'", testdev);
 	plan_tests(9);
-#ifdef __sneks__
-	todo_start("erroneous");
-#endif
 	struct stat pst = { };
 	if(!ok(stat(testdev, &pst) == 0, "stat testdev path")) diag("stat failed: %s", strerror(errno));
 	ok1(S_ISCHR(pst.st_mode));

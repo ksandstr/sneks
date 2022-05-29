@@ -41,6 +41,13 @@ int __resolve(
 		cwd->handle, pathname, flags);
 }
 
+static bool isfs(int ifmt) {
+	switch(ifmt & S_IFMT) {
+		case S_IFREG: case S_IFDIR: case S_IFLNK: return true;
+		default: return false;
+	}
+}
+
 int openat(int dirfd, const char *pathname, int flags, ...)
 {
 	if(pathname == NULL) { errno = EINVAL; return -1; }
@@ -48,13 +55,19 @@ int openat(int dirfd, const char *pathname, int flags, ...)
 	int n, handle, fflags = 0, fd;
 	struct resolve_out r;
 	if(n = __resolve(&r, dirfd, pathname, flags), n != 0) return NTOERR(n);
+	struct stat st;
+	if(!isfs(r.ifmt)) {
+		struct sneks_path_statbuf pst;
+		if(n = __path_stat_object(r.server, r.object, r.cookie, &pst), n != 0) return NTOERR(n);
+		__convert_statbuf(&st, &pst);
+	}
 	L4_Set_VirtualSender(L4_nilthread); assert(L4_IsNilThread(L4_ActualSender()));
 	if(n = __file_open(r.server, &handle, r.object, r.cookie, flags), n != 0) return NTOERR(n);
 	L4_ThreadId_t actual = L4_ActualSender();
-	if(!L4_IsNilThread(actual)) r.server = actual;
+	if(L4_IsNilThread(actual)) actual = r.server;
 	if(flags & O_CLOEXEC) fflags |= FD_CLOEXEC;
-	if(fd = __create_fd(-1, r.server, handle, fflags), fd < 0) {
-		__io_close(r.server, handle);
+	if(fd = __create_fd_ext(-1, actual, handle, fflags, isfs(r.ifmt) ? NULL : &st), fd < 0) {
+		__io_close(actual, handle);
 		errno = -fd;
 		return -1;
 	}
