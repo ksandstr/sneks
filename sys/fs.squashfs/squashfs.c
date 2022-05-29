@@ -1255,36 +1255,36 @@ static int squashfs_stat_object(
 }
 
 
-static int squashfs_open(int *handle_p,
-	unsigned object, L4_Word_t cookie, int flags)
+static int squashfs_open(int *handle_p, unsigned object, L4_Word_t cookie, int flags)
 {
 	sync_confirm();
-
 	pid_t caller_pid = CALLER_PID;
-	/* TODO: same thing as the big comment above gen_cookie() call in
-	 * squashfs_resolve() and squashfs_opendir(), for same reasons.
-	 */
-	if(!validate_cookie(cookie, &device_cookie_key, L4_SystemClock(),
-		object, caller_pid))
-	{
-		return -EINVAL;
-	}
-
-	struct inode *nod = get_inode(object);
-	if(nod == NULL) return -EINVAL;
-	if(squashfs_i(nod)->X.base.inode_type != SQUASHFS_REG_TYPE) return -EINVAL;
-
-	iof_t *f = iof_new(0);
-	if(f == NULL) return -ENOMEM;
-	*f = (iof_t){ .i = nod, .pos = 0, .refs = 1 };
-	int n = io_add_fd(caller_pid, f, flags & O_CLOEXEC ? IOD_CLOEXEC : 0);
-	if(n < 0) {
-		iof_undo_new(f);
-		return n;
-	} else {
-		set_rollback(&rollback_open, 0, f);
-		*handle_p = n;
-		return 0;
+	/* TODO: see comment above gen_cookie() call in squashfs_resolve(). */
+	/* TODO: remove systask special casing, that compromises "security". */
+	if(!validate_cookie(cookie, &device_cookie_key, L4_SystemClock(), object, caller_pid) && caller_pid < SNEKS_MIN_SYSID) return -EINVAL;
+	struct inode *nod = get_inode(object); if(nod == NULL) return -EINVAL;
+	int typ = squashfs_i(nod)->X.base.inode_type;
+	switch(typ) {
+		iof_t *f; int n;
+		case SQUASHFS_REG_TYPE:
+			if(flags & O_DIRECTORY) return -ENOTDIR;
+			/* FALL THRU */
+		case SQUASHFS_DIR_TYPE:
+			if(f = iof_new(0), f == NULL) return -ENOMEM;
+			*f = (iof_t){ .i = nod, .pos = 0, .refs = 1 };
+			if(typ == SQUASHFS_DIR_TYPE) rewind_directory(f, &squashfs_i(nod)->X.dir);
+			if(n = io_add_fd(caller_pid, f, flags & O_CLOEXEC ? IOD_CLOEXEC : 0), n < 0) {
+				iof_undo_new(f);
+				return n;
+			} else {
+				set_rollback(&rollback_open, 0, f);
+				*handle_p = n;
+				return 0;
+			}
+		case SQUASHFS_SYMLINK_TYPE: return -ELOOP; /* to dereference, use resolve() */
+		default:
+			/* TODO: propagate to other entry types */
+			return -EINVAL;
 	}
 }
 
@@ -1340,15 +1340,10 @@ static int squashfs_io_stat(iof_t *file, IO_STAT *st)
 	return 0;
 }
 
-
-/* NOTE: this is used from both squashfs_open() and squashfs_opendir() because
- * squashfs_io_close() is equally valid for results of both.
- */
 static void rollback_open(L4_Word_t x, iof_t *f) {
 	squashfs_io_close(f);
 	iof_undo_new(f);
 }
-
 
 /* seek into block @target. so 0 for the first, etc. returns address of the
  * data block in question or negative errno. *@block and *@offset should start
@@ -1457,33 +1452,6 @@ static int squashfs_io_write(iof_t *a, const uint8_t *b, unsigned c, off_t d) {
 	return -EROFS;
 }
 
-static int squashfs_opendir(int *handle_p, unsigned object, L4_Word_t cookie, int flags)
-{
-	sync_confirm();
-	pid_t caller_pid = CALLER_PID;
-	/* TODO: see comment above gen_cookie() call in squashfs_resolve(). */
-	if(!validate_cookie(cookie, &device_cookie_key, L4_SystemClock(), object, caller_pid) && (cookie != 0 || caller_pid < SNEKS_MIN_SYSID)) return -EINVAL;
-
-	struct inode *nod = get_inode(object);
-	if(nod == NULL) return -EINVAL;
-	if(squashfs_i(nod)->X.base.inode_type != SQUASHFS_DIR_TYPE) return -ENOTDIR;
-	const struct squashfs_dir_inode *dir = &squashfs_i(nod)->X.dir;
-
-	iof_t *f = iof_new(0);
-	if(f == NULL) return -ENOMEM;
-	*f = (iof_t){ .i = nod, .pos = 0, .refs = 1 };
-	rewind_directory(f, dir);
-
-	int fd = io_add_fd(caller_pid, f, flags & O_CLOEXEC ? IOD_CLOEXEC : 0);
-	if(fd < 0) {
-		iof_undo_new(f);
-		return fd;
-	} else {
-		set_rollback(&rollback_open, 0, f);
-		*handle_p = fd;
-		return 0;
-	}
-}
 
 static void confirm_seekdir(L4_Word_t newpos, iof_t *file) {
 	file->pos = newpos;
@@ -1610,7 +1578,6 @@ static int squashfs_ipc_loop(int argc, char *argv[])
 		.open = &squashfs_open,
 		.seek = &squashfs_seek,
 		/* Sneks::Directory */
-		.opendir = &squashfs_opendir,
 		.seekdir = &squashfs_seekdir,
 		.getdents = &squashfs_getdents,
 		.readlink = &squashfs_readlink,
@@ -1736,7 +1703,7 @@ static int attach_super(unsigned parent_dir_obj) /* TODO: robustness? */
 	if(root_oth == NULL) return -ENOMEM;
 	/* TODO: set .ino to filesystem's max_ino + parent_dir_obj + 1 */
 	*root_oth = (struct otherfs){ .ino = 100000 + parent_dir_obj + 1, .tid = super_tid };
-	if(n = __dir_opendir(super_tid, &root_oth->dir, parent_dir_obj, 0, 0), n != 0) { log_err("Directory/opendir failed, n=%d", n); free(root_oth); return n; }
+	if(n = __file_open(super_tid, &root_oth->dir, parent_dir_obj, 0, O_DIRECTORY), n != 0) { free(root_oth); return n; }
 	if(!htable_add(&otherfs_hash, rehash_otherfs(root_oth, NULL), root_oth)) { free(root_oth); return -ENOMEM; }
 	/* create fall-out dentry */
 	struct dentry *fod = malloc(sizeof *fod + 3);

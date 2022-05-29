@@ -1,17 +1,14 @@
-
 #ifndef __API_FILE_IDL__
 #define __API_FILE_IDL__
 
 #include <muidl.idl>
 #include <posixlike.idl>
-
 #include <api/io.idl>
 #include <api/path.idl>
 
-
 module Sneks {
 
-/* regular files and block devices. */
+/* opening of files, and seeking of regular files and block devices. */
 [StubPrefix(__file), IfaceLabel(0xe809)]
 interface File
 {
@@ -23,13 +20,9 @@ interface File
 		in Path::object object, in Path::cookie cookie, in long flags)
 		raises(Posix::Errno, muidl::NoReply);
 
-	/* analog of lseek(2). @offset is returned as the new position within
-	 * @fd.
-	 */
+	/* analog of lseek(2). @offset returns new position within @fd. */
 	void seek(in IO::handle fd, inout Posix::off_t offset, in long whence)
 		raises(Posix::Errno, muidl::NoReply);
-
-	/* TODO: stat(), fstat() */
 };
 
 };

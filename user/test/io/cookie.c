@@ -16,7 +16,7 @@
 #include <sneks/crtprivate.h>
 #include <sneks/api/io-defs.h>
 #include <sneks/api/path-defs.h>
-#include <sneks/api/dev-defs.h>
+#include <sneks/api/file-defs.h>
 
 
 /* try pie, try. */
@@ -25,7 +25,7 @@ static int try_cookie(unsigned object, L4_ThreadId_t server, L4_Word_t cookie)
 	L4_Set_VirtualSender(L4_nilthread);
 	assert(L4_IsNilThread(L4_ActualSender()));
 	L4_ThreadId_t actual = L4_nilthread;
-	int handle, n = __dev_open(server, &handle, object, cookie, 0);
+	int handle, n = __file_open(server, &handle, object, cookie, 0);
 	actual = L4_ActualSender();
 	if(!L4_IsNilThread(actual)) server = actual;
 	if(n == 0) __io_close(server, handle);

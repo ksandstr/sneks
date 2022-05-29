@@ -1,8 +1,7 @@
-/* implementation specs for IDL servers in the root task. */
 #include <api/io.idl>
 #include <api/proc.idl>
 #include <api/path.idl>
-#include <api/dev.idl>
+#include <api/file.idl>
 #include <api/namespace.idl>
 #include <sys/abend.idl>
 
@@ -24,7 +23,7 @@ interface RootPath: Sneks::Path, Sneks::Namespace {
 };
 
 /* device lookup and spawning server. */
-interface RootDevices: Sneks::DeviceNode {
+interface RootDevices: Sneks::File {
 	/* inherited things only */
 };
 

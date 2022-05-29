@@ -4,7 +4,6 @@
 #define WANT_SNEKS_IO_LABELS
 #define WANT_SNEKS_PIPE_LABELS
 #define WANT_SNEKS_DEVICE_NODE_LABELS
-#define WANT_SNEKS_DIRECTORY_LABELS
 #define WANT_SNEKS_FILE_LABELS
 
 /* tests on rollbacks of handle-creating IDL calls.
@@ -22,6 +21,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <ccan/darray/darray.h>
 #include <ccan/minmax/minmax.h>
@@ -423,8 +423,8 @@ static int devnull_ctor(handles *result, bool send_only)
 	L4_Set_VirtualSender(L4_nilthread);
 	assert(L4_IsNilThread(L4_ActualSender()));
 	L4_Accept(L4_UntypedWordsAcceptor);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 4, .X.label = SNEKS_DEVICE_NODE_OPEN_LABEL }.raw);
-	L4_LoadMR(1, SNEKS_DEVICE_NODE_OPEN_SUBLABEL);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 4, .X.label = SNEKS_FILE_OPEN_LABEL }.raw);
+	L4_LoadMR(1, SNEKS_FILE_OPEN_SUBLABEL);
 	L4_LoadMR(2, object);
 	L4_LoadMR(3, cookie);
 	L4_LoadMR(4, 0);	/* flags */
@@ -551,11 +551,11 @@ static int dir_ctor(handles *result, bool send_only)
 	L4_Set_VirtualSender(L4_nilthread);
 	assert(L4_IsNilThread(L4_ActualSender()));
 	L4_Accept(L4_UntypedWordsAcceptor);
-	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 4, .X.label = SNEKS_DIRECTORY_OPENDIR_LABEL }.raw);
-	L4_LoadMR(1, SNEKS_DIRECTORY_OPENDIR_SUBLABEL);
+	L4_LoadMR(0, (L4_MsgTag_t){ .X.u = 4, .X.label = SNEKS_FILE_OPEN_LABEL }.raw);
+	L4_LoadMR(1, SNEKS_FILE_OPEN_SUBLABEL);
 	L4_LoadMR(2, object);
 	L4_LoadMR(3, cookie);
-	L4_LoadMR(4, 0);	/* flags */
+	L4_LoadMR(4, O_DIRECTORY);
 	L4_MsgTag_t tag = send_only ? L4_Send_Timeout(server, A_SHORT_NAP)
 		: L4_Call_Timeouts(server, A_SHORT_NAP, A_SHORT_NAP);
 	if(L4_IpcFailed(tag)) return L4_ErrorCode();

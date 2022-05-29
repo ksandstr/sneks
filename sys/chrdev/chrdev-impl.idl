@@ -1,17 +1,9 @@
-
-/* implementation spec for libsneks-chrdev.a's exported interfaces. not for
- * client use.
- */
-
 #include <api/io.idl>
 #include <api/poll.idl>
 #include <api/pipe.idl>
+#include <api/file.idl>
 #include <api/dev.idl>
-#include <l4x2.idl>
 
-
-interface ChrdevImpl:
-	Sneks::IO, Sneks::Poll, Sneks::Pipe, Sneks::DeviceNode
-{
-	/* jack shit! */
+interface ChrdevImpl: Sneks::IO, Sneks::Poll, Sneks::Pipe, Sneks::File, Sneks::DeviceControl {
+	/* horse piss! */
 };

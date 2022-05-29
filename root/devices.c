@@ -1,7 +1,7 @@
 
 #define ROOTDEVICES_IMPL_SOURCE
 #define SNEKS_DEVICENODE_IMPL_SOURCE
-#define WANT_SNEKS_DEVICE_NODE_LABELS
+#define WANT_SNEKS_FILE_LABELS
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -17,7 +17,7 @@
 
 #include <sneks/hash.h>
 #include <sneks/cookie.h>
-#include <sneks/api/dev-defs.h>
+#include <sneks/api/file-defs.h>
 
 #include "defs.h"
 #include "root-impl-defs.h"
@@ -83,11 +83,11 @@ static bool propagate_devnode_open(
 	bool *live_p, struct dev_entry *cand,
 	uint32_t object, L4_Word_t cookie, int flags)
 {
-	L4_MsgTag_t tag = { .X.label = SNEKS_DEVICE_NODE_OPEN_LABEL, .X.u = 4 };
+	L4_MsgTag_t tag = { .X.label = SNEKS_FILE_OPEN_LABEL, .X.u = 4 };
 	L4_Set_Propagation(&tag);
 	L4_Set_VirtualSender(muidl_get_sender());
 	L4_LoadMR(0, tag.raw);
-	L4_LoadMR(1, SNEKS_DEVICE_NODE_OPEN_SUBLABEL);
+	L4_LoadMR(1, SNEKS_FILE_OPEN_SUBLABEL);
 	L4_LoadMR(2, object);
 	L4_LoadMR(3, cookie);
 	L4_LoadMR(4, flags);
@@ -213,20 +213,11 @@ static int devices_open(int *handle_p,
 }
 
 
-static int devices_enosys() {
-	return -ENOSYS;
-}
-
-
 int devices_loop(void *param_ptr)
 {
 	devices_tid = L4_MyGlobalId();
 
-	static const struct root_devices_vtable vtab = {
-		.open = &devices_open,
-		.ioctl_void = &devices_enosys,
-		.ioctl_int = &devices_enosys,
-	};
+	static const struct root_devices_vtable vtab = { .open = &devices_open };
 	for(;;) {
 		L4_Word_t st = _muidl_root_devices_dispatch(&vtab);
 		if(st == MUIDL_UNKNOWN_LABEL) {

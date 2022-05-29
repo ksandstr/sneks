@@ -1,4 +1,3 @@
-
 #define CHRDEVIMPL_IMPL_SOURCE
 #undef BUILD_SELFTEST
 
@@ -8,10 +7,13 @@
 #include <threads.h>
 #include <errno.h>
 #include <sys/types.h>
+#include <sys/sysmacros.h>
 #include <ccan/minmax/minmax.h>
 #include <ccan/array_size/array_size.h>
 
 #include <l4/types.h>
+#include <l4/thread.h>
+#include <l4/ipc.h>
 
 #include <sneks/api/io-defs.h>
 #include <sneks/process.h>
@@ -23,14 +25,15 @@
 #include "chrdev-impl-defs.h"
 #include "private.h"
 
-
 struct open_rollback {
 	chrfile_t *files[2];
 };
 
-
 static tss_t open_rollback_key;
 
+static void init_chrdev(void) {
+	if(tss_create(&open_rollback_key, &free) != thrd_success) abort();
+}
 
 static void chrdev_rollback(L4_Word_t x, struct open_rollback *ctx)
 {
@@ -97,80 +100,47 @@ fail:
 	return n;
 }
 
-
-/* Sneks::DeviceNode calls */
-
-static int chrdev_open(int *handle_p,
-	uint32_t object, L4_Word_t cookie, int flags)
+static int chrdev_open(int *handle_p, unsigned object, L4_Word_t cookie, int flags)
 {
+	L4_MsgTag_t tag = muidl_get_tag();
+	L4_ThreadId_t as = L4_ActualSender();
 	sync_confirm();
 
-	/* (we'll ignore @cookie because UAPI will have already checked it for us,
-	 * and we don't have the key material anyway.)
-	 */
-
-	if(flags & ~(O_RDONLY | O_WRONLY | O_RDWR | O_CLOEXEC | O_NONBLOCK)) {
-		log_info("flags=%#x (bad)", flags);
+	if(flags & ~(O_RDONLY | O_WRONLY | O_RDWR | O_CLOEXEC | O_NONBLOCK)) return -EINVAL;
+	if(pidof_NP(L4_IpcPropagated(tag) ? as : muidl_get_sender()) < SNEKS_MIN_SYSID) {
+		/* TODO: validate cookie w/ key material from somewhere */
 		return -EINVAL;
 	}
 
 	chrfile_t *file = iof_new(flags & O_NONBLOCK ? IOF_NONBLOCK : 0);
 	if(file == NULL) return -ENOMEM;
-
-	static const char objtype[] = { [2] = 'c' };
-	int n = (*chrdev_callbacks.dev_open)(file, objtype[(object >> 30) & 0x3],
-		(object >> 15) & 0x7fff, object & 0x7fff, flags);
-	if(n < 0) goto fail;
-
-	n = io_add_fd(pidof_NP(muidl_get_sender()), file,
-		flags & O_CLOEXEC ? IOD_CLOEXEC : 0);
+	int n = (*chrdev_callbacks.dev_open)(file, "..c."[(object >> 30) & 0x3], major(object), minor(object), flags);
+	if(n == 0) n = io_add_fd(pidof_NP(muidl_get_sender()), file, flags & O_CLOEXEC ? IOD_CLOEXEC : 0);
 	if(n < 0) goto fail;
 
 	add_rollback(file, NULL);
 	*handle_p = n;
 	return 0;
-
-fail:
-	iof_undo_new(file);
-	return n;
+fail: iof_undo_new(file); return n;
 }
 
-
-static int chrdev_ioctl_void(int *result_p, int handle, unsigned request)
-{
-	/* TODO */
-	return -ENOSYS;
-}
-
-
-static int chrdev_ioctl_int(int *result_p,
-	int handle, unsigned request, int *arg_p)
-{
-	/* TODO */
-	return -ENOSYS;
-}
-
+static int enosys() { return -ENOSYS; }
+static int espipe() { return -ESPIPE; }
 
 int chrdev_run(size_t iof_size, int argc, char *argv[])
 {
-	int st = tss_create(&open_rollback_key, &free);
-	if(st != thrd_success) {
-		log_crit("tss_create failed, st=%d", st);
-		return EXIT_FAILURE;
-	}
-
+	static once_flag init = ONCE_FLAG_INIT;
+	call_once(&init, &init_chrdev);
 	struct chrdev_impl_vtable vtab = {
 		/* Sneks::Pipe */
 		.pipe = &chrdev_pipe,
-
-		/* Sneks::DeviceNode */
-		.open = &chrdev_open,
-		.ioctl_void = &chrdev_ioctl_void,
-		.ioctl_int = &chrdev_ioctl_int,
+		/* Sneks::File */
+		.open = &chrdev_open, .seek = &espipe,
+		/* Sneks::DeviceControl */
+		.ioctl_void = &enosys, .ioctl_int = &enosys,
 	};
 	FILL_SNEKS_IO(&vtab);
 	FILL_SNEKS_POLL(&vtab);
-
 	io_dispatch_func(&_muidl_chrdev_impl_dispatch, &vtab);
 	return io_run(iof_size, argc, argv);
 }

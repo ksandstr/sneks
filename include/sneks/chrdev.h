@@ -31,16 +31,15 @@ extern void chrdev_close_func(int (*fn)(chrfile_t *));
 #define chrdev_ioctl_func(fn) io_ioctl_func((fn))
 #define chrdev_stat_func(fn) io_stat_func((fn))
 
-/* maps to Sneks::Pipe/pipe. creation of a pipe buffer and its two endpoints
+/* Sneks::Pipe/pipe. creation of a pipe buffer and its two endpoints
  * associated with the same client process.
  */
 extern void chrdev_pipe_func(int (*fn)(chrfile_t *readside, chrfile_t *writeside, int flags));
 
-/* maps to Sneks::DeviceNode/open. creation of device handles. libchrdev
- * decodes the "object" parameter into type, major, minor; @type is 'c' for
- * character devices and 'b' for block devices. callback returns -ENODEV for
- * any combination of type-major-minor, or set flag in @flags, it doesn't
- * recognize.
+/* Sneks::File/open for devices. libchrdev decodes the object parameter into
+ * type, major, and minor; @type is 'c' for character devices and 'b' for
+ * block devices. callback may return -ENODEV for any combination of
+ * type-major-minor, or set flag in @flags, it doesn't recognize.
  */
 extern void chrdev_dev_open_func(int (*fn)(chrfile_t *h, char type, int major, int minor, int flags));
 

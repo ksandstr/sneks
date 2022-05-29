@@ -17,8 +17,6 @@
 #include <sneks/sysinfo.h>
 #include <sneks/api/path-defs.h>
 #include <sneks/api/file-defs.h>
-#include <sneks/api/directory-defs.h>
-#include <sneks/api/dev-defs.h>
 #include <sneks/api/io-defs.h>
 
 #include "private.h"
@@ -43,72 +41,25 @@ int __resolve(
 		cwd->handle, pathname, flags);
 }
 
-
 int openat(int dirfd, const char *pathname, int flags, ...)
 {
-	if(pathname == NULL) {
-		errno = EINVAL;
-		return -1;
-	}
-	if(flags & O_CREAT) {
-		/* TODO */
-		errno = ENOSYS;
-		return -1;
-	}
-
+	if(pathname == NULL) { errno = EINVAL; return -1; }
+	if(flags & O_CREAT) { errno = ENOSYS; return -1; }
+	int n, handle, fflags = 0, fd;
 	struct resolve_out r;
-	int n = __resolve(&r, dirfd, pathname, flags);
-	if(n != 0) return NTOERR(n);
-
-	/* set VS/AS to recover actual server tid, for when Path::resolve hands
-	 * out a propagator
-	 */
-	L4_Set_VirtualSender(L4_nilthread);
-	assert(L4_IsNilThread(L4_ActualSender()));
-	L4_ThreadId_t actual = L4_nilthread;
-	int handle;
-	switch(r.ifmt & S_IFMT) {
-		case S_IFCHR: case S_IFBLK:
-			n = __dev_open(r.server, &handle, r.object, r.cookie, flags);
-			actual = L4_ActualSender();
-			break;
-		case S_IFREG: case S_IFIFO: case S_IFSOCK:
-			n = __file_open(r.server, &handle, r.object, r.cookie, flags);
-			if((r.ifmt & S_IFMT) != S_IFREG) {
-				/* fifos and sockets generally won't be handled by the
-				 * Sneks::File provider. allow propagated handling when
-				 * resolve's `server' output wasn't the socket or fifo server.
-				 */
-				actual = L4_ActualSender();
-			}
-			break;
-		case S_IFDIR:
-			n = __dir_opendir(r.server, &handle, r.object, r.cookie, flags);
-			actual = L4_ActualSender();
-			break;
-		case S_IFLNK:
-			/* symbolic links returned from Sneks::Path/resolve are a result
-			 * of O_NOFOLLOW in @flags, so this status should be returned.
-			 */
-			errno = ELOOP;
-			return -1;
-		default: errno = ENOSYS; return -1;
-	}
-	if(n != 0) return NTOERR(n);
+	if(n = __resolve(&r, dirfd, pathname, flags), n != 0) return NTOERR(n);
+	L4_Set_VirtualSender(L4_nilthread); assert(L4_IsNilThread(L4_ActualSender()));
+	if(n = __file_open(r.server, &handle, r.object, r.cookie, flags), n != 0) return NTOERR(n);
+	L4_ThreadId_t actual = L4_ActualSender();
 	if(!L4_IsNilThread(actual)) r.server = actual;
-
-	int fflags = 0;
 	if(flags & O_CLOEXEC) fflags |= FD_CLOEXEC;
-	int fd = __create_fd(-1, r.server, handle, fflags);
-	if(fd < 0) {
+	if(fd = __create_fd(-1, r.server, handle, fflags), fd < 0) {
 		__io_close(r.server, handle);
 		errno = -fd;
 		return -1;
 	}
-
 	return fd;
 }
-
 
 int open(const char *pathname, int flags, ...)
 {
