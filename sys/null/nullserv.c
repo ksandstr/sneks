@@ -1,21 +1,17 @@
-
-#include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 #include <assert.h>
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/epoll.h>
 #include <ccan/array_size/array_size.h>
-
 #include <sneks/chrdev.h>
-
 
 enum null_dev { DEV_NULL = 1, DEV_ZERO, DEV_FULL };
 
 struct chrdev_file_impl {
 	enum null_dev dev;
 };
-
 
 static int null_get_status(chrfile_t *h)
 {
@@ -28,7 +24,6 @@ static int null_get_status(chrfile_t *h)
 	return st[h->dev];
 }
 
-
 static int null_read(chrfile_t *h, uint8_t *buf, unsigned count, off_t offset)
 {
 	switch(h->dev) {
@@ -37,10 +32,9 @@ static int null_read(chrfile_t *h, uint8_t *buf, unsigned count, off_t offset)
 		case DEV_ZERO:
 			memset(buf, '\0', count);
 			return count;
-		default: return -ENOSYS;	/* not reached */
+		default: return -ENOSYS; /* not reached */
 	}
 }
-
 
 static int null_write(chrfile_t *h, const uint8_t *buf, unsigned buf_len, off_t offset)
 {
@@ -53,32 +47,21 @@ static int null_write(chrfile_t *h, const uint8_t *buf, unsigned buf_len, off_t 
 	}
 }
 
-
-/* TODO: see above. */
-static int null_close(chrfile_t *h) {
-	return 0;
-}
-
+static int null_close(chrfile_t *h) { return 0; }
 
 /* recognize type='c', major=1 minors=(3, 5, 7) as null, zero, full
  * respectively.
  */
-static int null_open(chrfile_t *h,
-	char type, int major, int minor, int flags)
+static int null_open(chrfile_t *h, char type, int major, int minor, int flags)
 {
-	static const enum null_dev ds[] = {
-		[3] = DEV_NULL, [5] = DEV_ZERO, [7] = DEV_FULL,
-	};
-	if(type == 'c' && major == 1 && minor >= 0 && minor < ARRAY_SIZE(ds)
-		&& ds[minor] != 0)
-	{
+	static const enum null_dev ds[] = { [3] = DEV_NULL, [5] = DEV_ZERO, [7] = DEV_FULL };
+	if(type == 'c' && major == 1 && minor >= 0 && minor < ARRAY_SIZE(ds) && ds[minor] != 0) {
 		h->dev = ds[minor];
 		return 0;
 	} else {
 		return -ENODEV;
 	}
 }
-
 
 int main(int argc, char *argv[])
 {
@@ -87,6 +70,5 @@ int main(int argc, char *argv[])
 	chrdev_write_func(&null_write);
 	chrdev_close_func(&null_close);
 	chrdev_dev_open_func(&null_open);
-
 	return chrdev_run(sizeof(struct chrdev_file_impl), argc, argv);
 }
