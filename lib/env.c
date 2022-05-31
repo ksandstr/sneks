@@ -1,9 +1,8 @@
 /* ISO C11 getenv(), setenv(), unsetenv(), environ.
  *
- * this topic is laden with historical fuckery, so we try to muddle through as
- * best possible while providing htable key lookup, never free()ing
- * statically-allocated environment values in "environ", and not leaking
- * memory.
+ * this topic is laden with historical fuckery but env.c regardless provides
+ * htable key lookup while never free()ing statically-allocated environment
+ * values in "environ", or leaking memory, and that's rather good if OP.
  */
 #include <stdlib.h>
 #include <stdint.h>
@@ -12,22 +11,17 @@
 #include <limits.h>
 #include <errno.h>
 #include <assert.h>
-
 #include <ccan/htable/htable.h>
 #include <ccan/hash/hash.h>
 
-
-struct envstr
-{
+struct envstr {
 	size_t hash;
 	char *str;
 	short keylen;
 	bool ours;
 };
 
-
 static size_t hash_envstr(const void *, void *);
-
 
 char **environ = NULL;
 
@@ -35,25 +29,21 @@ static char **cached_environ = NULL;
 static bool our_environ = false;
 static struct htable env_ht = HTABLE_INITIALIZER(env_ht, &hash_envstr, NULL);
 
-
 static size_t hash_envstr(const void *ptr, void *priv) {
 	const struct envstr *e = ptr;
 	assert(e->hash == hash(e->str, e->keylen, 0));
 	return e->hash;
 }
 
-
 static bool cmp_envstr_key(const void *entry, void *key) {
 	const struct envstr *e = entry;
 	return strncmp(e->str, key, e->keylen) == 0 && ((char *)key)[e->keylen] == '\0';
 }
 
-
 static int cmp_envstr_by_strptr(const void *a, const void *b) {
 	const struct envstr *ea = *(const void **)a, *eb = *(const void **)b;
 	return (intptr_t)ea->str - (intptr_t)eb->str;
 }
-
 
 /* TODO: this could be more robust against ENOMEM; currently it loses track of
  * which strings were allocated by us, leaking them when they're removed by
@@ -66,9 +56,7 @@ static bool refresh(void)
 	struct envstr *ours[htable_count(&env_ht)];
 	int n_ours = 0;
 	struct htable_iter it;
-	for(struct envstr *e = htable_first(&env_ht, &it);
-		e != NULL; e = htable_next(&env_ht, &it))
-	{
+	for(struct envstr *e = htable_first(&env_ht, &it); e != NULL; e = htable_next(&env_ht, &it)) {
 		if(e->ours) ours[n_ours++] = e; else free(e);
 	}
 	htable_clear(&env_ht);
@@ -90,10 +78,7 @@ static bool refresh(void)
 				char *env = environ[i], *eq = strchr(env, '=');
 				int keylen = eq != NULL ? eq - env : strlen(env);
 				assert(keylen <= SHRT_MAX);
-				*ent = (struct envstr){
-					.hash = hash(env, keylen, 0), .ours = false,
-					.str = env, .keylen = keylen,
-				};
+				*ent = (struct envstr){ .hash = hash(env, keylen, 0), .str = env, .keylen = keylen };
 				ok = htable_add(&env_ht, ent->hash, ent);
 			}
 		}
@@ -104,23 +89,20 @@ static bool refresh(void)
 	}
 	if(ok) cached_environ = environ;
 	else {
-		for(struct envstr *es = htable_first(&env_ht, &it);
-			es != NULL; es = htable_next(&env_ht, &it))
-		{
-			free(es);
-		}
+		for(struct envstr *es = htable_first(&env_ht, &it); es != NULL; es = htable_next(&env_ht, &it)) free(es);
 		htable_clear(&env_ht);
 		cached_environ = NULL;
 	}
 	return ok;
 }
 
-
 char *getenv(const char *key)
 {
 	if(cached_environ != environ) refresh();
 	if(cached_environ == NULL) {
-		/* linear search due to refresh fail */
+		/* linear search due to previous refresh fail.
+		 * NB: untested. possibly untestable.
+		 */
 		for(int i=0; environ != NULL && environ[i] != NULL; i++) {
 			char *eq = strchr(environ[i], '=');
 			if(eq == NULL) continue;
@@ -128,14 +110,12 @@ char *getenv(const char *key)
 		}
 		return NULL;
 	} else {
-		/* turbo asshole mode */
-		struct envstr *ent = htable_get(&env_ht, hash(key, strlen(key), 0),
-			&cmp_envstr_key, key);
+		/* turbo hashhole mode */
+		struct envstr *ent = htable_get(&env_ht, hash(key, strlen(key), 0), &cmp_envstr_key, key);
 		assert(ent == NULL || ent->str[ent->keylen] == '=');
 		return ent == NULL ? NULL : ent->str + ent->keylen + 1;
 	}
 }
-
 
 int setenv(const char *name, const char *value, int overwrite)
 {
@@ -149,29 +129,22 @@ int setenv(const char *name, const char *value, int overwrite)
 	if(cached_environ != environ && !refresh()) goto Enomem;
 
 	/* construct and insert new entry */
-	ent = malloc(sizeof *ent);
-	if(ent == NULL) goto Enomem;
+	if(ent = malloc(sizeof *ent), ent == NULL) goto Enomem;
 	size_t vlen = strlen(value);
-	*ent = (struct envstr){
-		.keylen = namelen, .str = malloc(namelen + vlen + 2),
-		.hash = hash, .ours = true,
-	};
+	*ent = (struct envstr){ .keylen = namelen, .str = malloc(namelen + vlen + 2), .hash = hash, .ours = true };
 	if(ent->str == NULL) goto Enomem;
 	memcpy(ent->str, name, namelen);
 	ent->str[namelen] = '=';
 	memcpy(ent->str + namelen + 1, value, vlen);
 	ent->str[namelen + 1 + vlen] = '\0';
-	if(ent->str == NULL || !htable_add(&env_ht, hash, ent)) goto Enomem;
+	if(!htable_add(&env_ht, hash, ent)) goto Enomem;
 
 	/* insert into environ */
 	int env_len = 0;
 	while(environ != NULL && environ[env_len] != NULL) env_len++;
 	size_t nesiz = (env_len + 2) * sizeof *environ;
 	char **new_env = realloc(our_environ ? environ : NULL, nesiz);
-	if(new_env == NULL) {
-		htable_del(&env_ht, hash, ent);
-		goto Enomem;
-	}
+	if(new_env == NULL) { htable_del(&env_ht, hash, ent); goto Enomem; }
 	if(!our_environ) {
 		memcpy(new_env, environ, env_len * sizeof *environ);
 		our_environ = true;
@@ -196,7 +169,6 @@ int setenv(const char *name, const char *value, int overwrite)
 		if(old->ours) free(old->str);
 		free(old);
 	}
-
 	return 0;
 
 Einval: errno = EINVAL; return -1;
@@ -207,20 +179,15 @@ Enomem:
 	return -1;
 }
 
-
 int unsetenv(const char *name)
 {
-	if(name == NULL || *name == '\0' || strchr(name, '=') != NULL) {
-		errno = EINVAL;
-		return -1;
-	}
+	if(name == NULL || *name == '\0' || strchr(name, '=') != NULL) { errno = EINVAL; return -1; }
 	if(cached_environ != environ && !refresh()) {
 		/* TODO: this violates POSIX; unsetenv() should only fail when @name
 		 * is invalid, and otherwise succeed always.
 		 */
 		abort();
 	}
-
 	size_t hash = hash(name, strlen(name), 0);
 	struct envstr *ent = htable_get(&env_ht, hash, &cmp_envstr_key, name);
 	if(ent != NULL) {
@@ -228,7 +195,6 @@ int unsetenv(const char *name)
 		char *p = ent->str;
 		if(ent->ours) free(ent->str);
 		free(ent);
-
 		assert(environ != NULL);
 		int o = 0;
 		for(int i = 0; environ[i] != NULL; i++) {
@@ -236,10 +202,8 @@ int unsetenv(const char *name)
 		}
 		environ[o] = NULL;
 	}
-
 	return 0;
 }
-
 
 int putenv(char *string)
 {
@@ -248,22 +212,17 @@ int putenv(char *string)
 	if(eq == NULL || eq == string) return 0;
 	int keylen = eq - string;
 	char key[keylen + 1];
-	if(keylen > SHRT_MAX) goto Enomem;	/* foo */
+	if(keylen > SHRT_MAX) goto Enomem;
 
 	if(cached_environ != environ && !refresh()) goto Enomem;
 	struct envstr *ent = malloc(sizeof *ent);
 	if(ent == NULL) goto Enomem;
 
 	size_t hash = hash(string, keylen, 0);
-	*ent = (struct envstr){
-		.str = string, .keylen = keylen, .hash = hash, .ours = false,
-	};
+	*ent = (struct envstr){ .str = string, .keylen = keylen, .hash = hash };
 	memcpy(key, string, keylen); key[keylen] = '\0';
 	struct envstr *old = htable_get(&env_ht, hash, &cmp_envstr_key, key);
-	if(!htable_add(&env_ht, hash, ent)) {
-		free(ent);
-		goto Enomem;
-	}
+	if(!htable_add(&env_ht, hash, ent)) { free(ent); goto Enomem; }
 	if(old != NULL) {
 		assert(environ != NULL);
 		bool found = false;
@@ -281,8 +240,7 @@ int putenv(char *string)
 	} else {
 		int env_len = 0;
 		while(environ != NULL && environ[env_len] != NULL) env_len++;
-		char **new_env = realloc(our_environ ? environ : NULL,
-			(env_len + 2) * sizeof *new_env);
+		char **new_env = realloc(our_environ ? environ : NULL, (env_len + 2) * sizeof *new_env);
 		if(new_env == NULL) {
 			htable_del(&env_ht, hash, ent);
 			free(ent);
@@ -296,20 +254,15 @@ int putenv(char *string)
 		environ[env_len++] = ent->str;
 		environ[env_len] = NULL;
 	}
-
 	return 0;
-
 Enomem: errno = ENOMEM; return -1;
 }
-
 
 int clearenv(void)
 {
 	if(cached_environ == environ || refresh()) {
 		struct htable_iter it;
-		for(struct envstr *cur = htable_first(&env_ht, &it);
-			cur != NULL; cur = htable_next(&env_ht, &it))
-		{
+		for(struct envstr *cur = htable_first(&env_ht, &it); cur != NULL; cur = htable_next(&env_ht, &it)) {
 			if(cur->ours) free(cur->str);
 			free(cur);
 		}
