@@ -1,22 +1,13 @@
-
-/* implementation of <sneks/rollback.h> for systasks. */
-
 #include <stdlib.h>
 #include <stdbool.h>
 #include <threads.h>
-#include <assert.h>
 #include <ccan/likely/likely.h>
 #include <l4/types.h>
 #include <sneks/rollback.h>
-
 #include "muidl.h"
 
-
-/* we may be tracking both a confirm and a rollback at the same time, so
- * this is a bit more complicated than it obviously need be.
- */
-struct rbctx
-{
+/* may track both rollback and confirm at once */
+struct rbctx {
 	L4_ThreadId_t sender;
 	L4_MsgTag_t tag;
 	struct {
@@ -26,48 +17,38 @@ struct rbctx
 	} r, c;
 };
 
-
-static once_flag init_flag = ONCE_FLAG_INIT;
 static tss_t rollback_tss;
-
+static once_flag init_flag = ONCE_FLAG_INIT;
 
 static void initialize(void) {
-	tss_create(&rollback_tss, &free);
+	if(tss_create(&rollback_tss, &free) != thrd_success) abort();
 }
-
 
 static struct rbctx *get_ctx(void)
 {
 	call_once(&init_flag, &initialize);
 	struct rbctx *ctx = tss_get(rollback_tss);
 	if(unlikely(ctx == NULL)) {
-		ctx = malloc(sizeof *ctx);
-		assert(ctx != NULL);	/* fuck it! */
+		if(ctx = malloc(sizeof *ctx), ctx == NULL) abort();
 		*ctx = (struct rbctx){ };
 		tss_set(rollback_tss, ctx);
 	}
 	return ctx;
 }
 
-
-void _set_rollback(rollback_fn_t fn, L4_Word_t param, const void *priv)
-{
+void _set_rollback(rollback_fn_t fn, L4_Word_t param, const void *priv) {
 	struct rbctx *ctx = get_ctx();
 	ctx->r.fn = fn; ctx->r.param = param; ctx->r.priv = (void *)priv;
 	ctx->sender = muidl_get_sender();
 	ctx->tag = muidl_get_tag();
 }
 
-
-void _set_confirm(rollback_fn_t fn, L4_Word_t param, const void *priv)
-{
+void _set_confirm(rollback_fn_t fn, L4_Word_t param, const void *priv) {
 	struct rbctx *ctx = get_ctx();
-	assert(ctx->c.fn == NULL);	/* must be empty */
 	ctx->c.fn = fn; ctx->c.param = param; ctx->c.priv = (void *)priv;
 	ctx->sender = muidl_get_sender();
 	ctx->tag = muidl_get_tag();
 }
-
 
 void sync_confirm(void)
 {
@@ -75,19 +56,15 @@ void sync_confirm(void)
 	struct rbctx *ctx = tss_get(rollback_tss);
 	if(likely(ctx != NULL) && ctx->c.fn != NULL) {
 		rollback_fn_t fn = ctx->c.fn;
-		L4_Word_t param = ctx->c.param;
-		void *priv = ctx->c.priv;
 		ctx->c.fn = NULL;
-		(*fn)(param, priv);
+		(*fn)(ctx->c.param, ctx->c.priv);
 	}
 }
-
 
 bool check_rollback(L4_Word_t status)
 {
 	if(!MUIDL_IS_L4_ERROR(status)) return false;
 	call_once(&init_flag, &initialize);
-
 	bool yep = false;
 	struct rbctx *ctx = tss_get(rollback_tss);
 	if(status & 1) {
@@ -96,10 +73,7 @@ bool check_rollback(L4_Word_t status)
 		 */
 		sync_confirm();
 		if(likely(ctx != NULL)) ctx->r.fn = NULL;
-	} else if(likely(ctx != NULL)
-		&& ctx->tag.raw == muidl_get_tag().raw
-		&& ctx->sender.raw == muidl_get_sender().raw)
-	{
+	} else if(likely(ctx != NULL) && ctx->tag.raw == muidl_get_tag().raw && ctx->sender.raw == muidl_get_sender().raw) {
 		/* pop it, where available */
 		if(ctx->r.fn != NULL) {
 			rollback_fn_t fn = ctx->r.fn;
@@ -107,16 +81,13 @@ bool check_rollback(L4_Word_t status)
 			(*fn)(ctx->r.param, ctx->r.priv);
 			yep = true;
 		}
-		/* and clear the confirm handler as well */
-		ctx->c.fn = NULL;
+		ctx->c.fn = NULL; /* also clear the confirm handler */
 	}
 	if(ctx != NULL) {
-		/* clear the rollback even when it wasn't matched, since that means
-		 * the reply actually associated with the rollback did succeed, so the
-		 * rollback should be discarded.
+		/* clear the rollback when it wasn't matched; that means the reply
+		 * actually associated with the rollback did succeed.
 		 */
 		ctx->r.fn = NULL;
 	}
-
 	return yep;
 }
