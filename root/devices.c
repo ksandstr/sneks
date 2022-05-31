@@ -221,7 +221,9 @@ int devices_loop(void *param_ptr)
 	for(;;) {
 		L4_Word_t st = _muidl_root_devices_dispatch(&vtab);
 		if(st == MUIDL_UNKNOWN_LABEL) {
-			/* fie! */
+			L4_LoadMR(0, (L4_MsgTag_t){ .X.label = 1, .X.u = 1 }.raw);
+			L4_LoadMR(1, ENOSYS);
+			L4_Reply(muidl_get_sender());
 		} else if(st != 0 && !MUIDL_IS_L4_ERROR(st)) {
 			printf("%s: dispatch status %#lx (last tag %#lx)\n",
 				__func__, st, muidl_get_tag().raw);

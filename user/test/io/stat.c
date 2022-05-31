@@ -268,3 +268,37 @@ START_LOOP_TEST(symlink_terminal, iter, 0, 3)
 END_TEST
 
 DECLARE_TEST("io:stat", symlink_terminal);
+
+/* statting a device node and fstatting an open descriptor of the same device
+ * node should produce identical results.
+ */
+START_TEST(device_node)
+{
+	const char *testdev = "/dev/zero";
+	diag("testdev=`%s'", testdev);
+	plan_tests(9);
+#ifdef __sneks__
+	todo_start("erroneous");
+#endif
+	struct stat pst = { };
+	if(!ok(stat(testdev, &pst) == 0, "stat testdev path")) diag("stat failed: %s", strerror(errno));
+	ok1(S_ISCHR(pst.st_mode));
+	int fd = open(testdev, O_RDONLY);
+	skip_start(!ok(fd >= 0, "open testdev path"), 6, "%s", strerror(errno)) {
+		struct stat fst = { };
+		if(!ok(fstat(fd, &fst) == 0, "fstat testdev fd")) diag("fstat failed: %s", strerror(errno));
+		ok1(S_ISCHR(fst.st_mode));
+		ok(memcmp(&pst, &fst, sizeof(struct stat)) == 0, "same bits");
+		int fd2 = dup(fd);
+		skip_start(!ok(fd2 >= 0, "dup testdev fd"), 2, "%s", strerror(errno)) {
+			struct stat dupst = { };
+			if(!ok(fstat(fd2, &dupst) == 0, "fstat fd2")) diag("fstat failed: %s", strerror(errno));
+			ok(memcmp(&pst, &dupst, sizeof(struct stat)) == 0, "same bits");
+			close(fd2);
+		} skip_end;
+		close(fd);
+	} skip_end;
+}
+END_TEST
+
+DECLARE_TEST("io:stat", device_node);
