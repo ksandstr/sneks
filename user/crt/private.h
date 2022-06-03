@@ -50,15 +50,13 @@ typedef SINTMAP(struct fd_ext *) fdext_map_t;
 extern L4_KernelInterfacePage_t *__the_kip;
 extern struct __sysinfo *__the_sysinfo;
 extern L4_ThreadId_t __main_tid;
-extern int __l4_last_errorcode, __cwd_fd;
+extern int __cwd_fd;
 extern fd_map_t fd_map;
 extern fdext_map_t __fdext_map;
 
 /* turns a muidl "positive for L4 ErrorCode values, negative for errno, zero
  * for success" style result into a written errno and a {0, -1} return value.
- * @n is stored in __l4_last_errorcode. the NTOERR() macro can be used to
- * avoid the double underscore, and to return a different positive value
- * instead of 0 (the second parameter).
+ * the NTOERR() comfort macro allows return of a different positive value.
  */
 extern int __idl2errno(int n, ...);
 #define NTOERR(...) __idl2errno(__VA_ARGS__, 0)

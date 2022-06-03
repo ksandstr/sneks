@@ -23,8 +23,6 @@
 #include "private.h"
 
 
-int __l4_last_errorcode = 0;	/* TODO: TSS ma bitch up */
-
 fd_map_t fd_map;
 fdext_map_t __fdext_map;
 static int first_free = 0, last_alloc = -1;
@@ -49,7 +47,6 @@ static bool invariants(void)
 
 int __idl2errno(int n, ...)
 {
-	__l4_last_errorcode = n;
 	if(likely(n == 0)) {
 		va_list al; va_start(al, n);
 		int ret = va_arg(al, int);
