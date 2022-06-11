@@ -98,6 +98,9 @@ interface IO
 	 * touch() is called @newfd's lifetime follows the dup_to() caller's
 	 * lifecycle. once touch() is called, the dup_to() caller is no longer
 	 * allowed access to @newfd.
+	 *
+	 * special value 0x10000 in @receiver_pid allows touch from all systasks,
+	 * and is only accepted from a systask caller.
 	 */
 	void dup_to(out handle newfd, in handle oldfd, in Posix::pid_t receiver_pid)
 		raises(Posix::Errno);
