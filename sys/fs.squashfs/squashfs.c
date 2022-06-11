@@ -179,7 +179,8 @@ static bool device_nodes_enabled, need_subfs_sync = false;
 static ino_t dev_ino = -1;
 
 static char *arg_source = NULL, *arg_data = NULL;
-static unsigned arg_mntflags = 0, arg_parent_dir_obj;
+static unsigned arg_mntflags = 0, arg_parent_dir_handle = 0;
+static L4_ThreadId_t arg_parent_dir_tid;
 
 /* mount data */
 static FILE *fs_file;
@@ -1693,17 +1694,16 @@ static void read_device_nodes(unsigned long ino)
 	log_info("have %d device nodes", (int)htable_count(&device_nodes));
 }
 
-static int attach_super(unsigned parent_dir_obj) /* TODO: robustness? */
+static int attach_super(L4_ThreadId_t dir_tid, unsigned dir_handle) /* TODO: robustness? */
 {
 	L4_ThreadId_t super_tid;
 	unsigned super_join;
 	int n = __ns_get_fs_tree(rootfs_tid, &(unsigned){ 0 }, &super_tid.raw, &super_join, getpid(), -1);
-	if(n != 0) { log_err("Filesystem/get_fs_tree failed, n=%d", n); return n; }
+	if(n != 0) { log_err("Filesystem/get_fs_tree failed: %s", stripcerr(n)); return n; }
+	if(n = __io_touch(dir_tid, dir_handle), n != 0) { log_err("IO/touch failed: %s", stripcerr(n)); return n; }
 	struct otherfs *root_oth = malloc(sizeof *root_oth);
 	if(root_oth == NULL) return -ENOMEM;
-	/* TODO: set .ino to filesystem's max_ino + parent_dir_obj + 1 */
-	*root_oth = (struct otherfs){ .ino = 100000 + parent_dir_obj + 1, .tid = super_tid };
-	if(n = __file_open(super_tid, &root_oth->dir, parent_dir_obj, 0, O_DIRECTORY), n != 0) { free(root_oth); return n; }
+	*root_oth = (struct otherfs){ .ino = 1234567, .tid = dir_tid, .dir = dir_handle };
 	if(!htable_add(&otherfs_hash, rehash_otherfs(root_oth, NULL), root_oth)) { free(root_oth); return -ENOMEM; }
 	/* create fall-out dentry */
 	struct dentry *fod = malloc(sizeof *fod + 3);
@@ -1732,7 +1732,7 @@ static int fs_initialize(void)
 	int n = __info_rootfs_block(L4_Pager(), &inf);
 	if(n != 0) { log_crit("can't get rootfs info block, n=%d", n); return n; }
 	rootfs_tid.raw = inf.service;
-	return arg_parent_dir_obj != 0 ? attach_super(arg_parent_dir_obj) : 0;
+	return arg_parent_dir_handle != 0 ? attach_super(arg_parent_dir_tid, arg_parent_dir_handle) : 0;
 }
 
 static ssize_t fd_read(void *cookie, char *buf, size_t size) {
@@ -1834,7 +1834,8 @@ static const struct opt_table opts[] = {
 		"mask of MS_* from <sys/mount.h>"),
 	OPT_WITH_ARG("--data", &copy_str_arg, NULL, &arg_data,
 		"other flags not covered by mntflags, comma separated"),
-	OPT_WITH_ARG("--parent-directory-object", &set_uint, NULL, &arg_parent_dir_obj, "(internal) parent directory object"),
+	OPT_WITH_ARG("--parent-directory-tid", &set_tid, NULL, &arg_parent_dir_tid, "(internal) parent directory server TID"),
+	OPT_WITH_ARG("--parent-directory-handle", &set_uint, NULL, &arg_parent_dir_handle, "(internal) parent directory handle"),
 	OPT_ENDTABLE
 };
 
@@ -1857,13 +1858,13 @@ int main(int argc, char *argv[])
 		return EXIT_FAILURE;
 	}
 	if(n != 0) {
-		log_err("couldn't mount squashfs, n=%d", n);
+		log_err("couldn't mount squashfs: %s", stripcerr(n));
 		return EXIT_FAILURE;
 	} else {
 		device_nodes_enabled = devs;
 		/* TODO: parse arg_data? pass arg_mntflags? */
 		if(n = fs_initialize(), n != 0) {
-			log_err("initialization failed, n=%d", n);
+			log_err("initialization failed: %s", stripcerr(n));
 			return EXIT_FAILURE;
 		}
 		return squashfs_ipc_loop(argc, argv);

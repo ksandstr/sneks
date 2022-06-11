@@ -10,6 +10,7 @@
 #include <string.h>
 #include <threads.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <sys/mount.h>
 #include <ccan/array_size/array_size.h>
@@ -25,6 +26,8 @@
 #include <sneks/ipc.h>
 #include <sneks/process.h>
 #include <sneks/api/path-defs.h>
+#include <sneks/api/file-defs.h>
+#include <sneks/api/io-defs.h>
 #include <sneks/api/namespace-defs.h>
 #include <sneks/sys/msg-defs.h>
 #include <sneks/sys/filesystem-defs.h>
@@ -199,27 +202,29 @@ static void encode_l64a_16u8(char *restrict dest, const uint8_t src[static restr
 static int do_mount(L4_ThreadId_t caller, char *restrict source, char *restrict target, char *restrict fstype, unsigned int mountflags, char *restrict data)
 {
 	/* get superior's bits for @target */
-	L4_ThreadId_t super;
-	unsigned join, parent;
-	int n, ifmt, spawn_flags;
+	L4_ThreadId_t super, parent;
+	unsigned join, parent_dir;
+	int n, ifmt, spawn_flags, pdirhandle, pduphandle;
+	L4_Word_t pd_cookie;
 	if(streq(target, "/")) {
 		printf("mounting root filesystem fstype=`%s' from source=`%s'\n", fstype, source);
 		assert(L4_IsNilThread(rootfs_tid)); /* NB: doesn't support replacing e.g. initrd w/ read-write root */
-		super = L4_nilthread; join = 0; parent = 0;
+		super = parent = L4_nilthread; join = 0; pdirhandle = 0; pduphandle = 0;
 	} else {
 		assert(!L4_IsNilThread(rootfs_tid)); /* initrd must activate on boot. */
-		n = __path_resolve(rootfs_tid, &join, &super.raw, &ifmt, &(L4_Word_t){ 0 }, 0, deroot(target), 0);
-		if(n < 0) return n; else if(n > 0) goto ipcfail;
+		if(n = __path_resolve(rootfs_tid, &join, &super.raw, &ifmt, &(L4_Word_t){ 0 }, 0, deroot(target), 0), n != 0) goto ipcfail;
 		if(ifmt != SNEKS_PATH_S_IFDIR) return -ENOTDIR;
 		char t_parent[strlen(target) + 4]; snprintf(t_parent, sizeof t_parent, "%s/..", target);
-		n = __path_resolve(rootfs_tid, &parent, &(L4_Word_t){ 0 }, &ifmt, &(L4_Word_t){ 0 }, 0, deroot(t_parent), 0);
-		if(n < 0) return n; else if(n > 0) goto ipcfail;
-		assert(parent != join);
+		if(n = __path_resolve(rootfs_tid, &parent_dir, &parent.raw, &ifmt, &pd_cookie, 0, deroot(t_parent), 0), n != 0) goto ipcfail;
+		assert(parent_dir != join); assert(ifmt == SNEKS_PATH_S_IFDIR);
+		if(n = __file_open(parent, &pdirhandle, parent_dir, pd_cookie, O_DIRECTORY), n != 0) goto ipcfail;
+		if(n = __io_dup_to(parent, &pduphandle, pdirhandle, 0x10000), n != 0) goto ipcfail;
 	}
 	/* launch systask */
-	char drvpath[40], mntflags[12], devs[32] = "", devcky[40] = "", pobj[20];
+	char drvpath[40], mntflags[12], devs[32] = "", devcky[40] = "", pdirstr[12], pdirtid[32] = "";
 	snprintf(mntflags, sizeof mntflags, "%#x", mountflags);
-	snprintf(pobj, sizeof pobj, "%u", parent);
+	snprintf(pdirstr, sizeof pdirstr, "%#x", pduphandle);
+	snprintf(pdirtid, sizeof pdirtid, "%lu:%lu", L4_ThreadNo(parent), L4_Version(parent));
 	if(strends(fstype, "!bootmod")) {
 		assert(strrchr(fstype, '!') - fstype == 8); fstype[strlen(fstype) - 8] = '\0';
 		if(L4_IsGlobalId(caller) && pidof_NP(caller) != pidof_NP(L4_Myself())) return -EPERM;
@@ -234,15 +239,19 @@ static int do_mount(L4_ThreadId_t caller, char *restrict source, char *restrict 
 		encode_l64a_16u8(devcky, device_cookie_key.key);
 	}
 	L4_ThreadId_t fs = spawn_systask(spawn_flags, drvpath, "--source", source, "--mount-flags", mntflags, "--data", data,
-		"--parent-directory-object", pobj, "--device-registry-tid", devs, "--device-cookie-key", devcky, NULL);
-	if(L4_IsNilThread(fs)) { printf("spawn_systask(`%s') failed\n", drvpath); return -errno; }
+		"--parent-directory-tid", pdirtid, "--parent-directory-handle", pdirstr, "--device-registry-tid", devs, "--device-cookie-key", devcky, NULL);
+	if(L4_IsNilThread(fs)) { printf("spawn_systask(`%s') failed\n", drvpath); /* TODO: cleanup */ return -errno; }
 	assert(L4_IsNilThread(super) == L4_IsNilThread(rootfs_tid));
 	if(L4_IsNilThread(super)) rootfs_tid = fs;
 	if(n = add_mount_info(fs, super, join), n < 0) { printf("filsys: add_mount_info failed: %s\n", strerror(-n)); return n; }
 	/* resolve fs root to sync mount */
 	if(n = __path_resolve(fs, &(unsigned){ 0 }, &(L4_Word_t){ 0 }, &(int){ 0 }, &(L4_Word_t){ 0 }, 0, "", 0), n != 0) {
 		printf("filsys: failed to resolve root of new fs: %s\n", stripcerr(n));
-		abort();	/* FIXME: unfuck */
+		abort(); /* TODO: make robust (clean up pdirhandle, pduphandle, mount info, etc.) */
+	}
+	if(!L4_IsNilThread(parent)) {
+		if(n = __io_close(parent, pdirhandle), n != 0) fprintf(stderr, "filsys: IO/close failed: %s\n", stripcerr(n));
+		__io_close(parent, pduphandle);
 	}
 	/* confirm mount result. */
 	for(int i=0; i < 20; i++) {
@@ -257,6 +266,7 @@ static int do_mount(L4_ThreadId_t caller, char *restrict source, char *restrict 
 	}
 	return 0;
 ipcfail:
+	if(n < 0) return n;
 	printf("%s: IPC errorcode=%d converted to EIO\n", __func__, n);
 	return -EIO;	/* -EIEIO, honestly */
 }
