@@ -849,6 +849,7 @@ static int internal_dup(int *newfd_p, int oldfd, pid_t receiver_pid, int flags)
 
 	struct fd_transfer *t = NULL;
 	if(receiver_pid >= 0) {
+		if(receiver_pid == 0x10000 && sender_pid < SNEKS_MIN_SYSID) return -EINVAL;
 		t = malloc(sizeof *t);
 		if(t == NULL) return -ENOMEM;
 	}
@@ -892,6 +893,9 @@ int io_impl_dup_to(int *newfd_p, int oldfd, pid_t receiver_pid) {
 	return internal_dup(newfd_p, oldfd, receiver_pid, 0);
 }
 
+static bool transfer_match(const struct fd_transfer *xf, pid_t pid) {
+	return xf->target == pid || (xf->target == 0x10000 && pid >= SNEKS_MIN_SYSID);
+}
 
 int io_impl_touch(int newfd)
 {
@@ -904,12 +908,10 @@ int io_impl_touch(int newfd)
 	struct fd_transfer *found = NULL;
 	size_t hash = int_hash(newfd);
 	struct htable_iter it;
-	for(struct fd_transfer *cand = htable_firstval(&transfer_hash, &it, hash);
-		cand != NULL; cand = htable_nextval(&transfer_hash, &it, hash))
-	{
-		if(cand->fd == newfd && cand->target == sender_pid) {
-			found = cand;
+	for(struct fd_transfer *cand = htable_firstval(&transfer_hash, &it, hash); cand != NULL; cand = htable_nextval(&transfer_hash, &it, hash)) {
+		if(cand->fd == newfd && transfer_match(cand, sender_pid)) {
 			htable_delval(&transfer_hash, &it);
+			found = cand;
 			break;
 		}
 	}

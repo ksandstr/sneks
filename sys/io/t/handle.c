@@ -32,7 +32,6 @@ START_LOOP_TEST(dup_to_wildcard, iter, 0, 3)
 	const bool wildcard = iter & 1, systask = iter & 2;
 	diag("wildcard=%s, systask=%s", btos(wildcard), btos(systask));
 	plan_tests(5);
-	todo_start("not done yet");
 	int fd = open(testfile, O_RDONLY);
 	fail_if(fd < 0, "open testfile: %s", strerror(errno));
 	int copy, n = __io_dup_to(fserv(fd), &copy, fhand(fd), wildcard ? 0x10000 : SNEKS_MIN_SYSID);
