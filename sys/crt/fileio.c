@@ -109,3 +109,13 @@ off_t lseek(int fd, off_t offset, int whence)
 	int n = __file_seek(filetab[fd].server, filetab[fd].handle, &off, whence);
 	return IOERR(n) ? -1 : off;
 }
+
+L4_ThreadId_t fserv_NP(int fd) {
+	if(!VALID(fd)) { errno = EBADF; return L4_nilthread; }
+	return filetab[fd].server;
+}
+
+int fhand_NP(int fd) {
+	if(!VALID(fd)) { errno = EBADF; return -1; }
+	return filetab[fd].handle;
+}

@@ -21,6 +21,14 @@ extern L4_ThreadId_t __uapi_tid;
 /* from crt1.c */
 extern L4_KernelInterfacePage_t *__the_kip;
 
+/* from fileio.c */
+extern int fhand_NP(int fd);
+extern L4_ThreadId_t fserv_NP(int fd);
+#ifdef __SNEKS__
+#define fhand(fd) fhand_NP((fd))
+#define fserv(fd) fserv_NP((fd))
+#endif
+
 /* from log.c.
  *
  * suppress your instinct to fprintf(stderr, "%s: shit done fuckt up!",
