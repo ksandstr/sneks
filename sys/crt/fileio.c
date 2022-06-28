@@ -20,8 +20,7 @@
 #include "private.h"
 
 #define IOERR(n) set_io_errno((n))
-#define VALID(fd) ((fd) < ARRAY_SIZE(filetab) && \
-	!L4_IsNilThread(filetab[(fd)].server))
+#define VALID(fd) ((fd) < ARRAY_SIZE(filetab) && !L4_IsNilThread(filetab[(fd)].server))
 
 struct sys_file {
 	int handle;
@@ -33,12 +32,10 @@ static struct sys_file filetab[16] = {
 	[0] = { }, [1] = { }, [2] = { },
 };
 
-static bool set_io_errno(int n)
-{
-	if(n == 0) return false;
-	log_info("n=%d in return=%p", n, __builtin_return_address(0));
+static bool set_io_errno(int n) {
+	if(n != 0) log_info("in [%p], %s", __builtin_return_address(0), stripcerr(n));
 	if(n < 0) errno = -n; else errno = EIO; /* TODO: translate L4 error? */
-	return true;
+	return n != 0;
 }
 
 static int get_free_file(void) {
@@ -70,15 +67,15 @@ int open(const char *path, int flags, ...)
 	L4_Word_t cookie;
 	int ifmt, n = __path_resolve(__get_rootfs(), &object, &server.raw, &ifmt, &cookie, 0, path, flags | mode);
 	if(IOERR(n)) return -1;
-	if((ifmt & SNEKS_PATH_S_IFMT) != SNEKS_PATH_S_IFREG) { errno = EBADF; return -1; } /* bizarre, but works */
-
+	switch(ifmt & SNEKS_PATH_S_IFMT) {
+		case SNEKS_PATH_S_IFREG: case SNEKS_PATH_S_IFBLK: case SNEKS_PATH_S_IFCHR: break;
+		default: errno = EBADF; return -1;
+	}
 	L4_Set_VirtualSender(L4_nilthread);
 	assert(L4_IsNilThread(L4_ActualSender()));
 	L4_ThreadId_t actual = L4_nilthread;
-	int fd = get_free_file();
-	if(fd < 0) { errno = EMFILE; return -1; }
-	n = __file_open(server, &filetab[fd].handle, object, cookie, flags);
-	if(IOERR(n)) return -1;
+	int fd = get_free_file(); if(fd < 0) { errno = EMFILE; return -1; }
+	if(n = __file_open(server, &filetab[fd].handle, object, cookie, flags), IOERR(n)) return -1;
 	actual = L4_ActualSender();
 	if(!L4_IsNilThread(actual)) server = actual;
 	assert(!L4_IsNilThread(server));
