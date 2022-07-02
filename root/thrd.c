@@ -7,7 +7,7 @@
 #include "defs.h"
 
 int next_early_utcb_slot = 1;
-const int __thrd_stksize_log2 = 13; /* NOTE: keep in sync with root/crt0-*.S! */
+const int __thrd_stksize_log2 = 14; /* NOTE: keep in sync with root/crt0-*.S! */
 
 int __thrd_new(L4_ThreadId_t *tid)
 {

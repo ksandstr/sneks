@@ -13,6 +13,6 @@ __return_from_main:
 
 # NOTE: same as 1 << __thrd_stksize_log2 in root/thrd.c; keep in sync!
 	.bss
-	.align 8192
-	.space 8192
+	.align 16384
+	.space 16384
 __stack:
